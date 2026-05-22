@@ -11,7 +11,7 @@ import torchvision.transforms.functional as F
 
 from data_preparation.spatial import utils as spatial_utils
 from src.config import DataConfig, DataSourceConfig, GridParams, TabularParams
-from src.datasets.dataset import MultiSourceDataset, build_dataset
+from src.datasets.dataset import MultiSourceDataset, build_dataset, get_test_dataloader, get_train_val_dataloader
 from src.datasets.sources import GridSource, TabularSource
 from src.datasets.transforms import setup_augmentations
 
@@ -203,6 +203,177 @@ def test_build_dataset_passes_raw_data_dir_to_grid_source(temp_data_dir, monkeyp
     assert ds.sources["grid"].raw_data_dir == raw_data_dir
     assert seen["output"] == (raw_data_dir, "fire_burn_probability")
     assert seen["elevation"] == raw_data_dir
+
+
+def test_weather_source_filters_candidates_by_patch_season(temp_data_dir):
+    tmpdir, _, _, _, weather_csv, _, _, _ = temp_data_dir
+    weather_df = pd.DataFrame(
+        {
+            "WeatherZone": [100, 100, 100, 100],
+            "Season": [1, 1, 2, 2],
+            "Temperature": [1.0, 2.0, 101.0, 102.0],
+        }
+    )
+    weather_df.to_csv(os.path.join(tmpdir, weather_csv), index=False)
+    with open(os.path.join(tmpdir, "feature_channel_map_2.json"), "w") as f:
+        json.dump(
+            {
+                "fuel_grid": [0],
+                "elevation_grid": [1],
+                "ignition_grid": [2],
+                "firezones_grid": [3],
+                "bp_out_grid": [4],
+                "fi_out_grid": [5],
+                "ros_out_grid": [6],
+            },
+            f,
+        )
+
+    params = TabularParams(
+        csv_name=weather_csv,
+        feature_names_list=["Temperature"],
+        fire_weather_zone_id_col="WeatherZone",
+        fire_weather_zone_selection_approach="mode",
+        num_samples_per_patch=16,
+    )
+    weather_source = TabularSource(root_dir=tmpdir, params=params, modelling_approach="2")
+    patch_data = np.zeros((8, 8, 7), dtype=np.float32)
+    patch_data[:, :, 3] = 100.0
+
+    season_two_sample = weather_source.get_sample({"data": patch_data, "season": 2})
+    season_one_sample = weather_source.get_sample({"data": patch_data, "season": 1})
+    all_season_sample = weather_source.get_sample({"data": patch_data, "season": "all"})
+
+    assert set(np.unique(season_two_sample[:, 0])).issubset({101.0, 102.0})
+    assert set(np.unique(season_one_sample[:, 0])).issubset({1.0, 2.0})
+    assert set(np.unique(all_season_sample[:, 0])).issubset({1.0, 2.0, 101.0, 102.0})
+
+
+def test_weather_source_falls_back_to_zone_candidates_when_season_is_missing(temp_data_dir):
+    tmpdir, _, _, _, weather_csv, _, _, _ = temp_data_dir
+    weather_df = pd.DataFrame(
+        {
+            "WeatherZone": [100, 100, 100],
+            "Season": [1, 1, 1],
+            "Temperature": [3.0, 4.0, 5.0],
+        }
+    )
+    weather_df.to_csv(os.path.join(tmpdir, weather_csv), index=False)
+    with open(os.path.join(tmpdir, "feature_channel_map_2.json"), "w") as f:
+        json.dump(
+            {
+                "fuel_grid": [0],
+                "elevation_grid": [1],
+                "ignition_grid": [2],
+                "firezones_grid": [3],
+                "bp_out_grid": [4],
+                "fi_out_grid": [5],
+                "ros_out_grid": [6],
+            },
+            f,
+        )
+
+    params = TabularParams(
+        csv_name=weather_csv,
+        feature_names_list=["Temperature"],
+        fire_weather_zone_id_col="WeatherZone",
+        fire_weather_zone_selection_approach="mode",
+        num_samples_per_patch=8,
+    )
+    weather_source = TabularSource(root_dir=tmpdir, params=params, modelling_approach="2")
+    patch_data = np.zeros((4, 4, 7), dtype=np.float32)
+    patch_data[:, :, 3] = 100.0
+
+    sample = weather_source.get_sample({"data": patch_data, "season": 2})
+
+    assert set(np.unique(sample[:, 0])).issubset({3.0, 4.0, 5.0})
+
+
+def test_weather_source_ignores_patch_season_for_modelling_approach_one(temp_data_dir):
+    tmpdir, _, _, _, weather_csv, _, _, _ = temp_data_dir
+    weather_df = pd.DataFrame(
+        {
+            "WeatherZone": [100, 100, 100, 100],
+            "Season": [1, 1, 2, 2],
+            "Temperature": [1.0, 2.0, 101.0, 102.0],
+        }
+    )
+    weather_df.to_csv(os.path.join(tmpdir, weather_csv), index=False)
+
+    params = TabularParams(
+        csv_name=weather_csv,
+        feature_names_list=["Temperature"],
+        fire_weather_zone_id_col="WeatherZone",
+        fire_weather_zone_selection_approach="mode",
+        num_samples_per_patch=16,
+    )
+    weather_source = TabularSource(root_dir=tmpdir, params=params, modelling_approach="1")
+    patch_data = np.zeros((8, 8, 7), dtype=np.float32)
+    patch_data[:, :, 3] = 100.0
+
+    sample = weather_source.get_sample({"data": patch_data, "season": 2})
+
+    assert set(np.unique(sample[:, 0])).issubset({1.0, 2.0, 101.0, 102.0})
+
+
+def test_train_val_dataloader_passes_modelling_approach(monkeypatch):
+    seen_calls = []
+
+    class DummyDataset(torch.utils.data.Dataset):
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, idx):
+            return {"grid": (torch.zeros(1, 1, 1), torch.zeros(1, 1, 1), torch.ones(1, 1, 1, dtype=torch.bool))}
+
+    def fake_build_dataset(config, csv_name, modelling_approach="1"):
+        seen_calls.append((csv_name, modelling_approach))
+        return DummyDataset()
+
+    monkeypatch.setattr("src.datasets.dataset.build_dataset", fake_build_dataset)
+
+    config = DataConfig(
+        root_dir="/tmp/data",
+        raw_data_dir="/tmp/raw",
+        train_split="train.csv",
+        val_split="val.csv",
+        test_split="test.csv",
+        input_sources=[],
+    )
+
+    get_train_val_dataloader(config=config, modelling_approach="2")
+
+    assert seen_calls == [("train.csv", "2"), ("val.csv", "2")]
+
+
+def test_test_dataloader_passes_modelling_approach(monkeypatch):
+    seen_calls = []
+
+    class DummyDataset(torch.utils.data.Dataset):
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, idx):
+            return {"grid": (torch.zeros(1, 1, 1), torch.zeros(1, 1, 1), torch.ones(1, 1, 1, dtype=torch.bool))}
+
+    def fake_build_dataset(config, csv_name, modelling_approach="1"):
+        seen_calls.append((csv_name, modelling_approach))
+        return DummyDataset()
+
+    monkeypatch.setattr("src.datasets.dataset.build_dataset", fake_build_dataset)
+
+    config = DataConfig(
+        root_dir="/tmp/data",
+        raw_data_dir="/tmp/raw",
+        train_split="train.csv",
+        val_split="val.csv",
+        test_split="test.csv",
+        input_sources=[],
+    )
+
+    get_test_dataloader(config=config, modelling_approach="2")
+
+    assert seen_calls == [("test.csv", "2")]
 
 
 def test_grid_source_computes_log_standard_stats_from_raw_data_dir(temp_data_dir, monkeypatch):

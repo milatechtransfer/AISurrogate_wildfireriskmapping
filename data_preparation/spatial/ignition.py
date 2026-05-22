@@ -10,36 +10,49 @@ from data_preparation.spatial.utils import fire_cause_mapping, load_spatial_rast
 def load_ignition_grid(
     root_dir: str,
     hex_id: str,
-    cause: int = None,
-    season: int = None,
+    cause: int | None = None,
+    season: int | None = None,
     reference_profile: dict[str, Any] | None = None,
 ) -> np.ma.MaskedArray:
-    """Load ignition grids for a specific season/cause or all seasons/causes"""
+    """Load ignition grid for a specific season/cause, or aggregate using max."""
+
     all_paths = Paths(hex_id=hex_id, root_dir=root_dir)
     ignition_grids_folder_path = all_paths.ignition_prob_dir()
+    actual_mask_path = all_paths.mask_grid_actual(hex_id=hex_id)
 
-    if season and cause and hex_id:
-        file_name = f"hex{hex_id}_ignGrid_{fire_cause_mapping[cause]}_s{season}.tif"
+    def _load_one_raster(file_name: str) -> np.ma.MaskedArray:
         ignition_raster, _ = load_spatial_raster(
             path=ignition_grids_folder_path / file_name,
-            actual_mask_path=all_paths.mask_grid_actual(hex_id=hex_id),
+            actual_mask_path=actual_mask_path,
             reference_profile=reference_profile,
         )
-
         return ignition_raster
 
-    # else, loop over all ignition grids (across causes/seasons) and output one grid
-    ignition_raster_files = [f for f in os.listdir(ignition_grids_folder_path) if f.endswith(".tif")]
-    out_ignition_grids = []
-    for file_name in ignition_raster_files:
-        ignition_raster, _ = load_spatial_raster(
-            path=ignition_grids_folder_path / file_name,
-            actual_mask_path=all_paths.mask_grid_actual(hex_id=hex_id),
-            reference_profile=reference_profile,
-        )
-        out_ignition_grids.append(ignition_raster)
+    def _max_over_files(file_names: list[str]) -> np.ma.MaskedArray:
+        if not file_names:
+            raise FileNotFoundError(f"No ignition grid files found in {ignition_grids_folder_path}")
 
-    # size (H, W)
-    out_ignition_grids = np.ma.stack(out_ignition_grids, axis=0)  # type: ignore
-    max_ignition_grid = np.ma.max(out_ignition_grids, axis=0)
-    return max_ignition_grid
+        ignition_grids = [_load_one_raster(file_name) for file_name in file_names]
+        ignition_grids = np.ma.stack(ignition_grids, axis=0)  # shape: (N, H, W)
+
+        return np.ma.max(ignition_grids, axis=0)
+
+    # Case 1: specific cause and season
+    if season is not None and cause is not None:
+        file_name = f"hex{hex_id}_ignGrid_{fire_cause_mapping[cause]}_s{season}.tif"
+        return _load_one_raster(file_name)
+
+    # Case 2: season only, cause is None
+    # Load all causes for the given season, then take max grid.
+    if season is not None and cause is None:
+        file_names = [f"hex{hex_id}_ignGrid_{cause_name}_s{season}.tif" for cause_name in fire_cause_mapping.values()]
+
+        existing_file_names = [file_name for file_name in file_names if (ignition_grids_folder_path / file_name).exists()]
+
+        return _max_over_files(existing_file_names)
+
+    # Case 3: no specific season/cause
+    # Load all ignition grids across all causes/seasons, then take max grid.
+    file_names = [file_name for file_name in os.listdir(ignition_grids_folder_path) if file_name.endswith(".tif")]
+
+    return _max_over_files(file_names)

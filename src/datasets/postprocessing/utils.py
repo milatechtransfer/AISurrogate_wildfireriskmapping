@@ -106,7 +106,7 @@ def get_predicted_hexel(
     if out_norm in {"min_max", "log"}:
         predictions = np.clip(predictions, 0, 1)
 
-    if modelling_approach == "1":
+    if str(modelling_approach) == "1":
         reconstructed_hexel = get_stitched_windows(
             base_dir=base_dir,
             df=test_df,
@@ -128,28 +128,32 @@ def get_predicted_hexel(
         )
         gt_elevation_grid_profile.update(dtype="float32", compress="lzw", nodata=-9999)  # type: ignore
     else:
-        unique_season_cause = list(set(zip(test_df["season"], test_df["cause"], strict=False)))
-        season_cause_hexels = []
-        for season, cause in unique_season_cause:
-            filtered_season_cause_df = test_df[(test_df["season"] == season) & (test_df["cause"] == cause)]
-            reconstructed_season_cause_hexel = get_stitched_windows(
+        grouped_test_df = test_df.reset_index(drop=True)
+        if "season" not in grouped_test_df.columns:
+            raise ValueError("modelling_approach=2 evaluation requires a 'season' column in the metadata dataframe.")
+
+        season_hexels = []
+        unique_seasons = list(grouped_test_df["season"].drop_duplicates())
+        for season in unique_seasons:
+            filtered_season_df = grouped_test_df[grouped_test_df["season"] == season]
+            filtered_predictions = predictions[filtered_season_df.index.to_numpy()]
+            reconstructed_season_hexel = get_stitched_windows(
                 base_dir=base_dir,
-                df=filtered_season_cause_df,
-                predictions=predictions,
-                start_idx=start_idx,
+                df=filtered_season_df,
+                predictions=filtered_predictions,
+                start_idx=0,
                 gt_shape=tuple(gt_elevation_grid.data.shape),
                 target_channel_index=target_channel_index,
                 stitch_mode=stitch_mode,
                 win_h=win_h,
                 win_w=win_w,
             )
-            reconstructed_season_cause_hexel_denorm = denormalize_burn_count(
-                data=reconstructed_season_cause_hexel, min_val=min_target_val, max_val=max_target_val
+            reconstructed_season_hexel_denorm = denormalize_burn_count(
+                data=reconstructed_season_hexel, min_val=min_target_val, max_val=max_target_val
             )
-            season_cause_hexels.append(reconstructed_season_cause_hexel_denorm)
-            start_idx += len(filtered_season_cause_df)
+            season_hexels.append(reconstructed_season_hexel_denorm)
         # merge the counts
-        reconstructed_hexel_denorm = np.sum(np.stack(season_cause_hexels), axis=0)
+        reconstructed_hexel_denorm = np.sum(np.stack(season_hexels), axis=0)
         reconstructed_hexel_denorm = np.rint(reconstructed_hexel_denorm).astype("int32")
         # clip values to the true range, in case of outliers
         reconstructed_hexel_denorm = np.clip(reconstructed_hexel_denorm, min_target_val, max_target_val)
@@ -188,6 +192,37 @@ def get_target_channel_index(data_dir: str, modelling_approach: str, target: Tar
             f"Missing target channel {target.channel_key!r} in {feature_map_path}. Available keys: {list(channel_feature_map.keys())}"
         )
     return int(channel_indices[0])
+
+
+def get_modelling_approach_two_bp_ground_truth(
+    raw_data_dir: str,
+    hex_id: str,
+    test_df: pd.DataFrame,
+    reference_profile: Profile,
+) -> np.ma.MaskedArray:
+    all_paths = Paths(hex_id=hex_id, root_dir=raw_data_dir)
+    season_values = []
+    for season in test_df["season"]:
+        if pd.isna(season):
+            continue
+        if isinstance(season, str) and season.strip().lower() == "all":
+            continue
+        season_values.append(int(float(season)))
+
+    unique_seasons = list(dict.fromkeys(season_values))
+    if not unique_seasons:
+        raise ValueError("modelling_approach=2 bp evaluation requires at least one concrete season in the metadata dataframe.")
+
+    season_grids = []
+    for season in unique_seasons:
+        season_grid, _ = load_spatial_raster(
+            path=all_paths.output_burn_prob(season=season),
+            actual_mask_path=all_paths.mask_grid_actual(hex_id=hex_id),
+            reference_profile=reference_profile,
+        )
+        season_grids.append(season_grid)
+
+    return np.ma.sum(np.ma.stack(season_grids, axis=0), axis=0)
 
 
 def calculate_hexel_metrics_pytorch(
@@ -325,13 +360,21 @@ def evaluate_and_visualize_hexels(
         )
         save_predicted_hexels(reconstructed_hexel_denorm, gt_elevation_grid_profile, hex_id, config.save_dir)
         # Save the hex as plt plot
-        all_paths = Paths(hex_id=hex_id, root_dir=raw_data_dir)
-        target_path = getattr(all_paths, target.path_method)()
-        grid_gt, _ = load_spatial_raster(
-            path=target_path,
-            actual_mask_path=all_paths.mask_grid_actual(hex_id=hex_id),
-            reference_profile=gt_elevation_grid_profile,
-        )
+        if str(modelling_approach) == "2" and target.name == "bp":
+            grid_gt = get_modelling_approach_two_bp_ground_truth(
+                raw_data_dir=raw_data_dir,
+                hex_id=hex_id,
+                test_df=one_hexel_df,
+                reference_profile=gt_elevation_grid_profile,
+            )
+        else:
+            all_paths = Paths(hex_id=hex_id, root_dir=raw_data_dir)
+            target_path = getattr(all_paths, target.path_method)()
+            grid_gt, _ = load_spatial_raster(
+                path=target_path,
+                actual_mask_path=all_paths.mask_grid_actual(hex_id=hex_id),
+                reference_profile=gt_elevation_grid_profile,
+            )
 
         visualize_target_grids(
             gt_grid=grid_gt,

@@ -127,8 +127,8 @@ def get_train_val_dataloader(config: DataConfig, modelling_approach: str = "1", 
 
     g = torch.Generator()
     g.manual_seed(seed)
-    train_dataset = build_dataset(config, csv_name=train_split)
-    val_dataset = build_dataset(config, csv_name=val_split)
+    train_dataset = build_dataset(config, csv_name=train_split, modelling_approach=modelling_approach)
+    val_dataset = build_dataset(config, csv_name=val_split, modelling_approach=modelling_approach)
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -153,7 +153,7 @@ def get_test_dataloader(config: DataConfig, modelling_approach: str = "1", seed:
     test_split = config.test_split
 
     g = torch.Generator()
-    test_dataset = build_dataset(config, csv_name=test_split)
+    test_dataset = build_dataset(config, csv_name=test_split, modelling_approach=modelling_approach)
 
     test_dataloader = DataLoader(
         test_dataset,

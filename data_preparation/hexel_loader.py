@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+from itertools import product
 
 import numpy as np
 
 from data_preparation.paths import Paths
 from data_preparation.spatial import NODATA, load_fuel_grid, load_ignition_grid, load_spatial_raster
-from data_preparation.utils import feature_names
+from data_preparation.utils import feature_names, read_ids_from_csv
 
 
 def get_num_channels_array(arr: np.ndarray) -> int:
@@ -35,16 +36,16 @@ def load_spatial_features_per_hexel(
     hex_id: str,
     feature_channel_map_path: str,
     modelling_approach: int = 1,
-) -> tuple[np.ndarray | None, np.ndarray | None, dict[int, tuple[int, int]] | None]:
+) -> tuple[np.ndarray | None, np.ndarray | None, dict[int, tuple[int, int | str]] | None]:
     """
     Load all data (features and output) per hexel
     root_dir: Root directory containing all hexels.
     hex_id: Hexel id to load.
-    modelling_approach: 1 for joint season-cause modelling, 2 for separate season-cause modelling.
+    modelling_approach: 1 for joint season-cause modelling, 2 for separate season modelling.
     Returns:
         all_features: np.ndarray of shape (N, H, W, num_features)
         all_masks: np.ndarray of shape (N, H, W)
-        season_cause_mapping: dict mapping index to (season, cause)
+        season_cause_mapping: dict mapping index to seasons
     """
 
     def stack_sample(
@@ -137,5 +138,52 @@ def load_spatial_features_per_hexel(
         )
         return np.expand_dims(stacked_features, axis=0), np.expand_dims(mask, axis=0), None
 
-    # modelling approach 2
-    raise ValueError("Data Season mapping not supported yet!")
+    # modelling approach 2 - seasonal mapping
+    elif modelling_approach == 2:
+        seasons = read_ids_from_csv(all_paths.season_table(hex_id=hex_id))
+        samples_list: list[np.ndarray] = []
+        masks_list: list[np.ndarray] = []
+        season_mapping: dict[int, tuple[int, int | str]] = {}
+
+        for i, season in enumerate(seasons):
+            ignition_grid = load_ignition_grid(root_dir=root_dir, hex_id=hex_id, reference_profile=reference_profile, season=season)
+
+            bp_out_grid, _ = load_spatial_raster(
+                all_paths.output_burn_prob(season=season),
+                actual_mask_path=all_paths.mask_grid_actual(hex_id=hex_id),
+                reference_profile=reference_profile,
+            )
+            fi_out_grid, _ = load_spatial_raster(
+                all_paths.output_fire_intensity(),
+                actual_mask_path=all_paths.mask_grid_actual(hex_id=hex_id),
+                reference_profile=reference_profile,
+            )
+            ros_out_grid, _ = load_spatial_raster(
+                all_paths.output_ros(),
+                actual_mask_path=all_paths.mask_grid_actual(hex_id=hex_id),
+                reference_profile=reference_profile,
+            )
+
+            stacked_features, mask = stack_sample(
+                fuel_grid, elevation_grid, ignition_grid, firezones_grid, bp_out_grid, fi_out_grid, ros_out_grid
+            )
+
+            samples_list.append(stacked_features)
+            masks_list.append(mask)
+            season_mapping[i] = (int(season), "all")
+
+        samples = np.stack(samples_list, axis=0)  # shape: (N, H, W, C)
+        masks = np.stack(masks_list, axis=0)  # shape: (N, H, W)
+
+        return samples, masks, season_mapping
+    else:
+        raise ValueError(f"Unsupported modelling_approach: {modelling_approach}")
+
+
+# if __name__ == "__main__":
+#     s, masks, mapping = load_spatial_features_per_hexel(
+#         root_dir="../burnp3plus", hex_id="05", feature_channel_map_path=".", modelling_approach=2
+#     )
+#     print(s.shape)
+#     print(masks.shape)
+#     print(mapping)

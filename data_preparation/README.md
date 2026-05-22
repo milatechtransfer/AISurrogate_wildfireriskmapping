@@ -10,7 +10,7 @@ sbatch run_files/generate_grid_data.sh
 
 Instead, you can run the following on an interactive node:
 ```bash
-python -m data_preparation.process_hexels_into_grids --root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"  --save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v1" --modelling_approach=1 --win_h=256 --win_w=256 --overlap_ratio=0.2
+python -m data_preparation.process_hexels_into_grids --root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"  --save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v2" --modelling_approach=2 --win_h=256 --win_w=256 --overlap_ratio=0.2
 ```
 
 Step 2: Create training, validation and test splits.
@@ -21,7 +21,7 @@ Step 2: Create training, validation and test splits.
 - Finally, run the following with the decided splits
 
 ```bash
-python -m data_preparation.split_data --data_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v1" --val_hex_id 02 23 33 18 46 --test_hex_id 01 12 39 16 49
+python -m data_preparation.split_data --data_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v2" --val_hex_id 02 23 33 18 46 --test_hex_id 01 12 39 16 49
 ```
 
 Step 3: Create tabular files (weather + fire-size)
@@ -36,7 +36,7 @@ To build the tabular files, run the following:
 ```bash
 python -m data_preparation.process_tabular_data \
 	--root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA" \
-	--save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v1" \
+	--save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v2" \
 	--weather_output_file="weather_table_processed.csv" \
 	--fire_size_input_file="df_fire_fru.csv" \
 	--fire_size_output_file="df_fire_fru_processed.csv"

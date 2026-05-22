@@ -72,6 +72,20 @@ def aggregate_csv_by_pattern(root_dir: Path, pattern: str, load_function: Callab
     return full_df
 
 
+def read_ids_from_csv(csv_path: str | Path, column_name: str = "Description") -> list[int]:
+    """
+    Read a CSV file and return the column as a list of ints (for seasons and causes csvs)
+    """
+    csv_path = Path(csv_path)
+
+    df = pd.read_csv(csv_path)
+
+    if column_name not in df.columns:
+        raise ValueError(f"Missing {column_name} column in {csv_path}. " f"Found columns: {list(df.columns)}")
+
+    return df[column_name].dropna().astype(int).tolist()
+
+
 def find_hex_ids(root_dir: str) -> list:
     hex_ids = []
     try:
@@ -115,8 +129,8 @@ def get_stratified_data_split(data_dir: str):
     train, val = train_test_split(train_val, test_size=5, stratify=train_val["strat_key"], random_state=42)
 
     print(f"Total: {len(df_min_max)} | Train: {len(train)} | Val: {len(val)} | Test: {len(test)}")
-    print(f"List of val ids {list(val['hex_id'])}")
-    print(f"List of test ids {list(test['hex_id'])}")
+    print(f"List of val ids {list(val["hex_id"])}")
+    print(f"List of test ids {list(test["hex_id"])}")
 
 
 def get_processed_hex_ids(folder_path: str) -> list:

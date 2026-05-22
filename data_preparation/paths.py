@@ -34,8 +34,19 @@ class Paths:
     def weather_table(self, hex_id: int | str) -> Path:
         return self.tabular_dir / f"hex{hex_id}_DailyWeather.csv"
 
-    def output_burn_prob(self) -> Path:
-        return self.base_dir / "results" / "burnP3Plus_OutputBurnProbability" / "burnProbability-sn2.tif"
+    def season_table(self, hex_id: int | str) -> Path:
+        return self.tabular_dir / f"hex{hex_id}_Seasons.csv"
+
+    def causes_table(self, hex_id: int | str) -> Path:
+        return self.tabular_dir / f"hex{hex_id}_Causes.csv"
+
+    def output_burn_prob(self, season: int = None) -> Path:
+        if season is not None:
+            BURN_PROBABILITY_SEASON_OFFSET = 318
+            season_id = str(BURN_PROBABILITY_SEASON_OFFSET + season)
+            return self.base_dir / "results" / "burnP3Plus_OutputBurnProbability" / f"burnProbability-sn{season_id}.tif"
+        else:
+            return self.base_dir / "results" / "burnP3Plus_OutputBurnProbability" / "burnProbability-sn2.tif"
 
     def output_fire_intensity(self) -> Path:
         return self.base_dir / "results" / "burnP3Plus_OutputFireIntensitySummaryMap" / "fbpSummary-FireIntensity-Average.tif"

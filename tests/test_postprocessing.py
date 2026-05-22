@@ -2,7 +2,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.datasets.postprocessing.utils import get_hexel_binary_maps, get_stitched_windows
+from src.datasets.postprocessing.utils import (
+    get_hexel_binary_maps,
+    get_modelling_approach_two_bp_ground_truth,
+    get_predicted_hexel,
+    get_stitched_windows,
+)
 from src.datasets.postprocessing.visualize_predictions import get_distribution_axis_limit
 from src.datasets.utils import denormalize_output_target, output_target_norm
 
@@ -102,3 +107,83 @@ def test_get_hexel_binary_maps_respects_masked_arrays(recwarn):
     assert not gt_bin[1, 0]
     assert gt_bin[0, 1]
     assert gt_bin[1, 1]
+
+
+def test_get_predicted_hexel_approach_two_groups_predictions_by_season(tmp_path, monkeypatch):
+    patch = np.ones((2, 2, 1), dtype=np.float32)
+    np.save(tmp_path / "season2.npy", patch)
+    np.save(tmp_path / "season1.npy", patch)
+
+    test_df = pd.DataFrame(
+        {
+            "filename": ["season2.npy", "season1.npy"],
+            "season": [2, 1],
+            "cause": ["all", "all"],
+            "hex_id": ["01", "01"],
+            "window_id": [1, 2],
+            "row": [0, 0],
+            "col": [0, 0],
+            "valid_ratio": [1.0, 1.0],
+        }
+    )
+    predictions = np.array(
+        [
+            [[2.0, 2.0], [2.0, 2.0]],
+            [[1.0, 1.0], [1.0, 1.0]],
+        ],
+        dtype=np.float32,
+    )
+
+    monkeypatch.setattr(
+        "src.datasets.postprocessing.utils.load_spatial_raster",
+        lambda path, actual_mask_path=None, reference_profile=None: (
+            np.ma.masked_array(np.zeros((2, 2), dtype=np.float32), mask=np.zeros((2, 2), dtype=bool)),
+            {"dtype": "float32", "nodata": -9999, "height": 2, "width": 2},
+        ),
+    )
+    monkeypatch.setattr(
+        "src.datasets.postprocessing.utils.denormalize_burn_count",
+        lambda data, min_val, max_val: data,
+    )
+
+    reconstructed, profile = get_predicted_hexel(
+        base_dir=str(tmp_path),
+        raw_data_dir=str(tmp_path),
+        test_df=test_df,
+        predictions=predictions,
+        min_target_val=0.0,
+        max_target_val=10.0,
+        hex_id="01",
+        modelling_approach="2",
+        out_norm="total_iters",
+        target_channel_index=0,
+        win_h=2,
+        win_w=2,
+    )
+
+    np.testing.assert_allclose(reconstructed, np.full((2, 2), 3, dtype=np.int32))
+    assert profile["dtype"] == "int32"
+
+
+def test_get_modelling_approach_two_bp_ground_truth_sums_seasonal_targets(monkeypatch):
+    calls = []
+
+    def fake_load_spatial_raster(path, actual_mask_path=None, reference_profile=None):
+        calls.append(path.name)
+        if path.name == "burnProbability-sn319.tif":
+            return np.ma.masked_array(np.full((2, 2), 1.0, dtype=np.float32), mask=False), {"dtype": "float32"}
+        if path.name == "burnProbability-sn320.tif":
+            return np.ma.masked_array(np.full((2, 2), 2.0, dtype=np.float32), mask=False), {"dtype": "float32"}
+        raise AssertionError(f"Unexpected path {path}")
+
+    monkeypatch.setattr("src.datasets.postprocessing.utils.load_spatial_raster", fake_load_spatial_raster)
+
+    grid = get_modelling_approach_two_bp_ground_truth(
+        raw_data_dir="/tmp/raw",
+        hex_id="01",
+        test_df=pd.DataFrame({"season": [1, 2, 1], "cause": ["all", "all", "all"]}),
+        reference_profile={"dtype": "float32"},
+    )
+
+    np.testing.assert_allclose(grid.filled(np.nan), np.full((2, 2), 3.0, dtype=np.float32))
+    assert calls == ["burnProbability-sn319.tif", "burnProbability-sn320.tif"]
