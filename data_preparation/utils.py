@@ -2,6 +2,7 @@ import math
 import os
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -12,6 +13,15 @@ from data_preparation.paths import Paths
 
 feature_names = ["fuel_grid", "elevation_grid", "ignition_grid", "firezones_grid", "bp_out_grid", "fi_out_grid", "ros_out_grid"]
 FIRE_SIZE_FEATURE_COLS = ["GRIDCODE", "SIZE_HA"]
+
+MaskType = Literal["actual", "buffer"]
+
+
+def resolve_mask_path(all_paths: Paths, hex_id: str, mask_type: MaskType) -> Path:
+    """Return the shapefile path for the requested mask type."""
+    if mask_type == "actual":
+        return all_paths.mask_grid_actual(hex_id=hex_id)
+    return all_paths.mask_grid_buffer(hex_id=hex_id)
 
 
 def find_file_path(filename: str, *search_dirs: Path) -> Path:

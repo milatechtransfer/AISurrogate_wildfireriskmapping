@@ -7,7 +7,7 @@ import numpy as np
 
 from data_preparation.paths import Paths
 from data_preparation.spatial import NODATA, load_fuel_grid, load_ignition_grid, load_spatial_raster
-from data_preparation.utils import feature_names
+from data_preparation.utils import MaskType, feature_names, resolve_mask_path
 
 
 def get_num_channels_array(arr: np.ndarray) -> int:
@@ -35,6 +35,7 @@ def load_spatial_features_per_hexel(
     hex_id: str,
     feature_channel_map_path: str,
     modelling_approach: int = 1,
+    mask_type: MaskType = "actual",
 ) -> tuple[np.ndarray | None, np.ndarray | None, dict[int, tuple[int, int]] | None]:
     """
     Load all data (features and output) per hexel
@@ -99,36 +100,35 @@ def load_spatial_features_per_hexel(
 
     # identify all seasons and causes first
     all_paths = Paths(hex_id=hex_id, root_dir=root_dir)
+    mask_path = resolve_mask_path(all_paths, hex_id=hex_id, mask_type=mask_type)
 
-    elevation_grid, reference_profile = load_spatial_raster(
-        path=all_paths.elevation_grid(hex_id=hex_id), actual_mask_path=all_paths.mask_grid_actual(hex_id=hex_id)
-    )
+    elevation_grid, reference_profile = load_spatial_raster(path=all_paths.elevation_grid(hex_id=hex_id), mask_path=mask_path)
     # load all common grids on the elevation reference grid
-    fuel_grid = load_fuel_grid(root_dir=root_dir, hex_id=hex_id, reference_profile=reference_profile)
+    fuel_grid = load_fuel_grid(root_dir=root_dir, hex_id=hex_id, reference_profile=reference_profile, mask_path=mask_path)
 
     firezones_grid, _ = load_spatial_raster(
         path=all_paths.firezones_grid(hex_id=hex_id),
-        actual_mask_path=all_paths.mask_grid_actual(hex_id=hex_id),
+        mask_path=mask_path,
         reference_profile=reference_profile,
     )
 
     if modelling_approach == 1:
         # input
-        ignition_grid = load_ignition_grid(root_dir=root_dir, hex_id=hex_id, reference_profile=reference_profile)
+        ignition_grid = load_ignition_grid(root_dir=root_dir, hex_id=hex_id, reference_profile=reference_profile, mask_path=mask_path)
 
         bp_out_grid, _ = load_spatial_raster(
             all_paths.output_burn_prob(),
-            actual_mask_path=all_paths.mask_grid_actual(hex_id=hex_id),
+            mask_path=mask_path,
             reference_profile=reference_profile,
         )
         fi_out_grid, _ = load_spatial_raster(
             all_paths.output_fire_intensity(),
-            actual_mask_path=all_paths.mask_grid_actual(hex_id=hex_id),
+            mask_path=mask_path,
             reference_profile=reference_profile,
         )
         ros_out_grid, _ = load_spatial_raster(
             all_paths.output_ros(),
-            actual_mask_path=all_paths.mask_grid_actual(hex_id=hex_id),
+            mask_path=mask_path,
             reference_profile=reference_profile,
         )
 

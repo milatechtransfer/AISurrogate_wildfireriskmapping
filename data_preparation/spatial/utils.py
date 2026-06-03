@@ -75,7 +75,7 @@ def load_raster(path: str) -> np.ma.MaskedArray:
 def load_spatial_raster(
     path: Path,
     reproject_flag: bool = True,
-    actual_mask_path: Path | None = None,
+    mask_path: Path | None = None,
     reference_profile: dict[str, Any] | None = None,
 ) -> tuple[np.ma.MaskedArray, dict[str, Any]]:
     """Load one raster band, optionally reproject/clip/crop it, and return updated profile."""
@@ -103,12 +103,12 @@ def load_spatial_raster(
         )
         crs = profile["crs"]
 
-    if actual_mask_path:
+    if mask_path:
         raster, transform, profile = clip_array_to_mask(
             raster=raster,
             transform=transform,
             profile=profile,
-            mask_path=actual_mask_path,
+            mask_path=mask_path,
             crs=crs,
             nodata=nodata,
         )
@@ -271,7 +271,14 @@ def reproject_raster(
         resampling=resampling,
     )
 
-    dst_masked = np.ma.masked_equal(dst, src_nodata) if src_nodata is not None else np.ma.masked_array(dst)
+    if src_nodata is not None:
+        if isinstance(src_nodata, float) and np.isnan(src_nodata):
+            # masked_equal uses == which returns False for NaN; use isnan instead.
+            dst_masked = np.ma.masked_where(np.isnan(dst), dst)
+        else:
+            dst_masked = np.ma.masked_equal(dst, src_nodata)
+    else:
+        dst_masked = np.ma.masked_array(dst)
 
     out_profile = profile.copy()
     out_profile.update(
