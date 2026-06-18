@@ -1,0 +1,76 @@
+# Fixed-model input counterfactual smoke config focused on hex16.
+#
+# This config defines the experiment scope only.  Weather editing, fuel editing,
+# model inference, and paired metrics are implemented in subsequent modules.
+
+raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+save_dir: "experiments/counterfactual_hex16"
+
+hex_ids: ["16"]
+focus_hex_id: "16"
+mask_scope: "actual"
+support_policy: "baseline"
+seed: 42
+
+endpoints:
+  bp:
+    enabled: true
+    config_path: "configs/default_v1_full_data_bp_full_config_kl_ccc_hexpairrank_fullsupport_bpzero_wind_vector_dist_ignition.yaml"
+    baseline_data_root: "/network/scratch/o/olutayot/nrcan_wildfireriskmapping/data_samples/data_samples_v3_full_support_dist_ignition"
+  ros:
+    enabled: true
+    config_path: "configs/default_v1_full_data_ros_full_config_coordconv_spatialized_weather_fire_size_missing_mask_terrain_wind_vector.yaml"
+    baseline_data_root: "/network/scratch/o/olutayot/nrcan_wildfireriskmapping/data_samples/data_samples_v3_full_support"
+  fi:
+    enabled: true
+    config_path: "configs/default_v1_full_data_fi_full_config_coordconv_spatialized_weather_fire_size_missing_mask_terrain_wind_vector.yaml"
+    baseline_data_root: "/network/scratch/o/olutayot/nrcan_wildfireriskmapping/data_samples/data_samples_v3_full_support"
+
+scenarios:
+  - name: baseline
+    kind: baseline
+    description: Original model inputs; paired-delta reference.
+    params: {}
+  - name: wind_roundtrip_placebo
+    kind: wind
+    description: Reconstruct baseline wind columns from raw values and baseline scaling; predictions should match baseline.
+    params:
+      mode: roundtrip_placebo
+  - name: wind_from_west_p95
+    kind: wind
+    description: Force high but empirical wind coming from the west, so physical flow is toward the east.
+    params:
+      mode: fixed_from_bearing
+      wind_from_bearing_deg: 270.0
+      speed_percentile: 95.0
+  - name: wind_speed50_original_direction
+    kind: wind
+    description: Force very high wind speed while retaining each raw weather row's original wind direction.
+    params:
+      mode: speed_only_high
+      fixed_speed: 50.0
+  - name: wind_zone_consistent_direction
+    kind: wind
+    description: Preserve wind speeds but set each weather zone to its speed-weighted dominant source direction.
+    params:
+      mode: zone_dominant_direction
+      zone_column: WeatherZone
+  - name: wind_speed50_zone_consistent_direction
+    kind: wind
+    description: Force WindSpeed=50 and set each weather zone to its speed-weighted dominant source direction.
+    params:
+      mode: zone_dominant_direction
+      zone_column: WeatherZone
+      fixed_speed: 50.0
+  - name: wind_speed100_zone_consistent_direction
+    kind: wind
+    description: Stress-test WindSpeed=100 with each weather zone set to its speed-weighted dominant source direction.
+    params:
+      mode: zone_dominant_direction
+      zone_column: WeatherZone
+      fixed_speed: 100.0
+  - name: remove_barriers_adjacent_modal
+    kind: fuel
+    description: Replace each connected non-fuel barrier component with its local adjacent modal burnable fuel.
+    params:
+      mode: nonfuel_to_burnable_local_adjacent_modal

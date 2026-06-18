@@ -1,0 +1,51 @@
+# BP barrier halo and wind-shadow diagnostic config.
+# Run with:
+#   uv run --with numpy --with rasterio --with scipy --with matplotlib python3 \
+#       -m src.datasets.postprocessing.diagnose_bp_barrier_halo \
+#       configs/diagnose_bp_barrier_halo.yaml
+
+raw_data_dir: "/home/mila/o/olutayot/copilot-work/canada_bp3+_2026_MILA"
+save_dir: "experiments/halo_diagnostic"
+
+# Which hexels to process. Use "all" to process every hexel found in raw_data_dir.
+hex_ids: "all"
+
+seed: 42
+
+# ─── Distance binning ───────────────────────────────────────────────────────
+# Distances are pixel-centre-to-pixel-centre (EDT).
+# On a 100 m grid the nearest burnable pixel adjacent to a barrier is ~100 m.
+# Bin [0, 100 m) contains only barrier pixels themselves (excluded from analysis).
+# The first meaningful bin for burnable pixels starts at 100 m.
+distance_bin_edges_m: [100, 250, 500, 1000, 2000, 5000]
+
+# ─── Halo contrast bands ────────────────────────────────────────────────────
+# "near":  burnable pixels within near_band_m of the nearest barrier.
+# "far":   burnable pixels farther than far_band_m from any barrier.
+near_band_m: 500.0
+far_band_m: 2000.0
+
+# ─── Support thresholds ─────────────────────────────────────────────────────
+# Minimum pixels in both the near and far group for a (zone × fuel_group) stratum
+# to be included in the matched contrast output.
+min_pixels_per_stratum: 30
+
+# ─── Boundary exclusion ─────────────────────────────────────────────────────
+# Burnable pixels that are BP nodata mark the edge of the simulation extent.
+# Analysis pixels within boundary_exclusion_m of these boundary-artifact nodata
+# pixels are excluded to avoid contaminating the "far" reference group with
+# hexel-edge effects.  Set to 0 to disable.
+boundary_exclusion_m: 500.0
+
+# ─── Directional shadow ─────────────────────────────────────────────────────
+# Only compute directional sector contrasts for weather zones where
+# speed-weighted wind consistency exceeds this threshold.
+wind_consistency_threshold: 0.3
+
+# Minimum near-barrier pixels per sector for a directional row to be output.
+min_pixels_per_sector: 50
+
+# ─── Numerical stability ────────────────────────────────────────────────────
+# halo_rel = halo_abs / mean_bp_far is suppressed (NaN) when mean_bp_far is
+# below this threshold to avoid amplifying noise in near-zero BP regions.
+min_bp_for_halo_rel: 0.0001
