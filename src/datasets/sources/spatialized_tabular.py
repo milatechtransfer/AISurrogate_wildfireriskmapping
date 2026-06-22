@@ -90,6 +90,86 @@ def _train_zone_ids(
     return tuple(sorted(zones))
 
 
+def train_global_fill_values(
+    *,
+    root_dir: str | Path,
+    csv_name: str,
+    feature_names_list: list[str],
+    zone_id_col: str,
+    zone_channel_key: str,
+    train_split_csv_name: str,
+    filename_col: str,
+    valid_mask_threshold: float,
+    modelling_approach: str = "1",
+) -> tuple[np.ndarray, tuple[int, ...]]:
+    """Compute imputation fill values from rows whose zones occur in the training split."""
+
+    root = Path(root_dir)
+    df = pd.read_csv(root / csv_name)
+    missing_columns = [col for col in [zone_id_col, *feature_names_list] if col not in df.columns]
+    if missing_columns:
+        raise ValueError(f"Missing columns in {csv_name!r}: {missing_columns}")
+
+    train_zones = _train_zone_ids(
+        str(root),
+        train_split_csv_name,
+        zone_channel_key,
+        str(modelling_approach),
+        filename_col,
+        float(valid_mask_threshold),
+    )
+    integer_zone_ids = _integer_zone_ids_from_series(df[zone_id_col], column_name=zone_id_col, source_name=csv_name)
+    train_rows = integer_zone_ids.isin(train_zones)
+    if not train_rows.any():
+        raise ValueError(f"No rows in {csv_name!r} match zones from training split {train_split_csv_name!r}: {list(train_zones)[:20]}")
+    fill_values = df.loc[train_rows, feature_names_list].mean(axis=0).to_numpy(dtype=np.float32)
+    if not np.isfinite(fill_values).all():
+        raise ValueError(f"Training-derived imputation stats for {csv_name!r} contain non-finite values.")
+    return fill_values, train_zones
+
+
+def write_train_global_fill_stats(
+    *,
+    root_dir: str | Path,
+    output_path: str | Path,
+    source_name: str,
+    csv_name: str,
+    feature_names_list: list[str],
+    zone_id_col: str,
+    zone_channel_key: str,
+    train_split_csv_name: str,
+    filename_col: str,
+    valid_mask_threshold: float,
+    modelling_approach: str = "1",
+) -> None:
+    fill_values, train_zones = train_global_fill_values(
+        root_dir=root_dir,
+        csv_name=csv_name,
+        feature_names_list=feature_names_list,
+        zone_id_col=zone_id_col,
+        zone_channel_key=zone_channel_key,
+        train_split_csv_name=train_split_csv_name,
+        filename_col=filename_col,
+        valid_mask_threshold=valid_mask_threshold,
+        modelling_approach=modelling_approach,
+    )
+    stats = {
+        "source_name": source_name,
+        "csv_name": csv_name,
+        "feature_names_list": feature_names_list,
+        "zone_id_col": zone_id_col,
+        "zone_channel_key": zone_channel_key,
+        "train_split_csv_name": train_split_csv_name,
+        "train_zone_ids": list(train_zones),
+        "global_fill": fill_values.astype(float).tolist(),
+        "note": "global_fill was computed from rows whose zones occur in the training split.",
+    }
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as handle:
+        json.dump(stats, handle, indent=2)
+
+
 class SpatializedTabularSource(DataSource):
     """Rasterize zone-level tabular features into patch-aligned image channels."""
 
