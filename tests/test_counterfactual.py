@@ -177,8 +177,6 @@ def test_fixed_from_bearing_wind_scenario_updates_processed_columns() -> None:
             "WindDirection": raw_weather["WindDirection"],
             "wind_x": (raw_features["wind_x"] - 0.0) / 4.0,
             "wind_y": (raw_features["wind_y"] - 0.0) / 4.0,
-            "wd_sin": np.sin(np.deg2rad(raw_weather["WindDirection"])),
-            "wd_cos": np.cos(np.deg2rad(raw_weather["WindDirection"])),
         }
     )
     stats = recover_wind_encoding_stats(raw_features, processed)

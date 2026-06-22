@@ -336,8 +336,6 @@ def apply_wind_scenario_to_processed_weather(
     for column in RAW_WIND_COLUMNS:
         scenario_processed[column] = encoded[column].to_numpy(dtype=np.float64)
     scenario_processed[WIND_DIRECTION_COLUMN] = scenario_raw[WIND_DIRECTION_COLUMN].to_numpy(dtype=np.float64)
-    scenario_processed["wd_sin"] = np.sin(np.deg2rad(scenario_processed[WIND_DIRECTION_COLUMN].to_numpy(dtype=np.float64)))
-    scenario_processed["wd_cos"] = np.cos(np.deg2rad(scenario_processed[WIND_DIRECTION_COLUMN].to_numpy(dtype=np.float64)))
 
     diagnostics = summarize_wind_scenario(scenario_raw, scenario_processed, stats)
     return scenario_processed, diagnostics

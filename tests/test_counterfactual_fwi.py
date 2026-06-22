@@ -44,8 +44,6 @@ def _build_weather(zone_fwi: dict[int, list[float]]) -> tuple[pd.DataFrame, pd.D
             "wind_x": (raw_features["wind_x"].to_numpy() - 1.0) / 3.0,
             "wind_y": (raw_features["wind_y"].to_numpy() + 2.0) / 5.0,
             "WindDirection": raw["WindDirection"].to_numpy(),
-            "wd_sin": np.sin(np.deg2rad(raw["WindDirection"].to_numpy())),
-            "wd_cos": np.cos(np.deg2rad(raw["WindDirection"].to_numpy())),
         }
     )
     stats = recover_wind_encoding_stats(raw_features, processed)
@@ -82,10 +80,8 @@ def test_daily_swap_leaves_mid_rows_and_nonswapped_columns_untouched() -> None:
     # Row 1 is the only 'mid' row for the single zone and must be unchanged.
     assert edited.loc[1, "FireWeatherIndex"] == pytest.approx(processed.loc[1, "FireWeatherIndex"])
     assert edited.loc[1, "Temperature"] == pytest.approx(processed.loc[1, "Temperature"])
-    # WindDirection / wd_sin / wd_cos are never modified.
+    # WindDirection is never modified.
     assert np.allclose(edited["WindDirection"], processed["WindDirection"])
-    assert np.allclose(edited["wd_sin"], processed["wd_sin"])
-    assert np.allclose(edited["wd_cos"], processed["wd_cos"])
 
 
 def test_daily_swap_recomputes_recipient_wind_from_swapped_speed_and_kept_direction() -> None:
