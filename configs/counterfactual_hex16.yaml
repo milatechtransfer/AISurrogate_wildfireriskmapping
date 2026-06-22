@@ -15,16 +15,13 @@ seed: 42
 endpoints:
   bp:
     enabled: true
-    config_path: "configs/default_v1_full_data_bp_full_config_kl_ccc_hexpairrank_fullsupport_bpzero_wind_vector_dist_ignition.yaml"
-    baseline_data_root: "/network/scratch/o/olutayot/nrcan_wildfireriskmapping/data_samples/data_samples_v3_full_support_dist_ignition"
+    config_path: "configs/bp_common_input_pipeline.yaml"
   ros:
     enabled: true
-    config_path: "configs/default_v1_full_data_ros_full_config_coordconv_spatialized_weather_fire_size_missing_mask_terrain_wind_vector.yaml"
-    baseline_data_root: "/network/scratch/o/olutayot/nrcan_wildfireriskmapping/data_samples/data_samples_v3_full_support"
+    config_path: "configs/ros_common_input_pipeline.yaml"
   fi:
     enabled: true
-    config_path: "configs/default_v1_full_data_fi_full_config_coordconv_spatialized_weather_fire_size_missing_mask_terrain_wind_vector.yaml"
-    baseline_data_root: "/network/scratch/o/olutayot/nrcan_wildfireriskmapping/data_samples/data_samples_v3_full_support"
+    config_path: "configs/fi_common_input_pipeline.yaml"
 
 scenarios:
   - name: baseline
@@ -74,3 +71,39 @@ scenarios:
     description: Replace each connected non-fuel barrier component with its local adjacent modal burnable fuel.
     params:
       mode: nonfuel_to_burnable_local_adjacent_modal
+  - name: fwi_daily_low_to_high
+    kind: fwi
+    description: Per zone, replace low-FWI daily rows with sampled high-FWI rows (raise the zone weather regime).
+    params:
+      mode: daily_regime_swap
+      direction: low_to_high
+      low_quantile: 33.0
+      high_quantile: 66.0
+      zone_column: WeatherZone
+  - name: fwi_daily_high_to_low
+    kind: fwi
+    description: Per zone, replace high-FWI daily rows with sampled low-FWI rows (dampen the zone weather regime).
+    params:
+      mode: daily_regime_swap
+      direction: high_to_low
+      low_quantile: 33.0
+      high_quantile: 66.0
+      zone_column: WeatherZone
+  - name: fwi_summary_low_to_high
+    kind: fwi
+    description: Overwrite low-summary-FWI zones with the donor high-summary-FWI zone profile.
+    params:
+      mode: summary_zone_swap
+      direction: low_to_high
+      low_quantile: 33.0
+      high_quantile: 66.0
+      zone_column: WeatherZone
+  - name: fwi_summary_high_to_low
+    kind: fwi
+    description: Overwrite high-summary-FWI zones with the donor low-summary-FWI zone profile.
+    params:
+      mode: summary_zone_swap
+      direction: high_to_low
+      low_quantile: 33.0
+      high_quantile: 66.0
+      zone_column: WeatherZone
