@@ -32,6 +32,12 @@ from src.datasets.postprocessing.counterfactual_hazard_map import (
     symmetric_percentile_limit,
     values_and_valid,
 )
+from src.datasets.postprocessing.counterfactual_weather import (
+    normalize_raw_weather_ids,
+    processed_weather_for_hex,
+    raw_weather_path,
+    recover_wind_encoding_stats,
+)
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -226,6 +232,103 @@ def plot_zone_fwi_shift(
     axes[0].set_ylabel("Zone-mean normalized FWI")
     fig.suptitle("Input intervention: per-zone FWI shift driving the FI response (hex 16)", fontsize=13)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _paint_zone_choropleth(zone_labels: np.ma.MaskedArray, zone_fwi: dict[int, float]) -> np.ma.MaskedArray:
+    """Return a float array with each pixel painted by its zone's FWI value."""
+    out = np.full(zone_labels.shape, np.nan, dtype=np.float64)
+    label_data = np.ma.filled(zone_labels, -1).astype(np.int64)
+    for zone, value in zone_fwi.items():
+        out[label_data == zone] = value
+    mask = np.ma.getmaskarray(zone_labels) | ~np.isfinite(out)
+    return np.ma.array(out, mask=mask)
+
+
+def _fwi_zone_means_raw(
+    raw_data_dir: Path,
+    experiment_dir: Path,
+    hex_id: str,
+    summary: pd.DataFrame,
+    zone_column: str = "WeatherZone",
+) -> tuple[dict[int, float], dict[str, dict[int, float]], float, float]:
+    """Return zone-mean raw FWI for baseline and each scenario, plus shared vmin/vmax."""
+    raw_weather = normalize_raw_weather_ids(pd.read_csv(raw_weather_path(raw_data_dir, hex_id)))
+    baseline_processed_path = experiment_dir / "scenario_data" / "baseline" / "fi" / "weather_table_processed.csv"
+    processed_hex = processed_weather_for_hex(raw_data_dir, baseline_processed_path, hex_id)
+    fwi_stats = recover_wind_encoding_stats(
+        raw_weather[["FireWeatherIndex"]].rename(columns={"FireWeatherIndex": "FireWeatherIndex"}),
+        processed_hex[["FireWeatherIndex"]].rename(columns={"FireWeatherIndex": "FireWeatherIndex"}),
+        columns=("FireWeatherIndex",),
+    )
+    stat = fwi_stats.by_name()["FireWeatherIndex"]
+
+    raw_weather["_zone"] = raw_weather[zone_column].astype(int)
+    baseline_means: dict[int, float] = raw_weather.groupby("_zone")["FireWeatherIndex"].mean().to_dict()
+
+    scenario_means: dict[str, dict[int, float]] = {}
+    for scenario in DAILY_SCENARIOS:
+        rows = summary[summary["scenario"] == scenario]
+        scenario_means[scenario] = {int(r["zone"]): float(r["scenario_fwi_mean"]) * stat.std + stat.mean for _, r in rows.iterrows()}
+
+    all_vals = list(baseline_means.values()) + [v for d in scenario_means.values() for v in d.values()]
+    return baseline_means, scenario_means, float(min(all_vals)), float(max(all_vals))
+
+
+def plot_zone_fwi_map(
+    zone_labels: np.ma.MaskedArray,
+    edit_summary_path: Path,
+    extent_m: tuple[float, float, float, float],
+    *,
+    experiment_dir: Path,
+    raw_data_dir: Path,
+    hex_id: str,
+    support_mask: np.ndarray,
+    out_path: Path,
+    downsample: int = 3,
+) -> None:
+    """Choropleth map: each firezone coloured by its zone-mean raw FWI, baseline vs intervention."""
+    summary = pd.read_csv(edit_summary_path)
+    summary = summary[summary["scenario"].isin(DAILY_SCENARIOS)]
+    extent = _extent_km(extent_m)
+
+    baseline_means, scenario_means, vmin, vmax = _fwi_zone_means_raw(raw_data_dir, experiment_dir, hex_id, summary)
+    norm = Normalize(vmin=vmin, vmax=vmax)
+
+    fig, axes = plt.subplots(2, 2, figsize=(14.0, 11.0))
+    for row, scenario in enumerate(DAILY_SCENARIOS):
+        panels = [
+            (
+                restrict_to_support(_paint_zone_choropleth(zone_labels, baseline_means), support_mask),
+                "Baseline zone-mean FWI",
+            ),
+            (
+                restrict_to_support(_paint_zone_choropleth(zone_labels, scenario_means[scenario]), support_mask),
+                f"Scenario zone-mean FWI \u2014 {SCENARIO_SHORT[scenario]}",
+            ),
+        ]
+        for col, (data, title) in enumerate(panels):
+            ax = axes[row, col]
+            image = ax.imshow(
+                downsample_for_display(data, downsample),
+                cmap="YlOrRd",
+                norm=norm,
+                extent=extent,
+                origin="upper",
+                interpolation="nearest",
+            )
+            ax.set_title(title, fontsize=10.5)
+            ax.set_aspect("equal")
+            ax.set_xticks([])
+            ax.set_yticks([])
+            cbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.02)
+            cbar.set_label("Zone-mean FWI", fontsize=8.5)
+        axes[row, 0].set_ylabel(SCENARIO_TITLES[scenario], fontsize=12, labelpad=12)
+
+    fig.suptitle("Firezone FWI regime: baseline vs intervention (hex 16)", fontsize=14, y=0.99)
+    fig.tight_layout(rect=(0, 0, 1, 0.98))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
@@ -537,6 +640,17 @@ def main() -> None:
     edit_summary_path = args.experiment_dir / "fwi_edit_summary.csv"
     if edit_summary_path.exists():
         plot_zone_fwi_shift(edit_summary_path, out_path=out_dir / "fwi_daily_zone_fwi_shift.png")
+        plot_zone_fwi_map(
+            zone_labels,
+            edit_summary_path,
+            extent,
+            experiment_dir=args.experiment_dir,
+            raw_data_dir=raw_data_dir,
+            hex_id=args.hex_id,
+            support_mask=~np.ma.getmaskarray(baseline),
+            out_path=out_dir / "fwi_daily_zone_fwi_map.png",
+            downsample=args.downsample,
+        )
         zones = sorted(int(z) for z in pd.read_csv(edit_summary_path)["zone"].unique())
         plot_zone_dose_response(scenarios, zone_labels, edit_summary_path, out_path=out_dir / "fwi_daily_zone_dose_response.png")
         plot_driver_verification(args.experiment_dir, zones, out_path=out_dir / "fwi_daily_driver_verification.png")
