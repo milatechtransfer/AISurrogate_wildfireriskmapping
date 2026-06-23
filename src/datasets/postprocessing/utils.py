@@ -554,7 +554,12 @@ def evaluate_and_visualize_hexels(
     # so the inverse transform is consistent and never derived from held-out hexes.
     train_hex_ids: set[int] | None = None
     if data_dir and config.data.train_split:
-        train_hex_ids = read_split_hex_ids(os.path.join(data_dir, config.data.train_split))
+        try:
+            train_hex_ids = read_split_hex_ids(os.path.join(data_dir, config.data.train_split))
+        except ValueError:
+            # Counterfactual data roots carry an intentionally empty train split;
+            # fall back to full-scan (None) for normalization stat derivation.
+            pass
     grid_params = get_config_grid_params(config)
     prediction_mask_channel_indices = get_prediction_mask_channel_indices(
         data_dir=data_dir,

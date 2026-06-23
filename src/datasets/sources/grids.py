@@ -64,9 +64,13 @@ class GridSource(DataSource):
         # Normalization statistics must be derived from the training split only, so held-out
         # hexes never leak into target/elevation normalization constants. None preserves the
         # legacy full-scan behaviour (e.g. single-hex inference where no split is provided).
+        # An empty train split (e.g. counterfactual-only data roots) is treated as None.
         self._train_hex_ids: set[int] | None = None
         if train_split_csv_name is not None:
-            self._train_hex_ids = read_split_hex_ids(os.path.join(self.root_dir, train_split_csv_name))
+            try:
+                self._train_hex_ids = read_split_hex_ids(os.path.join(self.root_dir, train_split_csv_name))
+            except ValueError:
+                pass
 
         self.targets = get_target_specs(params.target_name)
         self.feature_names_list = params.feature_names_list

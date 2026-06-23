@@ -159,7 +159,12 @@ class Trainer:
         # held-out hexes never leak into target normalization constants.
         train_hex_ids: set[int] | None = None
         if self.config.data.root_dir and self.config.data.train_split:
-            train_hex_ids = read_split_hex_ids(os.path.join(self.config.data.root_dir, self.config.data.train_split))
+            try:
+                train_hex_ids = read_split_hex_ids(os.path.join(self.config.data.root_dir, self.config.data.train_split))
+            except ValueError:
+                # Counterfactual data roots carry an intentionally empty train split;
+                # fall back to full-scan (None) for normalization stat derivation.
+                pass
 
         for target in self._target_specs:
             out_norm = self._target_out_norm(target.name)
