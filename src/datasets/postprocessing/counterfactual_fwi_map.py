@@ -104,6 +104,8 @@ def load_response(prediction_dirs: dict[tuple[str, str], Path], hex_id: str, raw
         if scenario_dir is None:
             raise KeyError(f"Missing FI prediction directory for scenario={scenario!r}.")
         scenario_fi = read_prediction(prediction_raster_path(scenario_dir, hex_id))
+        if scenario_fi.shape != baseline.shape:
+            raise ValueError(f"Scenario {scenario!r} FI shape {scenario_fi.shape} does not match baseline grid {baseline.shape}.")
         delta = scenario_fi - baseline
         scenarios[scenario] = {"fi": scenario_fi, "delta": delta}
     return ground_truth, baseline, scenarios, extent, reference_profile
