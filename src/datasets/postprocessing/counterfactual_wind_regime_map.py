@@ -36,6 +36,17 @@ from src.datasets.postprocessing.diagnose_bp_barrier_halo import parse_fuel_barr
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
+plt.rcParams.update(
+    {
+        "axes.titlesize": 15,
+        "axes.labelsize": 16,
+        "xtick.labelsize": 14,
+        "ytick.labelsize": 14,
+        "legend.fontsize": 14,
+        "figure.titlesize": 17,
+    }
+)
+
 GT_RELATIVE_PATH = "results/burnP3Plus_OutputRateOfSpreadSummaryMap/fbpSummary-RateOfSpread-Average.tif"
 SCENARIO = "wind_zone_peak_day"
 ENDPOINT = "ros"
@@ -137,13 +148,13 @@ def plot_response_maps(
             origin="upper",
             interpolation="nearest",
         )
-        ax.set_title(title, fontsize=11)
+        ax.set_title(title)
         ax.set_aspect("equal")
         ax.set_xticks([])
         ax.set_yticks([])
         cbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.02)
-        cbar.set_label(cbar_label, fontsize=9)
-    fig.suptitle("ROS response to per-zone peak-wind regime transplant (hex 16)", fontsize=14, y=1.0)
+        cbar.set_label(cbar_label, fontsize=14)
+    fig.suptitle("ROS response to per-zone peak-wind regime transplant (hex 16)", y=1.0)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
@@ -208,14 +219,14 @@ def plot_patch_zoom(
         for col, (data, title, cmap, norm, cbar_label) in enumerate(panels):
             ax = axes[row, col]
             image = ax.imshow(data, cmap=cmap, norm=norm, origin="upper", interpolation="nearest")
-            ax.set_title(title, fontsize=10.5)
+            ax.set_title(title)
             ax.set_aspect("equal")
             ax.set_xticks([])
             ax.set_yticks([])
             cbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.02)
-            cbar.set_label(cbar_label, fontsize=8.5)
-        axes[row, 0].set_ylabel(f"Window #{row + 1}", fontsize=11, labelpad=12)
-    fig.suptitle(f"High-response {window}\u00d7{window}-pixel windows (hex 16)", fontsize=14, y=0.995)
+            cbar.set_label(cbar_label, fontsize=14)
+        axes[row, 0].set_ylabel(f"Window #{row + 1}", labelpad=12)
+    fig.suptitle(f"High-response {window}\u00d7{window}-pixel windows (hex 16)", y=0.995)
     fig.tight_layout(rect=(0, 0, 1, 0.98))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
@@ -260,7 +271,7 @@ def plot_delta_distribution(delta: np.ma.MaskedArray, *, out_path: Path) -> None
     ax.set_ylabel("Pixel count")
     ax.set_yscale("log")
     ax.set_title(f"Per-pixel ROS change under peak-wind transplant (hex 16)\n{frac_positive:.1%} of pixels increase")
-    ax.legend(fontsize=9, loc="upper left")
+    ax.legend(loc="upper left")
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")

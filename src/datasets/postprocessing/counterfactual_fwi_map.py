@@ -44,6 +44,17 @@ from src.datasets.postprocessing.diagnose_bp_barrier_halo import parse_fuel_barr
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
+plt.rcParams.update(
+    {
+        "axes.titlesize": 15,
+        "axes.labelsize": 16,
+        "xtick.labelsize": 14,
+        "ytick.labelsize": 14,
+        "legend.fontsize": 14,
+        "figure.titlesize": 17,
+    }
+)
+
 GT_RELATIVE_PATH = "results/burnP3Plus_OutputFireIntensitySummaryMap/fbpSummary-FireIntensity-Average.tif"
 FIREZONES_RELATIVE_PATH = "spatial/hex{hex_int:02d}_firezones.tif"
 DAILY_SCENARIOS = ("fwi_daily_low_to_high", "fwi_daily_high_to_low")
@@ -174,15 +185,15 @@ def plot_before_after_change(
         for col, (data, title, cmap, norm, cbar_label) in enumerate(panels):
             ax = axes[row, col]
             image = ax.imshow(data, cmap=cmap, norm=norm, extent=extent, origin="upper", interpolation="nearest")
-            ax.set_title(title, fontsize=10.5)
+            ax.set_title(title)
             ax.set_aspect("equal")
             ax.set_xticks([])
             ax.set_yticks([])
             cbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.02)
-            cbar.set_label(cbar_label, fontsize=8.5)
-        axes[row, 0].set_ylabel(SCENARIO_TITLES[scenario], fontsize=12, labelpad=12)
+            cbar.set_label(cbar_label, fontsize=14)
+        axes[row, 0].set_ylabel(SCENARIO_TITLES[scenario], labelpad=12)
 
-    fig.suptitle("FI response to daily FWI-regime counterfactuals (hex 16)", fontsize=15, y=0.99)
+    fig.suptitle("FI response to daily FWI-regime counterfactuals (hex 16)", y=0.99)
     fig.tight_layout(rect=(0, 0, 1, 0.98))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
@@ -218,7 +229,7 @@ def plot_delta_distribution(
     ax.set_ylabel("Pixel count")
     ax.set_yscale("log")
     ax.set_title("Per-pixel FI change under daily FWI-regime swaps (hex 16)")
-    ax.legend(fontsize=9, loc="upper left")
+    ax.legend(loc="upper left")
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
@@ -405,7 +416,7 @@ def plot_zone_dose_response(
             zorder=3,
         )
         for x, y, zone in zip(xs, ys, zones, strict=True):
-            ax.annotate(f"z{zone}", (x, y), textcoords="offset points", xytext=(6, 4), fontsize=8, color="0.25")
+            ax.annotate(f"z{zone}", (x, y), textcoords="offset points", xytext=(6, 4), fontsize=12, color="0.25")
         pooled_x.extend(xs)
         pooled_y.extend(ys)
 
@@ -416,13 +427,13 @@ def plot_zone_dose_response(
         corr = float(np.corrcoef(pooled_x, pooled_y)[0, 1])
         x_line = np.linspace(min(pooled_x), max(pooled_x), 100)
         ax.plot(x_line, slope * x_line + intercept, color="0.4", linestyle="--", linewidth=1.2, zorder=2)
-        ax.text(0.04, 0.94, f"Pearson r = {corr:.3f}", transform=ax.transAxes, fontsize=10)
+        ax.text(0.04, 0.94, f"Pearson r = {corr:.3f}", transform=ax.transAxes, fontsize=14)
     ax.axhline(0.0, color="0.6", linewidth=0.8)
     ax.axvline(0.0, color="0.6", linewidth=0.8)
     ax.set_xlabel("Induced \u0394 zone-mean normalized FWI (scenario \u2212 baseline)")
     ax.set_ylabel("Resulting \u0394 zone-mean FI (kW/m)")
     ax.set_title("Zone-level dose-response: FWI shift vs FI response (hex 16)\nmarker size \u221d zone pixel count")
-    ax.legend(fontsize=9, loc="lower right")
+    ax.legend(loc="lower right")
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
@@ -457,10 +468,10 @@ def plot_delta_vs_baseline(
         ax.axhline(0.0, color="white", linewidth=1.0)
         ax.set_xlabel("Baseline FI (model, kW/m)")
         ax.set_title(SCENARIO_TITLES[scenario])
-        ax.legend(fontsize=9, loc="upper left")
+        ax.legend(loc="upper left")
         fig.colorbar(hexbin, ax=ax, fraction=0.046, pad=0.02, label="Pixel count (log)")
     axes[0].set_ylabel("\u0394FI (scenario \u2212 baseline, kW/m)")
-    fig.suptitle("FI response scales with baseline intensity (hex 16)", fontsize=14)
+    fig.suptitle("FI response scales with baseline intensity (hex 16)")
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
@@ -504,7 +515,7 @@ def plot_fi_distribution_shift(
     ax.set_xlabel("FI (kW/m, log scale)")
     ax.set_ylabel("Cumulative fraction of pixels")
     ax.set_title("Hex-wide FI distribution shift under daily FWI swaps (hex 16)")
-    ax.legend(fontsize=9, loc="lower right")
+    ax.legend(loc="lower right")
     ax.grid(True, which="both", alpha=0.25)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -548,9 +559,9 @@ def plot_driver_verification(
         for i in range(matrix.shape[0]):
             for j in range(matrix.shape[1]):
                 if np.isfinite(matrix[i, j]):
-                    ax.text(j, i, f"{matrix[i, j]:+.2f}", ha="center", va="center", fontsize=7.5, color="0.15")
+                    ax.text(j, i, f"{matrix[i, j]:+.2f}", ha="center", va="center", fontsize=10, color="0.15")
         fig.colorbar(image, ax=ax, fraction=0.046, pad=0.02, label="\u0394 mean (standardized)")
-    fig.suptitle("Intervention transplants a coherent multivariate regime, not FWI alone (hex 16)", fontsize=13)
+    fig.suptitle("Intervention transplants a coherent multivariate regime, not FWI alone (hex 16)")
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
@@ -621,14 +632,14 @@ def plot_patch_zoom(
         for col, (data, title, cmap, norm, cbar_label) in enumerate(panels):
             ax = axes[row, col]
             image = ax.imshow(data, cmap=cmap, norm=norm, origin="upper", interpolation="nearest")
-            ax.set_title(title, fontsize=10.5)
+            ax.set_title(title)
             ax.set_aspect("equal")
             ax.set_xticks([])
             ax.set_yticks([])
             cbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.02)
-            cbar.set_label(cbar_label, fontsize=8.5)
-        axes[row, 0].set_ylabel(SCENARIO_TITLES[scenario], fontsize=11, labelpad=12)
-    fig.suptitle(f"High-response window #{rank} ({window}\u00d7{window} px, hex 16)", fontsize=14, y=0.99)
+            cbar.set_label(cbar_label, fontsize=14)
+        axes[row, 0].set_ylabel(SCENARIO_TITLES[scenario], labelpad=12)
+    fig.suptitle(f"High-response window #{rank} ({window}\u00d7{window} px, hex 16)", y=0.99)
     fig.tight_layout(rect=(0, 0, 1, 0.98))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
