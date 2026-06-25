@@ -19,6 +19,7 @@ import rasterio
 import yaml
 from matplotlib.colors import Normalize, TwoSlopeNorm
 
+from data_preparation.paths import Paths
 from data_preparation.spatial.utils import load_spatial_raster
 from src.datasets.postprocessing.counterfactual_hazard_map import (
     downsample_for_display,
@@ -30,6 +31,7 @@ from src.datasets.postprocessing.counterfactual_hazard_map import (
     restrict_to_support,
     symmetric_percentile_limit,
 )
+from src.datasets.postprocessing.diagnose_bp_barrier_halo import parse_fuel_barrier_info
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -58,6 +60,15 @@ def load_ground_truth(raw_data_dir: Path, hex_id: str, reference_profile: dict) 
     return gt
 
 
+def load_burnable_support(raw_data_dir: Path, hex_id: str, reference_profile: dict) -> np.ndarray:
+    """Boolean mask of burnable pixels (non-fuel/water excluded) on the prediction grid."""
+    paths = Paths(hex_id=hex_id, root_dir=raw_data_dir)
+    fuel_ma, _ = load_spatial_raster(path=paths.fuel_grid(hex_id), reference_profile=reference_profile)
+    fuel_values = np.ma.asarray(fuel_ma).filled(-32768).astype(np.int32)
+    fuel_info = parse_fuel_barrier_info(paths, hex_id)
+    return ~np.isin(fuel_values, fuel_info.nonfuel_ids)
+
+
 def load_response(prediction_dirs: dict[tuple[str, str], Path], hex_id: str, raw_data_dir: Path):
     baseline_dir = prediction_dirs.get(("baseline", ENDPOINT))
     if baseline_dir is None:
@@ -68,10 +79,14 @@ def load_response(prediction_dirs: dict[tuple[str, str], Path], hex_id: str, raw
     with rasterio.open(baseline_path) as src:
         reference_profile = src.profile.copy()
 
+    burnable = load_burnable_support(raw_data_dir, hex_id, reference_profile)
+    support = burnable & ~np.ma.getmaskarray(baseline)
+
     ground_truth = load_ground_truth(raw_data_dir, hex_id, reference_profile)
     if ground_truth.shape != baseline.shape:
         raise ValueError(f"Ground-truth shape {ground_truth.shape} does not match prediction grid {baseline.shape}.")
-    ground_truth = restrict_to_support(ground_truth, ~np.ma.getmaskarray(baseline))
+    ground_truth = restrict_to_support(ground_truth, support)
+    baseline = restrict_to_support(baseline, support)
 
     scenario_dir = prediction_dirs.get((SCENARIO, ENDPOINT))
     if scenario_dir is None:
@@ -79,7 +94,8 @@ def load_response(prediction_dirs: dict[tuple[str, str], Path], hex_id: str, raw
     scenario_ros = read_prediction(prediction_raster_path(scenario_dir, hex_id))
     if scenario_ros.shape != baseline.shape:
         raise ValueError(f"Scenario ROS shape {scenario_ros.shape} does not match baseline grid {baseline.shape}.")
-    delta = scenario_ros - baseline
+    scenario_ros = restrict_to_support(scenario_ros, support)
+    delta = restrict_to_support(scenario_ros - baseline, support)
     return ground_truth, baseline, scenario_ros, delta, extent, reference_profile
 
 
