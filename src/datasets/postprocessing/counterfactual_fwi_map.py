@@ -539,16 +539,31 @@ def plot_driver_verification(
     plt.close(fig)
 
 
-def _hotspot_center(delta: np.ma.MaskedArray, block: int) -> tuple[int, int]:
+def _block_response(delta: np.ma.MaskedArray, block: int) -> np.ndarray:
     abs_delta = np.abs(np.ma.filled(delta, 0.0))
     valid = (~np.ma.getmaskarray(delta)).astype(np.float64)
     rows = (abs_delta.shape[0] // block) * block
     cols = (abs_delta.shape[1] // block) * block
     summed = abs_delta[:rows, :cols].reshape(rows // block, block, cols // block, block).sum(axis=(1, 3))
     counts = valid[:rows, :cols].reshape(rows // block, block, cols // block, block).sum(axis=(1, 3))
-    mean_block = np.where(counts > 0, summed / np.maximum(counts, 1.0), 0.0)
-    row_block, col_block = np.unravel_index(int(np.argmax(mean_block)), mean_block.shape)
-    return int(row_block * block + block // 2), int(col_block * block + block // 2)
+    return np.where(counts > 0, summed / np.maximum(counts, 1.0), 0.0)
+
+
+def _shared_hotspot_centers(deltas: list[np.ma.MaskedArray], block: int, *, count: int, window: int) -> list[tuple[int, int]]:
+    scores = _block_response(np.ma.abs(np.ma.stack(deltas)).sum(axis=0), block)
+    suppress = max(window // block, 1)
+    centers: list[tuple[int, int]] = []
+    for _ in range(count):
+        if not np.any(scores > 0):
+            break
+        flat_index = int(np.argmax(scores))
+        row_block, col_block = (int(idx) for idx in np.unravel_index(flat_index, scores.shape))
+        centers.append((row_block * block + block // 2, col_block * block + block // 2))
+        scores[
+            max(row_block - suppress, 0) : row_block + suppress + 1,
+            max(col_block - suppress, 0) : col_block + suppress + 1,
+        ] = 0.0
+    return centers
 
 
 def plot_patch_zoom(
@@ -557,7 +572,8 @@ def plot_patch_zoom(
     *,
     out_path: Path,
     window: int,
-    hotspot_block: int,
+    center: tuple[int, int],
+    rank: int,
 ) -> None:
     pooled_fi = [finite_values(baseline)] + [finite_values(scenarios[s]["fi"]) for s in DAILY_SCENARIOS]
     fi_norm = Normalize(vmin=0.0, vmax=float(np.percentile(np.concatenate(pooled_fi), 99.0)))
@@ -565,13 +581,14 @@ def plot_patch_zoom(
     delta_norm = TwoSlopeNorm(vcenter=0.0, vmin=-delta_limit, vmax=delta_limit)
     half = window // 2
 
+    center_row, center_col = center
+    r0 = max(center_row - half, 0)
+    c0 = max(center_col - half, 0)
+    r1 = min(r0 + window, baseline.shape[0])
+    c1 = min(c0 + window, baseline.shape[1])
+
     fig, axes = plt.subplots(2, 3, figsize=(15.0, 10.0))
     for row, scenario in enumerate(DAILY_SCENARIOS):
-        center_row, center_col = _hotspot_center(scenarios[scenario]["delta"], hotspot_block)
-        r0 = max(center_row - half, 0)
-        c0 = max(center_col - half, 0)
-        r1 = min(r0 + window, baseline.shape[0])
-        c1 = min(c0 + window, baseline.shape[1])
         panels = [
             (baseline[r0:r1, c0:c1], "Baseline FI (model)", "inferno", fi_norm, "FI (kW/m)"),
             (scenarios[scenario]["fi"][r0:r1, c0:c1], f"Scenario FI \u2014 {SCENARIO_SHORT[scenario]}", "inferno", fi_norm, "FI (kW/m)"),
@@ -593,7 +610,7 @@ def plot_patch_zoom(
             cbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.02)
             cbar.set_label(cbar_label, fontsize=8.5)
         axes[row, 0].set_ylabel(SCENARIO_TITLES[scenario], fontsize=11, labelpad=12)
-    fig.suptitle(f"Highest-response {window}\u00d7{window}-pixel windows (hex 16)", fontsize=14, y=0.99)
+    fig.suptitle(f"High-response window #{rank} ({window}\u00d7{window} px, hex 16)", fontsize=14, y=0.99)
     fig.tight_layout(rect=(0, 0, 1, 0.98))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
@@ -607,7 +624,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--downsample", type=int, default=3, help="Stride factor for map display only.")
     parser.add_argument("--raw_data_dir", type=Path, default=None, help="Defaults to baseline config data.raw_data_dir.")
     parser.add_argument("--patch_window", type=int, default=400, help="Side length (pixels) of patch zoom windows.")
-    parser.add_argument("--hotspot_block", type=int, default=64, help="Block size for locating the highest-response window.")
+    parser.add_argument("--hotspot_block", type=int, default=64, help="Block size for locating high-response windows.")
+    parser.add_argument("--patch_count", type=int, default=3, help="Number of distinct high-response windows to render.")
     parser.add_argument("--out_dir", type=Path, default=None, help="Defaults to experiment_dir/figures/fwi_daily.")
     return parser.parse_args()
 
@@ -631,13 +649,21 @@ def main() -> None:
     plot_delta_distribution(scenarios, out_path=out_dir / "fwi_daily_delta_distribution.png")
     plot_delta_vs_baseline(baseline, scenarios, out_path=out_dir / "fwi_daily_delta_vs_baseline.png")
     plot_fi_distribution_shift(ground_truth, baseline, scenarios, out_path=out_dir / "fwi_daily_fi_distribution_shift.png")
-    plot_patch_zoom(
-        baseline,
-        scenarios,
-        out_path=out_dir / "fwi_daily_patch_zoom.png",
+    patch_centers = _shared_hotspot_centers(
+        [scenarios[s]["delta"] for s in DAILY_SCENARIOS],
+        args.hotspot_block,
+        count=args.patch_count,
         window=args.patch_window,
-        hotspot_block=args.hotspot_block,
     )
+    for rank, center in enumerate(patch_centers, start=1):
+        plot_patch_zoom(
+            baseline,
+            scenarios,
+            out_path=out_dir / f"fwi_daily_patch_zoom_{rank}.png",
+            window=args.patch_window,
+            center=center,
+            rank=rank,
+        )
 
     edit_summary_path = args.experiment_dir / "fwi_edit_summary.csv"
     if edit_summary_path.exists():

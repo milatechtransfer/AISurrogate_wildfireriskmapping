@@ -107,3 +107,9 @@ scenarios:
       low_quantile: 33.0
       high_quantile: 66.0
       zone_column: WeatherZone
+  - name: wind_zone_peak_day
+    kind: wind_regime
+    description: Per zone, transplant the single highest-WindSpeed day's full weather regime onto every day in the zone.
+    params:
+      mode: zone_peak_transplant
+      zone_column: WeatherZone
