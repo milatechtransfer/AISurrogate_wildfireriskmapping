@@ -17,6 +17,18 @@ from rasterio.features import geometry_mask
 
 from data_preparation.paths import Paths
 from data_preparation.spatial.utils import load_spatial_raster
+from src.datasets.postprocessing.counterfactual_viz import (
+    downsample_for_display,
+    finite_values,
+    prediction_dirs_from_index,
+    prediction_raster_path,
+    prediction_reference_profile,
+    read_prediction,
+    read_prediction_extent,
+    restrict_to_support,
+    symmetric_percentile_limit,
+    values_and_valid,
+)
 from src.datasets.postprocessing.fuel_barrier_geometry import (
     DISPLAY_SCENARIO,
     load_barrier_layers_on_prediction_grid,
@@ -112,35 +124,6 @@ ENDPOINT_LABELS = {
 }
 
 
-def prediction_dirs_from_index(experiment_dir: Path) -> dict[tuple[str, str], Path]:
-    """Read scenario/endpoint prediction directories from the materialization index."""
-
-    index_path = experiment_dir / "scenario_prediction_index.csv"
-    index = pd.read_csv(index_path)
-    required = {"scenario", "endpoint", "prediction_dir"}
-    missing = sorted(required - set(index.columns))
-    if missing:
-        raise ValueError(f"{index_path} is missing required columns: {missing}")
-    return {(str(row.scenario), str(row.endpoint)): Path(str(row.prediction_dir)) for row in index.itertuples(index=False)}
-
-
-def prediction_raster_path(prediction_dir: Path, hex_id: str) -> Path:
-    return prediction_dir / "predicted_hexels" / f"hexel_{int(hex_id):02d}_predicted.tif"
-
-
-def read_prediction(path: Path) -> np.ma.MaskedArray:
-    if not path.exists():
-        raise FileNotFoundError(path)
-    with rasterio.open(path) as src:
-        return src.read(1, masked=True)
-
-
-def read_prediction_extent(path: Path) -> tuple[float, float, float, float]:
-    with rasterio.open(path) as src:
-        bounds = src.bounds
-    return bounds.left, bounds.right, bounds.bottom, bounds.top
-
-
 def hazard_prediction(
     prediction_dirs: dict[tuple[str, str], Path],
     scenario: str,
@@ -165,14 +148,6 @@ def endpoint_prediction(
     if prediction_dir is None:
         raise KeyError(f"Missing {endpoint.upper()} prediction for scenario={scenario!r}.")
     return read_prediction(prediction_raster_path(prediction_dir, hex_id))
-
-
-def prediction_reference_profile(prediction_dirs: dict[tuple[str, str], Path], hex_id: str) -> dict:
-    baseline_bp_dir = prediction_dirs.get(("baseline", "bp"))
-    if baseline_bp_dir is None:
-        raise KeyError("Missing baseline BP prediction directory; cannot define reference grid.")
-    with rasterio.open(prediction_raster_path(baseline_bp_dir, hex_id)) as src:
-        return src.profile.copy()
 
 
 def ground_truth_hazard_on_prediction_grid(
@@ -241,11 +216,6 @@ def hazard_delta(
     return baseline, scenario_hazard, scenario_hazard - baseline
 
 
-def finite_values(data: np.ma.MaskedArray | np.ndarray) -> np.ndarray:
-    values = np.asarray(np.ma.asarray(data).filled(np.nan), dtype=np.float64)
-    return values[np.isfinite(values)]
-
-
 def pooled_positive_percentile(arrays: list[np.ma.MaskedArray | np.ndarray], percentile: float) -> float:
     values = [finite_values(arr) for arr in arrays]
     values = [value[value >= 0.0] for value in values if value.size > 0]
@@ -254,22 +224,6 @@ def pooled_positive_percentile(arrays: list[np.ma.MaskedArray | np.ndarray], per
         return 1.0
     vmax = float(np.percentile(np.concatenate(values), percentile))
     return max(vmax, 1e-9)
-
-
-def values_and_valid(data: np.ma.MaskedArray | np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    values = np.asarray(np.ma.asarray(data).filled(np.nan), dtype=np.float64)
-    return values, np.isfinite(values)
-
-
-def symmetric_percentile_limit(deltas: list[np.ma.MaskedArray], percentile: float = 99.5) -> float:
-    """Symmetric color limit from pooled absolute delta values."""
-
-    values = [np.abs(finite_values(delta)) for delta in deltas]
-    values = [value for value in values if value.size > 0]
-    if not values:
-        return 1.0
-    limit = float(np.percentile(np.concatenate(values), percentile))
-    return max(limit, 1e-9)
 
 
 def summarize_hazard_delta(
@@ -310,23 +264,6 @@ def summarize_hazard_delta(
         frac_delta_positive=float(np.mean(delta_values > 0.0)),
         frac_delta_negative=float(np.mean(delta_values < 0.0)),
     )
-
-
-def downsample_for_display(data: np.ma.MaskedArray | np.ndarray, factor: int) -> np.ma.MaskedArray:
-    """Stride-downsample a raster for plotting only."""
-
-    if factor <= 1:
-        return np.ma.asarray(data)
-    return np.ma.asarray(data)[::factor, ::factor]
-
-
-def restrict_to_support(data: np.ma.MaskedArray | np.ndarray, support_mask: np.ndarray) -> np.ma.MaskedArray:
-    """Mask an array outside a boolean analysis support mask."""
-
-    arr = np.ma.asarray(data)
-    if arr.shape != support_mask.shape:
-        raise ValueError(f"Support mask shape {support_mask.shape} does not match data shape {arr.shape}.")
-    return np.ma.masked_where(~support_mask | np.ma.getmaskarray(arr), arr)
 
 
 def mask_scope_on_prediction_grid(

@@ -23,8 +23,8 @@ from src.datasets.postprocessing.counterfactual_fuel_intervention_map import (
     FUEL_GROUP_LABELS,
     _categorical_codes,
 )
-from src.datasets.postprocessing.counterfactual_hazard_map import (
-    original_barrier_mask,
+from src.datasets.postprocessing.counterfactual_hazard_map import original_barrier_mask
+from src.datasets.postprocessing.counterfactual_viz import (
     prediction_dirs_from_index,
     prediction_raster_path,
     read_prediction,

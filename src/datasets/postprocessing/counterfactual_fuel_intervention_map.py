@@ -17,14 +17,14 @@ from matplotlib.patches import Patch
 from data_preparation.paths import Paths
 from data_preparation.spatial.utils import FUEL_GROUP_MAP, load_spatial_raster
 from src.datasets.postprocessing.counterfactual_fuel import replace_nonfuel_components_with_adjacent_modal
-from src.datasets.postprocessing.counterfactual_hazard_map import (
-    prediction_dirs_from_index,
-    prediction_raster_path,
-    read_prediction,
-)
 from src.datasets.postprocessing.counterfactual_materialize import (
     _load_stitched_patch_fuel,
     _patch_records,
+)
+from src.datasets.postprocessing.counterfactual_viz import (
+    prediction_dirs_from_index,
+    prediction_raster_path,
+    read_prediction,
 )
 
 matplotlib.use("Agg")

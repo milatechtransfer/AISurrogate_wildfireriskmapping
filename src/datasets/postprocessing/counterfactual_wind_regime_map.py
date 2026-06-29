@@ -21,7 +21,7 @@ from matplotlib.colors import Normalize, TwoSlopeNorm
 
 from data_preparation.paths import Paths
 from data_preparation.spatial.utils import load_spatial_raster
-from src.datasets.postprocessing.counterfactual_hazard_map import (
+from src.datasets.postprocessing.counterfactual_viz import (
     downsample_for_display,
     finite_values,
     prediction_dirs_from_index,
