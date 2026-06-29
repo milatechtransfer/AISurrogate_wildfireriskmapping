@@ -25,7 +25,7 @@ from src.datasets.postprocessing.counterfactual_hazard_map import (
     symmetric_percentile_limit,
     values_and_valid,
 )
-from src.datasets.postprocessing.diagnose_bp_barrier_halo import (
+from src.datasets.postprocessing.fuel_barrier_geometry import (
     DEFAULT_DIST_BIN_EDGES_M,
     compute_distance_fields,
     dist_bin_label,

@@ -14,7 +14,7 @@ import rasterio
 from data_preparation.paths import Paths
 from data_preparation.spatial.utils import load_spatial_raster
 from src.datasets.postprocessing.counterfactual_weather import raw_weather_path
-from src.datasets.postprocessing.diagnose_bp_barrier_halo import (
+from src.datasets.postprocessing.fuel_barrier_geometry import (
     DEFAULT_DIST_BIN_EDGES_M,
     FUEL_NODATA,
     SECTOR_LABELS,

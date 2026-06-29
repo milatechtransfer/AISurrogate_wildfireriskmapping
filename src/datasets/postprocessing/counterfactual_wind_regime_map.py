@@ -31,7 +31,7 @@ from src.datasets.postprocessing.counterfactual_hazard_map import (
     restrict_to_support,
     symmetric_percentile_limit,
 )
-from src.datasets.postprocessing.diagnose_bp_barrier_halo import parse_fuel_barrier_info
+from src.datasets.postprocessing.fuel_barrier_geometry import parse_fuel_barrier_info
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402

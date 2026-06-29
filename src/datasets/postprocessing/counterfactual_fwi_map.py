@@ -39,7 +39,7 @@ from src.datasets.postprocessing.counterfactual_weather import (
     raw_weather_path,
     recover_wind_encoding_stats,
 )
-from src.datasets.postprocessing.diagnose_bp_barrier_halo import parse_fuel_barrier_info
+from src.datasets.postprocessing.fuel_barrier_geometry import parse_fuel_barrier_info
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402

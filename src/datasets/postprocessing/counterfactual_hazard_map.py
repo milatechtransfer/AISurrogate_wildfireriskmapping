@@ -21,7 +21,7 @@ from src.datasets.postprocessing.counterfactual_barrier_profile import (
     DISPLAY_SCENARIO,
     _load_barrier_layers_on_prediction_grid,
 )
-from src.datasets.postprocessing.diagnose_bp_barrier_halo import parse_fuel_barrier_info
+from src.datasets.postprocessing.fuel_barrier_geometry import parse_fuel_barrier_info
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402

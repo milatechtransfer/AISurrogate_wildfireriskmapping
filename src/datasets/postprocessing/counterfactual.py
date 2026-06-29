@@ -113,7 +113,7 @@ def _parse_endpoints(raw_endpoints: object) -> dict[str, EndpointConfig]:
         raise ValueError("Counterfactual config key 'endpoints' must be a non-empty mapping.")
     endpoints = {str(name): EndpointConfig.from_mapping(str(name), endpoint_raw) for name, endpoint_raw in raw_endpoints.items()}
     if "bp" not in endpoints or not endpoints["bp"].enabled:
-        raise ValueError("BP must be configured and enabled because it is the primary halo endpoint.")
+        raise ValueError("BP must be configured and enabled because it is the primary barrier-response endpoint.")
     return endpoints
 
 
