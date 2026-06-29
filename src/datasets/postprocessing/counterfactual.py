@@ -18,7 +18,7 @@ import yaml
 from data_preparation.paths import MASK_SCOPE_CHOICES, MaskScope, normalize_mask_scope
 
 ENDPOINTS: tuple[str, ...] = ("bp", "ros", "fi")
-SCENARIO_KINDS: tuple[str, ...] = ("baseline", "wind", "fuel", "fwi", "wind_regime")
+SCENARIO_KINDS: tuple[str, ...] = ("baseline", "wind", "fuel", "fwi", "wind_regime", "wind_direction")
 SUPPORT_POLICIES: tuple[str, ...] = ("baseline", "intersection")
 DEFAULT_FOCUS_HEX_ID = "16"
 

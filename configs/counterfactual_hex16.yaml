@@ -57,3 +57,15 @@ scenarios:
     params:
       mode: zone_peak_transplant
       zone_column: WeatherZone
+  - name: wind_dir_dominant
+    kind: wind_direction
+    description: Set every day to the hex's speed-weighted dominant from-bearing (per-day speeds kept); spatial-pattern probe.
+    params:
+      mode: uniform_direction
+      offset_deg: 0.0
+  - name: wind_dir_dominant_opposite
+    kind: wind_direction
+    description: Set every day to the exact opposite (180 deg) of the dominant from-bearing; mirror test for the spatial response.
+    params:
+      mode: uniform_direction
+      offset_deg: 180.0

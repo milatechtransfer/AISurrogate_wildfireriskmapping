@@ -37,6 +37,7 @@ from src.datasets.postprocessing.counterfactual_weather import (
     raw_weather_path,
     validate_wind_roundtrip,
 )
+from src.datasets.postprocessing.counterfactual_wind_direction import apply_wind_direction_scenario
 from src.datasets.postprocessing.counterfactual_wind_regime import apply_wind_regime_scenario
 from src.datasets.postprocessing.utils import bp_nonfuel_restricted_ids
 
@@ -477,7 +478,7 @@ def _write_weather_table(
         return pd.DataFrame(), pd.DataFrame()
 
     src = baseline_root / weather_csv_name
-    if scenario.kind not in {"fwi", "wind_regime"}:
+    if scenario.kind not in {"fwi", "wind_regime", "wind_direction"}:
         _copy_file(src, scenario_root / weather_csv_name, overwrite=overwrite)
         return pd.DataFrame(), pd.DataFrame()
 
@@ -490,6 +491,14 @@ def _write_weather_table(
 
     if scenario.kind == "wind_regime":
         scenario_processed_hex, edit_report = apply_wind_regime_scenario(
+            raw_weather,
+            processed_hex,
+            stats,
+            scenario.params,
+            seed=seed,
+        )
+    elif scenario.kind == "wind_direction":
+        scenario_processed_hex, edit_report = apply_wind_direction_scenario(
             raw_weather,
             processed_hex,
             stats,
@@ -679,6 +688,7 @@ def materialize_counterfactual_inputs(
     fuel_report_rows: list[pd.DataFrame] = []
     fwi_report_rows: list[pd.DataFrame] = []
     wind_report_rows: list[pd.DataFrame] = []
+    wind_direction_report_rows: list[pd.DataFrame] = []
     materialized: list[MaterializedScenario] = []
 
     for scenario in scenarios:
@@ -698,8 +708,11 @@ def materialize_counterfactual_inputs(
             if not fuel_report.empty:
                 fuel_report_rows.append(fuel_report)
             if not edit_report.empty:
-                target = wind_report_rows if scenario.kind == "wind_regime" else fwi_report_rows
-                target.append(edit_report)
+                edit_report_targets = {
+                    "wind_regime": wind_report_rows,
+                    "wind_direction": wind_direction_report_rows,
+                }
+                edit_report_targets.get(scenario.kind, fwi_report_rows).append(edit_report)
 
     materialized_index = pd.DataFrame(materialized_rows)
     index_path = cfg.save_dir / "scenario_prediction_index.csv"
@@ -714,6 +727,12 @@ def materialize_counterfactual_inputs(
         _write_csv(pd.concat(fwi_report_rows, ignore_index=True), cfg.save_dir / "fwi_edit_summary.csv", overwrite=overwrite)
     if wind_report_rows:
         _write_csv(pd.concat(wind_report_rows, ignore_index=True), cfg.save_dir / "wind_edit_summary.csv", overwrite=overwrite)
+    if wind_direction_report_rows:
+        _write_csv(
+            pd.concat(wind_direction_report_rows, ignore_index=True),
+            cfg.save_dir / "wind_direction_edit_summary.csv",
+            overwrite=overwrite,
+        )
     if fuel_report_rows:
         fuel_reports = pd.concat(fuel_report_rows, ignore_index=True)
         summary = (

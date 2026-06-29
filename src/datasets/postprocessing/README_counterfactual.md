@@ -32,6 +32,7 @@ Edit logic (one per scenario `kind`):
 - `counterfactual_fuel.py` — fuel-grid edits (`kind: fuel`)
 - `counterfactual_fwi.py` — daily FWI-regime swap (`kind: fwi`)
 - `counterfactual_wind_regime.py` — per-zone wind regime transplant (`kind: wind_regime`)
+- `counterfactual_wind_direction.py` — uniform wind-direction rotation (`kind: wind_direction`)
 - `counterfactual_weather.py` — wind re-encoding + roundtrip validation shared by the weather kinds
 
 Orchestration & spec:
@@ -44,9 +45,13 @@ Figures (each consumes the predictions for its scenario family):
   `counterfactual_fuel_intervention_map.py`, `counterfactual_local_zoom_panels.py`
 - fwi: `counterfactual_fwi_map.py`
 - wind_regime: `counterfactual_wind_regime_map.py`
+- wind_direction: `counterfactual_wind_direction_map.py` (paired dominant vs +180° mirror)
 
 Shared helpers (keep dependency-light, no scenario-specific logic):
-- `counterfactual_viz.py` — IO/plot hub
+- `counterfactual_viz.py` — IO/plot hub, incl. `plot_delta_histogram`
+  (log-count histogram + |Δ| concentration curve) reusable across interventions
+- `counterfactual_ros_maps.py` — ROS response-map + GT patch-zoom plotting shared
+  by the wind_regime and wind_direction figure scripts
 - `counterfactual_weather_maps.py` — spatialized-weather map IO
 - `fuel_barrier_geometry.py` — fuel grouping + barrier-relative geometry
 
