@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import Normalize, TwoSlopeNorm
 from matplotlib.patches import Patch
-from scipy.ndimage import find_objects, label
 
 from src.datasets.postprocessing.counterfactual_fuel import replace_nonfuel_components_with_adjacent_modal
 from src.datasets.postprocessing.counterfactual_fuel_intervention_map import (
@@ -20,7 +19,6 @@ from src.datasets.postprocessing.counterfactual_fuel_intervention_map import (
     FUEL_GROUP_LABELS,
     _categorical_codes,
 )
-from src.datasets.postprocessing.counterfactual_hazard_map import original_barrier_mask
 from src.datasets.postprocessing.counterfactual_viz import (
     finite_values,
     prediction_dirs_from_index,
@@ -45,50 +43,6 @@ class _SliceWindow(Protocol):
 
     @property
     def col_slice(self) -> slice: ...
-
-
-@dataclass(frozen=True)
-class ComponentWindow:
-    component_id: int
-    rank: int
-    component_pixels: int
-    bbox_row_min: int
-    bbox_row_max: int
-    bbox_col_min: int
-    bbox_col_max: int
-    crop_row_min: int
-    crop_row_max: int
-    crop_col_min: int
-    crop_col_max: int
-    full_component_visible: bool
-
-    @property
-    def row_slice(self) -> slice:
-        return slice(self.crop_row_min, self.crop_row_max)
-
-    @property
-    def col_slice(self) -> slice:
-        return slice(self.crop_col_min, self.crop_col_max)
-
-
-@dataclass(frozen=True)
-class LocalZoomSummary:
-    scenario: str
-    hex_id: str
-    component_id: int
-    rank: int
-    component_pixels: int
-    full_component_visible: bool
-    crop_row_min: int
-    crop_row_max: int
-    crop_col_min: int
-    crop_col_max: int
-    baseline_fi_mean: float
-    scenario_fi_mean: float
-    delta_fi_mean: float
-    baseline_hazard_mean: float
-    scenario_hazard_mean: float
-    delta_hazard_mean: float
 
 
 @dataclass(frozen=True)
@@ -309,109 +263,6 @@ def replacement_group_map_on_prediction_grid(grouped_fuel: np.ndarray) -> tuple[
     return original_nonfuel, replacement_map
 
 
-def padded_window(
-    bbox: tuple[int, int, int, int],
-    shape: tuple[int, int],
-    *,
-    padding: int,
-    max_crop_size: int | None = None,
-) -> tuple[int, int, int, int, bool]:
-    """Return a clipped padded crop around a component bbox."""
-
-    row_min, row_max, col_min, col_max = bbox
-    padded_row_min = max(0, row_min - padding)
-    padded_row_max = min(shape[0], row_max + padding)
-    padded_col_min = max(0, col_min - padding)
-    padded_col_max = min(shape[1], col_max + padding)
-
-    crop_row_min, crop_row_max = padded_row_min, padded_row_max
-    crop_col_min, crop_col_max = padded_col_min, padded_col_max
-    if max_crop_size is not None:
-        if crop_row_max - crop_row_min > max_crop_size:
-            centre = 0.5 * (row_min + row_max)
-            crop_row_min = int(round(centre - max_crop_size / 2))
-            crop_row_min = min(max(0, crop_row_min), max(0, shape[0] - max_crop_size))
-            crop_row_max = min(shape[0], crop_row_min + max_crop_size)
-        if crop_col_max - crop_col_min > max_crop_size:
-            centre = 0.5 * (col_min + col_max)
-            crop_col_min = int(round(centre - max_crop_size / 2))
-            crop_col_min = min(max(0, crop_col_min), max(0, shape[1] - max_crop_size))
-            crop_col_max = min(shape[1], crop_col_min + max_crop_size)
-
-    full_visible = crop_row_min <= row_min and crop_row_max >= row_max and crop_col_min <= col_min and crop_col_max >= col_max
-    return crop_row_min, crop_row_max, crop_col_min, crop_col_max, full_visible
-
-
-def select_component_windows(
-    mask: np.ndarray,
-    *,
-    n_components: int = 3,
-    padding: int = 80,
-    max_crop_size: int | None = None,
-    min_component_pixels: int = 500,
-) -> tuple[np.ndarray, list[ComponentWindow]]:
-    """Select the largest barrier components and return their labelled crop windows."""
-
-    if mask.ndim != 2:
-        raise ValueError("mask must be 2D")
-    structure = np.ones((3, 3), dtype=np.int8)
-    labels, n_labels = label(mask.astype(bool), structure=structure)
-    if n_labels == 0:
-        raise ValueError("No connected components found in mask.")
-
-    slices = find_objects(labels)
-    candidates: list[dict[str, int | tuple[int, int, int, int]]] = []
-    for component_id, component_slice in enumerate(slices, start=1):
-        if component_slice is None:
-            continue
-        row_slice, col_slice = component_slice
-        row_min, row_max = int(row_slice.start), int(row_slice.stop)
-        col_min, col_max = int(col_slice.start), int(col_slice.stop)
-        component_pixels = int((labels[row_slice, col_slice] == component_id).sum())
-        if component_pixels < min_component_pixels:
-            continue
-        candidates.append(
-            {
-                "component_id": component_id,
-                "component_pixels": component_pixels,
-                "bbox": (row_min, row_max, col_min, col_max),
-            }
-        )
-    if not candidates:
-        raise ValueError(f"No components have at least {min_component_pixels} pixels.")
-
-    selected = sorted(candidates, key=lambda item: cast(int, item["component_pixels"]), reverse=True)[:n_components]
-
-    windows: list[ComponentWindow] = []
-    for rank, item in enumerate(selected, start=1):
-        bbox = item["bbox"]
-        assert isinstance(bbox, tuple)
-        row_min, row_max, col_min, col_max = bbox
-        crop_row_min, crop_row_max, crop_col_min, crop_col_max, full_visible = padded_window(
-            bbox,
-            mask.shape,
-            padding=padding,
-            max_crop_size=max_crop_size,
-        )
-        windows.append(
-            ComponentWindow(
-                component_id=cast(int, item["component_id"]),
-                rank=rank,
-                component_pixels=cast(int, item["component_pixels"]),
-                bbox_row_min=row_min,
-                bbox_row_max=row_max,
-                bbox_col_min=col_min,
-                bbox_col_max=col_max,
-                crop_row_min=crop_row_min,
-                crop_row_max=crop_row_max,
-                crop_col_min=crop_col_min,
-                crop_col_max=crop_col_max,
-                full_component_visible=full_visible,
-            )
-        )
-    return labels, windows
-
-
 def robust_norm(arrays: list[np.ndarray | np.ma.MaskedArray], *, low: float = 1.0, high: float = 99.0) -> Normalize:
     values = [finite_values(array) for array in arrays]
     values = [value for value in values if value.size > 0]
@@ -437,89 +288,10 @@ def crop(data: np.ndarray | np.ma.MaskedArray, window: _SliceWindow) -> np.ma.Ma
     return np.ma.asarray(data)[window.row_slice, window.col_slice]
 
 
-def _contour_component(ax: plt.Axes, labels: np.ndarray, window: ComponentWindow) -> None:
-    component = labels[window.row_slice, window.col_slice] == window.component_id
-    if component.any():
-        ax.contour(component.astype(np.float32), levels=[0.5], colors="black", linewidths=1.0, origin="upper")
-        ax.contour(component.astype(np.float32), levels=[0.5], colors="white", linewidths=0.35, origin="upper")
-
-
-def plot_zoom_grid(
-    *,
-    baseline: np.ma.MaskedArray,
-    scenario_values: np.ma.MaskedArray,
-    delta: np.ma.MaskedArray,
-    labels: np.ndarray,
-    windows: list[ComponentWindow],
-    endpoint_label: str,
-    sequential_label: str,
-    delta_label: str,
-    out_path: Path,
-) -> None:
-    """Plot rows of selected components with baseline, scenario, and delta columns."""
-
-    sequential_norm = robust_norm(
-        [crop(baseline, window) for window in windows] + [crop(scenario_values, window) for window in windows],
-        low=1.0,
-        high=99.0,
-    )
-    diverging_norm = delta_norm([crop(delta, window) for window in windows], percentile=99.0)
-
-    n_rows = len(windows)
-    fig, axes = plt.subplots(n_rows, 3, figsize=(11.5, 3.7 * n_rows), squeeze=False, constrained_layout=True)
-    sequential_image = None
-    delta_image = None
-    for row_idx, window in enumerate(windows):
-        row_arrays = (
-            (crop(baseline, window), f"Baseline {endpoint_label}", "viridis", sequential_norm),
-            (crop(scenario_values, window), f"Counterfactual {endpoint_label}", "viridis", sequential_norm),
-            (crop(delta, window), f"Δ{endpoint_label}", "RdBu_r", diverging_norm),
-        )
-        for col_idx, (array, title, cmap, norm) in enumerate(row_arrays):
-            ax = axes[row_idx, col_idx]
-            image = ax.imshow(array, cmap=cmap, norm=norm, interpolation="nearest", origin="upper")
-            _contour_component(ax, labels, window)
-            ax.set_xticks([])
-            ax.set_yticks([])
-            ax.set_aspect("equal")
-            if row_idx == 0:
-                ax.set_title(title)
-            if col_idx == 0:
-                visibility = "full component" if window.full_component_visible else "cropped component"
-                ax.set_ylabel(
-                    f"Component {window.component_id}\n" f"{window.component_pixels:,} px; {visibility}",
-                    fontsize=8,
-                )
-            if col_idx < 2:
-                sequential_image = image
-            else:
-                delta_image = image
-
-    if sequential_image is not None:
-        cbar = fig.colorbar(sequential_image, ax=axes[:, :2].ravel().tolist(), fraction=0.025, pad=0.02)
-        cbar.set_label(sequential_label)
-    if delta_image is not None:
-        cbar = fig.colorbar(delta_image, ax=axes[:, 2].ravel().tolist(), fraction=0.04, pad=0.02)
-        cbar.set_label(delta_label)
-    fig.suptitle(
-        f"Local zooms around selected original non-fuel barrier components: {endpoint_label}",
-        y=1.01,
-        fontsize=13,
-    )
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=220, bbox_inches="tight")
-    plt.close(fig)
-
-
 def _mask_overlay(ax: plt.Axes, mask: np.ndarray, *, colour: str = "#ff00ff", alpha: float = 0.35) -> None:
     overlay = np.ma.masked_where(~mask.astype(bool), np.ones(mask.shape, dtype=np.float32))
     cmap = matplotlib.colors.ListedColormap([colour])
     ax.imshow(overlay, cmap=cmap, interpolation="nearest", origin="upper", alpha=alpha)
-
-
-def _mask_outline(ax: plt.Axes, mask: np.ndarray, *, colour: str = "black", linewidth: float = 0.45) -> None:
-    if mask.any():
-        ax.contour(mask.astype(np.float32), levels=[0.5], colors=colour, linewidths=linewidth, origin="upper")
 
 
 def _norm_limits(norm: Normalize) -> str:
@@ -700,93 +472,6 @@ def _mean_on_crop(data: np.ndarray | np.ma.MaskedArray, window: _SliceWindow) ->
     return float(np.mean(values)) if values.size else float("nan")
 
 
-def write_local_zoom_panels(
-    *,
-    experiment_dir: Path,
-    raw_data_dir: Path,
-    scenario: str = SCENARIO,
-    hex_id: str = "16",
-    n_components: int = 3,
-    padding_pixels: int = 80,
-    max_crop_pixels: int | None = None,
-    min_component_pixels: int = 500,
-) -> tuple[Path, Path, Path]:
-    prediction_dirs = prediction_dirs_from_index(experiment_dir)
-    baseline_bp, scenario_bp, baseline_fi, scenario_fi = _prediction_arrays(
-        experiment_dir,
-        scenario=scenario,
-        hex_id=hex_id,
-    )
-    baseline_hazard = baseline_bp * baseline_fi
-    scenario_hazard = scenario_bp * scenario_fi
-    delta_fi = scenario_fi - baseline_fi
-    delta_hazard = scenario_hazard - baseline_hazard
-
-    barrier_mask = original_barrier_mask(raw_data_dir=raw_data_dir, prediction_dirs=prediction_dirs, hex_id=hex_id)
-    scenario_hazard_values, scenario_hazard_valid = values_and_valid(scenario_hazard)
-    selection_mask = barrier_mask & scenario_hazard_valid & np.isfinite(scenario_hazard_values)
-    labels, windows = select_component_windows(
-        selection_mask,
-        n_components=n_components,
-        padding=padding_pixels,
-        max_crop_size=max_crop_pixels,
-        min_component_pixels=min_component_pixels,
-    )
-
-    out_dir = experiment_dir / "plots"
-    fi_plot_path = out_dir / f"hex{int(hex_id):02d}_{scenario}_local_zoom_fi.png"
-    hazard_plot_path = out_dir / f"hex{int(hex_id):02d}_{scenario}_local_zoom_hazard.png"
-    plot_zoom_grid(
-        baseline=baseline_fi,
-        scenario_values=scenario_fi,
-        delta=delta_fi,
-        labels=labels,
-        windows=windows,
-        endpoint_label="FI",
-        sequential_label="Predicted FI",
-        delta_label="ΔFI = counterfactual − baseline",
-        out_path=fi_plot_path,
-    )
-    plot_zoom_grid(
-        baseline=baseline_hazard,
-        scenario_values=scenario_hazard,
-        delta=delta_hazard,
-        labels=labels,
-        windows=windows,
-        endpoint_label="hazard",
-        sequential_label="Predicted hazard = BP × FI",
-        delta_label="Δhazard = counterfactual − baseline",
-        out_path=hazard_plot_path,
-    )
-
-    rows = [
-        asdict(
-            LocalZoomSummary(
-                scenario=scenario,
-                hex_id=hex_id,
-                component_id=window.component_id,
-                rank=window.rank,
-                component_pixels=window.component_pixels,
-                full_component_visible=window.full_component_visible,
-                crop_row_min=window.crop_row_min,
-                crop_row_max=window.crop_row_max,
-                crop_col_min=window.crop_col_min,
-                crop_col_max=window.crop_col_max,
-                baseline_fi_mean=_mean_on_crop(baseline_fi, window),
-                scenario_fi_mean=_mean_on_crop(scenario_fi, window),
-                delta_fi_mean=_mean_on_crop(delta_fi, window),
-                baseline_hazard_mean=_mean_on_crop(baseline_hazard, window),
-                scenario_hazard_mean=_mean_on_crop(scenario_hazard, window),
-                delta_hazard_mean=_mean_on_crop(delta_hazard, window),
-            )
-        )
-        for window in windows
-    ]
-    summary_path = experiment_dir / f"counterfactual_{scenario}_local_zoom_summary.csv"
-    pd.DataFrame(rows).to_csv(summary_path, index=False)
-    return fi_plot_path, hazard_plot_path, summary_path
-
-
 def write_local_neighborhood_panels(
     *,
     experiment_dir: Path,
@@ -913,37 +598,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min_barrier_pixels", type=int, default=1500)
     parser.add_argument("--exclude_border_pixels", type=int, default=100)
     parser.add_argument("--min_valid_fraction", type=float, default=0.95)
-    parser.add_argument("--n_components", type=int, default=3, help=argparse.SUPPRESS)
-    parser.add_argument("--padding_pixels", type=int, default=80, help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--max_crop_pixels",
-        type=int,
-        default=0,
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument("--min_component_pixels", type=int, default=500, help=argparse.SUPPRESS)
-    parser.add_argument("--legacy_component_panels", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    if args.legacy_component_panels:
-        fi_plot_path, hazard_plot_path, summary_path = write_local_zoom_panels(
-            experiment_dir=args.experiment_dir,
-            raw_data_dir=args.raw_data_dir,
-            scenario=args.scenario,
-            hex_id=str(args.hex_id).zfill(2),
-            n_components=max(1, int(args.n_components)),
-            padding_pixels=max(0, int(args.padding_pixels)),
-            max_crop_pixels=None if int(args.max_crop_pixels) <= 0 else int(args.max_crop_pixels),
-            min_component_pixels=max(1, int(args.min_component_pixels)),
-        )
-        print(f"Wrote local FI zoom panels: {fi_plot_path}")
-        print(f"Wrote local hazard zoom panels: {hazard_plot_path}")
-        print(f"Wrote local zoom summary: {summary_path}")
-        return
-
     fi_plot_path, hazard_plot_path, summary_path = write_local_neighborhood_panels(
         experiment_dir=args.experiment_dir,
         raw_data_dir=args.raw_data_dir,

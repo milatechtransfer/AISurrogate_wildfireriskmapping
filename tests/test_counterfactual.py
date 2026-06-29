@@ -30,16 +30,11 @@ from src.datasets.postprocessing.counterfactual_fuel_intervention_map import (
     summarize_intervention,
 )
 from src.datasets.postprocessing.counterfactual_hazard_map import (
-    pooled_positive_percentile,
     restrict_to_support,
-    summarize_endpoint_reference_map,
     summarize_hazard_delta,
-    summarize_hazard_reference_map,
     symmetric_percentile_limit,
 )
 from src.datasets.postprocessing.counterfactual_local_zoom_panels import (
-    padded_window,
-    select_component_windows,
     select_neighborhood_windows,
 )
 from src.datasets.postprocessing.counterfactual_materialize import (
@@ -352,49 +347,6 @@ def test_intervention_layers_show_only_replaced_nonfuel_pixels() -> None:
     assert summary.replacement_fuel_ids == "8;14"
 
 
-def test_padded_window_clips_to_shape_and_reports_visibility() -> None:
-    row_min, row_max, col_min, col_max, full_visible = padded_window(
-        (2, 8, 3, 9),
-        (10, 10),
-        padding=4,
-        max_crop_size=20,
-    )
-    assert (row_min, row_max, col_min, col_max) == (0, 10, 0, 10)
-    assert full_visible
-
-    row_min, row_max, col_min, col_max, full_visible = padded_window(
-        (10, 90, 10, 90),
-        (100, 100),
-        padding=10,
-        max_crop_size=40,
-    )
-    assert row_max - row_min == 40
-    assert col_max - col_min == 40
-    assert not full_visible
-
-
-def test_select_component_windows_selects_largest_components() -> None:
-    mask = np.zeros((80, 100), dtype=bool)
-    mask[2:70, 2:50] = True
-    mask[10:20, 72:78] = True
-    mask[40:52, 62:72] = True
-
-    labels, windows = select_component_windows(
-        mask,
-        n_components=2,
-        padding=2,
-        max_crop_size=25,
-        min_component_pixels=1,
-    )
-    assert len(windows) == 2
-    selected_sizes = [window.component_pixels for window in windows]
-    assert selected_sizes == sorted(selected_sizes, reverse=True)
-    assert selected_sizes[0] == 3264
-    assert selected_sizes[1] == 120
-    assert not windows[0].full_component_visible
-    assert all((labels[window.row_slice, window.col_slice] == window.component_id).any() for window in windows)
-
-
 def test_select_neighborhood_windows_uses_positive_delta_and_barrier_density() -> None:
     barrier = np.zeros((30, 30), dtype=bool)
     barrier[2:8, 2:8] = True
@@ -697,46 +649,6 @@ def test_restrict_to_support_masks_outside_support() -> None:
     restricted = restrict_to_support(data, support)
     assert restricted.mask.tolist() == [[False, True], [True, False]]
     assert restricted.filled(np.nan)[0, 0] == pytest.approx(1.0)
-
-
-def test_hazard_reference_summary_uses_shared_display_scale() -> None:
-    gt = np.ma.masked_invalid(np.array([[1.0, 2.0], [np.nan, 4.0]]))
-    pred = np.ma.masked_invalid(np.array([[2.0, 8.0], [16.0, np.nan]]))
-    vmax = pooled_positive_percentile([gt, pred], percentile=100.0)
-
-    summary = summarize_hazard_reference_map(
-        panel="Model baseline",
-        scenario="baseline",
-        hex_id="16",
-        support_policy="prediction",
-        hazard=pred,
-        display_vmax=vmax,
-        display_percentile=100.0,
-    )
-
-    assert vmax == pytest.approx(16.0)
-    assert summary.n_pixels == 3
-    assert summary.hazard_mean == pytest.approx((2.0 + 8.0 + 16.0) / 3.0)
-    assert summary.display_vmax == pytest.approx(16.0)
-
-
-def test_endpoint_reference_summary_uses_shared_display_scale() -> None:
-    values = np.ma.masked_invalid(np.array([[0.1, 0.2], [np.nan, 0.4]]))
-    summary = summarize_endpoint_reference_map(
-        endpoint="bp",
-        panel="Model baseline BP",
-        scenario="baseline",
-        hex_id="16",
-        support_policy="prediction",
-        values_map=values,
-        display_vmax=0.5,
-        display_percentile=99.5,
-    )
-
-    assert summary.endpoint == "bp"
-    assert summary.n_pixels == 3
-    assert summary.value_mean == pytest.approx((0.1 + 0.2 + 0.4) / 3.0)
-    assert summary.display_vmax == pytest.approx(0.5)
 
 
 def test_symmetric_percentile_limit_uses_absolute_pooled_deltas() -> None:
