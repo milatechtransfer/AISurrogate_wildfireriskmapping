@@ -39,6 +39,10 @@ from src.datasets.postprocessing.counterfactual_materialize import (
     build_scenario_endpoint_config,
     prepared_nonfuel_ids,
 )
+from src.datasets.postprocessing.counterfactual_viz import (
+    abs_share_at,
+    cumulative_abs_share,
+)
 from src.datasets.postprocessing.counterfactual_weather import (
     encode_raw_wind_features,
     raw_wind_features,
@@ -536,3 +540,25 @@ def test_distance_binned_delta_map_assigns_bin_means() -> None:
     assert np.isnan(filled[1, 1])
     assert summary["n_pixels"].tolist() == [1, 2]
     assert summary["delta_fi_mean"].tolist() == pytest.approx([1.0, 4.0])
+
+
+def test_cumulative_abs_share_uniform_delta_tracks_diagonal() -> None:
+    delta = np.ma.masked_array(np.array([2.0, -2.0, 2.0, -2.0]), mask=False)
+    pixel_fraction, cumulative = cumulative_abs_share(delta)
+    assert pixel_fraction.tolist() == pytest.approx([0.25, 0.5, 0.75, 1.0])
+    assert cumulative.tolist() == pytest.approx([0.25, 0.5, 0.75, 1.0])
+
+
+def test_cumulative_abs_share_concentrated_delta_bows_to_top_left() -> None:
+    delta = np.ma.masked_array(np.array([100.0, 1.0, 1.0, 1.0, 1.0]), mask=False)
+    pixel_fraction, cumulative = cumulative_abs_share(delta)
+    assert abs_share_at(pixel_fraction, cumulative, 0.2) == pytest.approx(100.0 / 104.0)
+
+
+def test_cumulative_abs_share_ignores_masked_and_handles_empty() -> None:
+    delta = np.ma.masked_array(np.array([5.0, np.nan, -3.0]), mask=[False, True, False])
+    pixel_fraction, cumulative = cumulative_abs_share(delta)
+    assert cumulative[-1] == pytest.approx(1.0)
+    assert abs_share_at(pixel_fraction, cumulative, 0.5) == pytest.approx(5.0 / 8.0)
+    empty_fraction, empty_cumulative = cumulative_abs_share(np.ma.masked_array(np.array([np.nan]), mask=[True]))
+    assert abs_share_at(empty_fraction, empty_cumulative, 0.1) == pytest.approx(0.0)
