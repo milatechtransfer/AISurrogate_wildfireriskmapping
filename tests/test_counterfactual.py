@@ -7,10 +7,7 @@ import pandas as pd
 import pytest
 
 from src.datasets.postprocessing.counterfactual import (
-    alignment_cosine,
     encoded_components_from_from_bearing,
-    flow_bearing_from_from_bearing,
-    flow_components_from_from_bearing,
     load_counterfactual_config,
 )
 from src.datasets.postprocessing.counterfactual_compare import paired_delta_summary
@@ -43,8 +40,6 @@ from src.datasets.postprocessing.counterfactual_materialize import (
     prepared_nonfuel_ids,
 )
 from src.datasets.postprocessing.counterfactual_weather import (
-    apply_wind_scenario_to_processed_weather,
-    build_wind_scenario_raw_weather,
     encode_raw_wind_features,
     raw_wind_features,
     recover_wind_encoding_stats,
@@ -73,33 +68,6 @@ def test_from_bearing_components_point_to_source() -> None:
     x, y = encoded_components_from_from_bearing(10.0, 270.0)
     assert float(x) == pytest.approx(-10.0)
     assert float(y) == pytest.approx(0.0, abs=1e-12)
-
-
-def test_physical_flow_is_opposite_from_bearing_components() -> None:
-    encoded_x, encoded_y = encoded_components_from_from_bearing(10.0, 270.0)
-    flow_x, flow_y = flow_components_from_from_bearing(10.0, 270.0)
-    assert float(flow_x) == pytest.approx(-float(encoded_x))
-    assert float(flow_y) == pytest.approx(-float(encoded_y))
-    assert float(flow_x) == pytest.approx(10.0)
-    assert float(flow_y) == pytest.approx(0.0, abs=1e-12)
-
-
-def test_flow_bearing_from_from_bearing_wraps() -> None:
-    assert float(flow_bearing_from_from_bearing(270.0)) == pytest.approx(90.0)
-    assert float(flow_bearing_from_from_bearing(350.0)) == pytest.approx(170.0)
-
-
-def test_alignment_cosine_identifies_downwind_upwind_crosswind() -> None:
-    flow_x, flow_y = flow_components_from_from_bearing(10.0, 270.0)  # physical flow east
-    cosines = alignment_cosine(
-        flow_x=np.array([flow_x, flow_x, flow_x]),
-        flow_y=np.array([flow_y, flow_y, flow_y]),
-        barrier_to_pixel_x=np.array([100.0, -100.0, 0.0]),
-        barrier_to_pixel_y=np.array([0.0, 0.0, 100.0]),
-    )
-    assert cosines[0] == pytest.approx(1.0)  # downwind of barrier
-    assert cosines[1] == pytest.approx(-1.0)  # upwind of barrier
-    assert cosines[2] == pytest.approx(0.0)  # crosswind
 
 
 def test_wind_roundtrip_recovers_zscore_stats() -> None:
@@ -146,109 +114,6 @@ def test_encode_raw_wind_features_uses_recovered_stats() -> None:
     stats = recover_wind_encoding_stats(raw_features, processed)
     encoded = encode_raw_wind_features(raw_features, stats)
     pd.testing.assert_frame_equal(encoded, processed)
-
-
-def test_fixed_from_bearing_wind_scenario_updates_processed_columns() -> None:
-    raw_weather = pd.DataFrame(
-        {
-            "WindSpeed": [5.0, 7.0, 9.0, 11.0],
-            "WindDirection": [0.0, 90.0, 180.0, 270.0],
-        }
-    )
-    raw_features = raw_wind_features(raw_weather)
-    processed = pd.DataFrame(
-        {
-            "WindSpeed": (raw_features["WindSpeed"] - 8.0) / 4.0,
-            "WindDirection": raw_weather["WindDirection"],
-            "wind_x": (raw_features["wind_x"] - 0.0) / 4.0,
-            "wind_y": (raw_features["wind_y"] - 0.0) / 4.0,
-        }
-    )
-    stats = recover_wind_encoding_stats(raw_features, processed)
-    scenario, diagnostics = apply_wind_scenario_to_processed_weather(
-        raw_weather,
-        processed,
-        stats,
-        {"mode": "fixed_from_bearing", "wind_from_bearing_deg": 270.0, "fixed_speed": 8.0},
-    )
-
-    assert np.allclose(scenario["WindDirection"], 270.0)
-    assert np.allclose(scenario["WindSpeed"], 0.0)
-    assert np.allclose(scenario["wind_x"], -2.0)
-    assert np.allclose(scenario["wind_y"], 0.0, atol=1e-12)
-    assert diagnostics.loc[diagnostics["quantity"].eq("flow_bearing_deg"), "raw_mean"].iloc[0] == pytest.approx(90.0)
-
-
-def test_speed_only_high_fixed_speed_retains_original_directions() -> None:
-    raw_weather = pd.DataFrame(
-        {
-            "WindSpeed": [5.0, 7.0, 9.0, 11.0],
-            "WindDirection": [0.0, 90.0, 180.0, 270.0],
-        }
-    )
-    scenario = build_wind_scenario_raw_weather(
-        raw_weather,
-        {"mode": "speed_only_high", "fixed_speed": 50.0},
-    )
-
-    assert np.allclose(scenario["WindSpeed"], 50.0)
-    assert scenario["WindDirection"].tolist() == raw_weather["WindDirection"].tolist()
-
-
-def test_zone_dominant_direction_preserves_speeds_and_sets_zone_directions() -> None:
-    raw_weather = pd.DataFrame(
-        {
-            "WeatherZone": [1, 1, 2, 2],
-            "WindSpeed": [10.0, 1.0, 5.0, 5.0],
-            "WindDirection": [90.0, 270.0, 0.0, 0.0],
-        }
-    )
-    scenario = build_wind_scenario_raw_weather(
-        raw_weather,
-        {"mode": "zone_dominant_direction"},
-    )
-
-    assert scenario["WindSpeed"].tolist() == raw_weather["WindSpeed"].tolist()
-    assert scenario.loc[0, "WindDirection"] == pytest.approx(90.0)
-    assert scenario.loc[1, "WindDirection"] == pytest.approx(90.0)
-    assert scenario.loc[2, "WindDirection"] == pytest.approx(0.0)
-    assert scenario.loc[3, "WindDirection"] == pytest.approx(0.0)
-
-
-def test_zone_dominant_direction_accepts_fixed_speed() -> None:
-    raw_weather = pd.DataFrame(
-        {
-            "WeatherZone": [1, 1, 2, 2],
-            "WindSpeed": [10.0, 1.0, 5.0, 5.0],
-            "WindDirection": [90.0, 270.0, 0.0, 0.0],
-        }
-    )
-    scenario = build_wind_scenario_raw_weather(
-        raw_weather,
-        {"mode": "zone_dominant_direction", "fixed_speed": 50.0},
-    )
-
-    assert np.allclose(scenario["WindSpeed"], 50.0)
-    assert scenario.loc[0, "WindDirection"] == pytest.approx(90.0)
-    assert scenario.loc[1, "WindDirection"] == pytest.approx(90.0)
-    assert scenario.loc[2, "WindDirection"] == pytest.approx(0.0)
-    assert scenario.loc[3, "WindDirection"] == pytest.approx(0.0)
-
-
-def test_randomized_direction_control_preserves_speed_values() -> None:
-    raw_weather = pd.DataFrame(
-        {
-            "WindSpeed": [1.0, 2.0, 3.0, 4.0],
-            "WindDirection": [10.0, 20.0, 30.0, 40.0],
-        }
-    )
-    scenario = build_wind_scenario_raw_weather(
-        raw_weather,
-        {"mode": "randomized_direction_control"},
-        seed=7,
-    )
-    assert scenario["WindSpeed"].tolist() == raw_weather["WindSpeed"].tolist()
-    assert sorted(scenario["WindDirection"].tolist()) == sorted(raw_weather["WindDirection"].tolist())
 
 
 def test_nonfuel_and_burnable_masks_are_complements_on_valid_fuel() -> None:

@@ -169,12 +169,6 @@ def load_counterfactual_config(path: Path) -> CounterfactualConfig:
     )
 
 
-def normalize_bearing_deg(bearing_deg: float | np.ndarray) -> float | np.ndarray:
-    """Normalize compass bearings to [0, 360)."""
-
-    return np.mod(bearing_deg, 360.0)
-
-
 def bearing_to_components(speed: float | np.ndarray, bearing_deg: float | np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Convert a compass bearing into x/y components.
 
@@ -198,41 +192,3 @@ def encoded_components_from_from_bearing(
     """
 
     return bearing_to_components(wind_speed, wind_from_bearing_deg)
-
-
-def flow_bearing_from_from_bearing(wind_from_bearing_deg: float | np.ndarray) -> float | np.ndarray:
-    """Convert a meteorological from-bearing to a physical flow/downwind bearing."""
-
-    return normalize_bearing_deg(np.asarray(wind_from_bearing_deg, dtype=np.float64) + 180.0)
-
-
-def flow_components_from_from_bearing(
-    wind_speed: float | np.ndarray,
-    wind_from_bearing_deg: float | np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return physical downwind-flow components from a meteorological from-bearing."""
-
-    encoded_x, encoded_y = encoded_components_from_from_bearing(wind_speed, wind_from_bearing_deg)
-    return -encoded_x, -encoded_y
-
-
-def alignment_cosine(
-    flow_x: float | np.ndarray,
-    flow_y: float | np.ndarray,
-    barrier_to_pixel_x: float | np.ndarray,
-    barrier_to_pixel_y: float | np.ndarray,
-) -> np.ndarray:
-    """Cosine alignment between physical wind flow and barrier→pixel vectors.
-
-    Values near +1 are downwind of the barrier, values near -1 are upwind of the
-    barrier, and values near 0 are crosswind.
-    """
-
-    flow = np.stack([np.asarray(flow_x, dtype=np.float64), np.asarray(flow_y, dtype=np.float64)], axis=0)
-    barrier_to_pixel = np.stack(
-        [np.asarray(barrier_to_pixel_x, dtype=np.float64), np.asarray(barrier_to_pixel_y, dtype=np.float64)],
-        axis=0,
-    )
-    dot = np.sum(flow * barrier_to_pixel, axis=0)
-    denom = np.linalg.norm(flow, axis=0) * np.linalg.norm(barrier_to_pixel, axis=0)
-    return np.divide(dot, denom, out=np.full_like(dot, np.nan, dtype=np.float64), where=denom > 0.0)
