@@ -24,7 +24,7 @@ import pandas as pd
 from scipy.ndimage import distance_transform_edt
 
 from data_preparation.paths import Paths
-from data_preparation.spatial.utils import load_spatial_raster
+from data_preparation.spatial.utils import FUEL_GROUP_MAP, load_spatial_raster
 from src.datasets.postprocessing.utils import bp_nonfuel_restricted_ids
 
 FUEL_NODATA: int = -32768
@@ -276,6 +276,26 @@ def load_barrier_layers_on_prediction_grid(
         pixel_h_m=abs(float(transform.e)),
         pixel_w_m=abs(float(transform.a)),
     )
+
+
+def load_grouped_fuel_on_prediction_grid(
+    *,
+    raw_data_dir: Path,
+    reference_profile: dict,
+    hex_id: str,
+) -> np.ndarray:
+    """Load raw fuel on the prediction grid and map raw fuel IDs to model fuel groups."""
+
+    paths = Paths(hex_id=hex_id, root_dir=raw_data_dir)
+    fuel_ma, _ = load_spatial_raster(paths.fuel_grid(hex_id), reference_profile=reference_profile)
+    raw_fuel = np.ma.asarray(fuel_ma).astype(np.float32).filled(np.nan)
+    grouped = np.full(raw_fuel.shape, np.nan, dtype=np.float32)
+    finite = np.isfinite(raw_fuel)
+    raw_int = np.full(raw_fuel.shape, -9999, dtype=np.int32)
+    raw_int[finite] = raw_fuel[finite].astype(np.int32)
+    for raw_id, group_id in FUEL_GROUP_MAP.items():
+        grouped[raw_int == int(raw_id)] = float(group_id)
+    return grouped
 
 
 def _finite_values(data: np.ndarray | np.ma.MaskedArray) -> tuple[np.ndarray, np.ndarray]:

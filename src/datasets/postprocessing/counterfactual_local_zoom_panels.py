@@ -10,13 +10,10 @@ from typing import Protocol, cast
 import matplotlib
 import numpy as np
 import pandas as pd
-import rasterio
 from matplotlib.colors import Normalize, TwoSlopeNorm
 from matplotlib.patches import Patch
 from scipy.ndimage import find_objects, label
 
-from data_preparation.paths import Paths
-from data_preparation.spatial.utils import FUEL_GROUP_MAP, load_spatial_raster
 from src.datasets.postprocessing.counterfactual_fuel import replace_nonfuel_components_with_adjacent_modal
 from src.datasets.postprocessing.counterfactual_fuel_intervention_map import (
     FUEL_GROUP_COLOURS,
@@ -25,10 +22,14 @@ from src.datasets.postprocessing.counterfactual_fuel_intervention_map import (
 )
 from src.datasets.postprocessing.counterfactual_hazard_map import original_barrier_mask
 from src.datasets.postprocessing.counterfactual_viz import (
+    finite_values,
     prediction_dirs_from_index,
     prediction_raster_path,
+    prediction_reference_profile,
     read_prediction,
+    values_and_valid,
 )
+from src.datasets.postprocessing.fuel_barrier_geometry import load_grouped_fuel_on_prediction_grid
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -134,16 +135,6 @@ class NeighborhoodSummary:
     scenario_hazard_mean: float
     delta_hazard_mean: float
     score: float
-
-
-def values_and_valid(data: np.ndarray | np.ma.MaskedArray) -> tuple[np.ndarray, np.ndarray]:
-    values = np.asarray(np.ma.asarray(data).filled(np.nan), dtype=np.float64)
-    return values, np.isfinite(values)
-
-
-def finite_values(data: np.ndarray | np.ma.MaskedArray) -> np.ndarray:
-    values, valid = values_and_valid(data)
-    return values[valid]
 
 
 def integral_image(values: np.ndarray) -> np.ndarray:
@@ -303,28 +294,6 @@ def select_neighborhood_windows(
         )
         for rank, window in enumerate(selected, start=1)
     ]
-
-
-def load_grouped_fuel_on_prediction_grid(
-    *,
-    raw_data_dir: Path,
-    prediction_dirs: dict[tuple[str, str], Path],
-    hex_id: str,
-) -> np.ndarray:
-    """Load raw fuel IDs on the prediction grid and map them to model fuel groups."""
-
-    with rasterio.open(prediction_raster_path(prediction_dirs[("baseline", "bp")], hex_id)) as src:
-        reference_profile = src.profile.copy()
-    paths = Paths(hex_id=hex_id, root_dir=raw_data_dir)
-    fuel_ma, _ = load_spatial_raster(paths.fuel_grid(hex_id), reference_profile=reference_profile)
-    raw_fuel = np.ma.asarray(fuel_ma).astype(np.float32).filled(np.nan)
-    grouped = np.full(raw_fuel.shape, np.nan, dtype=np.float32)
-    finite = np.isfinite(raw_fuel)
-    raw_int = np.full(raw_fuel.shape, -9999, dtype=np.int32)
-    raw_int[finite] = raw_fuel[finite].astype(np.int32)
-    for raw_id, group_id in FUEL_GROUP_MAP.items():
-        grouped[raw_int == int(raw_id)] = float(group_id)
-    return grouped
 
 
 def replacement_group_map_on_prediction_grid(grouped_fuel: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -844,7 +813,7 @@ def write_local_neighborhood_panels(
 
     grouped_fuel = load_grouped_fuel_on_prediction_grid(
         raw_data_dir=raw_data_dir,
-        prediction_dirs=prediction_dirs,
+        reference_profile=prediction_reference_profile(prediction_dirs, hex_id),
         hex_id=hex_id,
     )
     original_nonfuel, replacement_map = replacement_group_map_on_prediction_grid(grouped_fuel)

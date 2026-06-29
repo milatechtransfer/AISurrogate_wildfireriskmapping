@@ -9,15 +9,16 @@ from pathlib import Path
 import matplotlib
 import numpy as np
 import pandas as pd
-import rasterio
 from matplotlib.colors import Normalize, TwoSlopeNorm
 
 from data_preparation.paths import Paths
 from data_preparation.spatial.utils import load_spatial_raster
 from src.datasets.postprocessing.counterfactual_viz import (
     downsample_for_display,
+    finite_values,
     prediction_dirs_from_index,
     prediction_raster_path,
+    prediction_reference_profile,
     read_prediction,
     read_prediction_extent,
     restrict_to_support,
@@ -61,14 +62,6 @@ class FIMapSummary:
     replacement_scenario_fi_p95: float
 
 
-def prediction_reference_profile(prediction_dirs: dict[tuple[str, str], Path], hex_id: str) -> dict:
-    baseline_fi_dir = prediction_dirs.get(("baseline", "fi"))
-    if baseline_fi_dir is None:
-        raise KeyError("Missing baseline FI prediction directory; cannot define FI map grid.")
-    with rasterio.open(prediction_raster_path(baseline_fi_dir, hex_id)) as src:
-        return src.profile.copy()
-
-
 def original_valid_fi_support(
     *,
     raw_data_dir: Path,
@@ -77,7 +70,7 @@ def original_valid_fi_support(
 ) -> np.ndarray:
     """Original finite raw FI burnable support aligned to the prediction grid."""
 
-    reference_profile = prediction_reference_profile(prediction_dirs, hex_id)
+    reference_profile = prediction_reference_profile(prediction_dirs, hex_id, baseline_endpoint="fi")
     paths = Paths(hex_id=hex_id, root_dir=raw_data_dir)
     fi_ma, _ = load_spatial_raster(paths.output_fire_intensity(), reference_profile=reference_profile)
     fuel_ma, _ = load_spatial_raster(paths.fuel_grid(hex_id), reference_profile=reference_profile)
@@ -96,7 +89,7 @@ def replacement_mask_on_prediction_grid(
 ) -> tuple[np.ndarray, float, float]:
     """Original non-fuel pixels that the fuel scenario replaced with burnable fuel."""
 
-    reference_profile = prediction_reference_profile(prediction_dirs, hex_id)
+    reference_profile = prediction_reference_profile(prediction_dirs, hex_id, baseline_endpoint="fi")
     layers = load_barrier_layers_on_prediction_grid(
         raw_data_dir=raw_data_dir,
         reference_profile=reference_profile,
@@ -162,11 +155,6 @@ def distance_binned_delta_map(
             }
         )
     return np.ma.masked_invalid(binned), pd.DataFrame(rows)
-
-
-def finite_values(data: np.ma.MaskedArray | np.ndarray) -> np.ndarray:
-    values = np.asarray(np.ma.asarray(data).filled(np.nan), dtype=np.float64)
-    return values[np.isfinite(values)]
 
 
 def robust_sequential_norm(values: np.ndarray, *, low: float = 1.0, high: float = 99.0) -> Normalize:

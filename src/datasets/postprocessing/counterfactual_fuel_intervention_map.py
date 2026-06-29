@@ -10,12 +10,9 @@ from pathlib import Path
 import matplotlib
 import numpy as np
 import pandas as pd
-import rasterio
 from matplotlib.colors import ListedColormap
 from matplotlib.patches import Patch
 
-from data_preparation.paths import Paths
-from data_preparation.spatial.utils import FUEL_GROUP_MAP, load_spatial_raster
 from src.datasets.postprocessing.counterfactual_fuel import replace_nonfuel_components_with_adjacent_modal
 from src.datasets.postprocessing.counterfactual_materialize import (
     _load_stitched_patch_fuel,
@@ -24,8 +21,10 @@ from src.datasets.postprocessing.counterfactual_materialize import (
 from src.datasets.postprocessing.counterfactual_viz import (
     prediction_dirs_from_index,
     prediction_raster_path,
+    prediction_reference_profile,
     read_prediction,
 )
+from src.datasets.postprocessing.fuel_barrier_geometry import load_grouped_fuel_on_prediction_grid
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -107,29 +106,6 @@ def paired_prediction_support(
     return np.isfinite(baseline_values) & np.isfinite(scenario_values_arr)
 
 
-def load_grouped_fuel_on_prediction_grid(
-    *,
-    experiment_dir: Path,
-    raw_data_dir: Path,
-    hex_id: str,
-) -> np.ndarray:
-    """Load raw fuel on the prediction grid and map raw fuel IDs to model fuel groups."""
-
-    prediction_dirs = prediction_dirs_from_index(experiment_dir)
-    with rasterio.open(prediction_raster_path(prediction_dirs[("baseline", "bp")], hex_id)) as src:
-        reference_profile = src.profile.copy()
-    paths = Paths(hex_id=hex_id, root_dir=raw_data_dir)
-    fuel_ma, _ = load_spatial_raster(paths.fuel_grid(hex_id), reference_profile=reference_profile)
-    raw_fuel = np.ma.asarray(fuel_ma).astype(np.float32).filled(np.nan)
-    grouped = np.full(raw_fuel.shape, np.nan, dtype=np.float32)
-    finite = np.isfinite(raw_fuel)
-    raw_int = np.full(raw_fuel.shape, -9999, dtype=np.int32)
-    raw_int[finite] = raw_fuel[finite].astype(np.int32)
-    for raw_id, group_id in FUEL_GROUP_MAP.items():
-        grouped[raw_int == int(raw_id)] = float(group_id)
-    return grouped
-
-
 def _load_fuel_channel(data_root: Path, endpoint: str) -> int:
     channel_paths = sorted(data_root.glob("feature_channel_map_*.json"))
     if not channel_paths:
@@ -172,9 +148,11 @@ def intervention_layers_on_prediction_grid(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Return grouped fuel and intervention layers on paired prediction support."""
 
+    prediction_dirs = prediction_dirs_from_index(experiment_dir)
+    reference_profile = prediction_reference_profile(prediction_dirs, hex_id)
     grouped_fuel = load_grouped_fuel_on_prediction_grid(
-        experiment_dir=experiment_dir,
         raw_data_dir=raw_data_dir,
+        reference_profile=reference_profile,
         hex_id=hex_id,
     )
     support = paired_prediction_support(
