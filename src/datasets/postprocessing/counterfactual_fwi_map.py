@@ -193,7 +193,7 @@ def plot_delta_distribution(
             histtype="step",
             linewidth=1.8,
             color=DELTA_COLORS[scenario],
-            label=f"{SCENARIO_SHORT[scenario]}: mean \u0394={mean:+.0f}, {frac_expected:.0%} pixels expected sign",
+            label=f"{SCENARIO_SHORT[scenario]}: mean \u0394={mean:+.0f}, {100.0 * frac_expected:g}% pixels expected sign",
         )
         ax.axvline(mean, color=DELTA_COLORS[scenario], linestyle="--", linewidth=1.2)
     ax.axvline(0.0, color="0.4", linewidth=1.0)

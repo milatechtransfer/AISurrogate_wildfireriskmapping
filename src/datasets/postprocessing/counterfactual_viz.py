@@ -166,7 +166,7 @@ def plot_delta_histogram(
     ax_hist.set_xlabel(xlabel)
     ax_hist.set_ylabel("Pixel count")
     ax_hist.set_yscale("log")
-    ax_hist.set_title(f"{frac_positive:.1%} of pixels increase")
+    ax_hist.set_title(f"{100.0 * frac_positive:g}% of pixels increase")
     ax_hist.legend(loc="upper left")
 
     pixel_fraction, cumulative = cumulative_abs_share(delta)
