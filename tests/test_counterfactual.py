@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from src.datasets.postprocessing.counterfactual import (
+    ScenarioConfig,
     encoded_components_from_from_bearing,
     load_counterfactual_config,
 )
@@ -66,6 +67,47 @@ def test_hex16_counterfactual_config_loads() -> None:
     assert cfg.mask_scope == "actual"
     assert set(cfg.enabled_endpoints) == {"bp", "ros", "fi"}
     assert any(s.kind == "baseline" for s in cfg.scenarios)
+
+
+def test_composite_scenario_resolves_fuel_and_weather_edits() -> None:
+    scenario = ScenarioConfig.from_mapping(
+        {
+            "name": "remove_barriers_wind_opposite",
+            "kind": "composite",
+            "params": {
+                "edits": [
+                    {"kind": "fuel", "params": {"mode": "nonfuel_to_burnable_local_adjacent_modal"}},
+                    {"kind": "wind_direction", "params": {"mode": "uniform_direction", "offset_deg": 180.0}},
+                ]
+            },
+        }
+    )
+    assert scenario.fuel_edit() == {"mode": "nonfuel_to_burnable_local_adjacent_modal"}
+    assert scenario.weather_edit() == ("wind_direction", {"mode": "uniform_direction", "offset_deg": 180.0})
+
+
+def test_non_composite_scenario_resolves_only_matching_edit() -> None:
+    scenario = ScenarioConfig.from_mapping({"name": "fwi_daily_low_to_high", "kind": "fwi", "params": {"mode": "daily_swap"}})
+    assert scenario.edit_specs() == [("fwi", {"mode": "daily_swap"})]
+    assert scenario.fuel_edit() is None
+    assert scenario.weather_edit() == ("fwi", {"mode": "daily_swap"})
+
+
+@pytest.mark.parametrize(
+    ("params", "match"),
+    [
+        ({"edits": []}, "non-empty"),
+        ({"edits": [{"params": {}}]}, "without a 'kind'"),
+        ({"edits": [{"kind": "bogus"}]}, "must be one of"),
+        (
+            {"edits": [{"kind": "fwi"}, {"kind": "wind_direction"}]},
+            "more than one weather edit",
+        ),
+    ],
+)
+def test_composite_scenario_validation_rejects_bad_edits(params: dict[str, object], match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        ScenarioConfig.from_mapping({"name": "bad", "kind": "composite", "params": params})
 
 
 def test_from_bearing_components_point_to_source() -> None:

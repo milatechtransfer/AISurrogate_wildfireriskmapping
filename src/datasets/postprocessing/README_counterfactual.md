@@ -35,6 +35,10 @@ Edit logic (one per scenario `kind`):
 - `counterfactual_wind_direction.py` — uniform wind-direction rotation (`kind: wind_direction`)
 - `counterfactual_weather.py` — wind re-encoding + roundtrip validation shared by the weather kinds
 
+A `composite` kind applies one fuel edit **and** one weather edit in a single
+scenario by listing sub-edits; the materializer dispatches each to its existing
+edit path (no new edit logic). See "Adding a new scenario".
+
 Orchestration & spec:
 - `counterfactual.py` — config dataclasses, loader, wind geometry
 - `counterfactual_materialize.py` — dispatches `scenario.kind` → edit fn, builds data roots
@@ -46,6 +50,8 @@ Figures (each consumes the predictions for its scenario family):
 - fwi: `counterfactual_fwi_map.py`
 - wind_regime: `counterfactual_wind_regime_map.py`
 - wind_direction: `counterfactual_wind_direction_map.py` (paired dominant vs +180° mirror)
+- any ROS scenario: `counterfactual_ros_scenario_map.py` (generic single-scenario
+  response maps + patch zoom + delta histogram; use for `composite` scenarios)
 
 Shared helpers (keep dependency-light, no scenario-specific logic):
 - `counterfactual_viz.py` — IO/plot hub, incl. `plot_delta_histogram`
@@ -99,7 +105,17 @@ Scoping notes:
    module (return `(edited_processed_hex, edit_report)`) and one dispatch branch in
    `counterfactual_materialize._write_weather_table` (or the fuel branch in
    `_materialize_one` for grid edits).
-3. **Figures** — reuse a `*_map.py` if the response view fits, else add one that
+3. **Composite** = combine one existing fuel edit with one existing weather edit
+   (no new edit logic). List the sub-edits; each is dispatched to its own path:
+   ```yaml
+   - name: remove_barriers_wind_opposite
+     kind: composite
+     params:
+       edits:
+         - { kind: fuel, params: { mode: nonfuel_to_burnable_local_adjacent_modal } }
+         - { kind: wind_direction, params: { mode: uniform_direction, offset_deg: 180.0 } }
+   ```
+4. **Figures** — reuse a `*_map.py` if the response view fits, else add one that
    reads `scenario_prediction_index.csv` + the shared helpers above.
 
 > Inference runs the live tree from `$SLURM_SUBMIT_DIR`. Do not edit `src/` while

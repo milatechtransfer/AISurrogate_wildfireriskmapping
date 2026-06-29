@@ -331,12 +331,13 @@ def _materialize_patch_files(
     overwrite: bool,
 ) -> pd.DataFrame:
     src_rel_paths = _patch_paths(baseline_root, metadata)
-    if scenario.kind != "fuel":
+    fuel_params = scenario.fuel_edit()
+    if fuel_params is None:
         for src, rel_path in src_rel_paths:
             _link_or_copy_file(src, scenario_root / rel_path, overwrite=overwrite)
         return pd.DataFrame()
 
-    mode = str(scenario.params.get("mode", "nonfuel_to_burnable_adjacent_modal"))
+    mode = str(fuel_params.get("mode", "nonfuel_to_burnable_adjacent_modal"))
     supported_modes = {
         "nonfuel_to_burnable_adjacent_modal",
         "nonfuel_to_burnable_local_adjacent_modal",
@@ -478,9 +479,11 @@ def _write_weather_table(
         return pd.DataFrame(), pd.DataFrame()
 
     src = baseline_root / weather_csv_name
-    if scenario.kind not in {"fwi", "wind_regime", "wind_direction"}:
+    weather_edit = scenario.weather_edit()
+    if weather_edit is None:
         _copy_file(src, scenario_root / weather_csv_name, overwrite=overwrite)
         return pd.DataFrame(), pd.DataFrame()
+    weather_kind, weather_params = weather_edit
 
     full_processed = pd.read_csv(src)
     hex_slice = _processed_weather_hex_slice(raw_data_dir, hex_id)
@@ -489,20 +492,20 @@ def _write_weather_table(
 
     stats, validation = validate_wind_roundtrip(raw_weather=raw_weather, processed_weather=processed_hex)
 
-    if scenario.kind == "wind_regime":
+    if weather_kind == "wind_regime":
         scenario_processed_hex, edit_report = apply_wind_regime_scenario(
             raw_weather,
             processed_hex,
             stats,
-            scenario.params,
+            weather_params,
             seed=seed,
         )
-    elif scenario.kind == "wind_direction":
+    elif weather_kind == "wind_direction":
         scenario_processed_hex, edit_report = apply_wind_direction_scenario(
             raw_weather,
             processed_hex,
             stats,
-            scenario.params,
+            weather_params,
             seed=seed,
         )
     else:
@@ -510,7 +513,7 @@ def _write_weather_table(
             raw_weather,
             processed_hex,
             stats,
-            scenario.params,
+            weather_params,
             seed=seed,
         )
 
@@ -712,7 +715,9 @@ def materialize_counterfactual_inputs(
                     "wind_regime": wind_report_rows,
                     "wind_direction": wind_direction_report_rows,
                 }
-                edit_report_targets.get(scenario.kind, fwi_report_rows).append(edit_report)
+                weather_edit = scenario.weather_edit()
+                weather_kind = weather_edit[0] if weather_edit is not None else scenario.kind
+                edit_report_targets.get(weather_kind, fwi_report_rows).append(edit_report)
 
     materialized_index = pd.DataFrame(materialized_rows)
     index_path = cfg.save_dir / "scenario_prediction_index.csv"

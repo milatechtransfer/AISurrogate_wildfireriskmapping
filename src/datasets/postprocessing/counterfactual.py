@@ -18,7 +18,9 @@ import yaml
 from data_preparation.paths import MASK_SCOPE_CHOICES, MaskScope, normalize_mask_scope
 
 ENDPOINTS: tuple[str, ...] = ("bp", "ros", "fi")
-SCENARIO_KINDS: tuple[str, ...] = ("baseline", "wind", "fuel", "fwi", "wind_regime", "wind_direction")
+SCENARIO_KINDS: tuple[str, ...] = ("baseline", "wind", "fuel", "fwi", "wind_regime", "wind_direction", "composite")
+FUEL_EDIT_KINDS: tuple[str, ...] = ("fuel",)
+WEATHER_EDIT_KINDS: tuple[str, ...] = ("fwi", "wind_regime", "wind_direction")
 SUPPORT_POLICIES: tuple[str, ...] = ("baseline", "intersection")
 DEFAULT_FOCUS_HEX_ID = "16"
 
@@ -49,6 +51,25 @@ class EndpointConfig:
         )
 
 
+def _validate_composite_params(name: str, params: dict[str, Any]) -> None:
+    edits = params.get("edits")
+    if not isinstance(edits, list | tuple) or not edits:
+        raise ValueError(f"Composite scenario {name!r} must define a non-empty 'edits' list.")
+    seen_groups: set[str] = set()
+    for edit in edits:
+        if not isinstance(edit, dict) or "kind" not in edit:
+            raise ValueError(f"Composite scenario {name!r} has an edit without a 'kind'.")
+        edit_kind = str(edit["kind"])
+        if edit_kind not in (*FUEL_EDIT_KINDS, *WEATHER_EDIT_KINDS):
+            raise ValueError(
+                f"Composite scenario {name!r} edit kind={edit_kind!r} must be one of " f"{(*FUEL_EDIT_KINDS, *WEATHER_EDIT_KINDS)}."
+            )
+        group = "fuel" if edit_kind in FUEL_EDIT_KINDS else "weather"
+        if group in seen_groups:
+            raise ValueError(f"Composite scenario {name!r} has more than one {group} edit; at most one is supported.")
+        seen_groups.add(group)
+
+
 @dataclass(frozen=True)
 class ScenarioConfig:
     """One counterfactual scenario definition."""
@@ -71,12 +92,31 @@ class ScenarioConfig:
         params = raw.get("params", {})
         if not isinstance(params, dict):
             raise ValueError(f"Scenario {raw['name']!r} key 'params' must be a mapping.")
+        if kind == "composite":
+            _validate_composite_params(str(raw["name"]), params)
         return cls(
             name=str(raw["name"]),
             kind=kind,
             description=str(raw.get("description", "")),
             params=params,
         )
+
+    def edit_specs(self) -> list[tuple[str, dict[str, Any]]]:
+        """Constituent (kind, params) edits; a composite expands to its sub-edits."""
+
+        if self.kind != "composite":
+            return [(self.kind, self.params)]
+        return [(str(edit["kind"]), dict(edit.get("params", {}))) for edit in self.params["edits"]]
+
+    def fuel_edit(self) -> dict[str, Any] | None:
+        """Params of the fuel-grid edit this scenario applies, or None."""
+
+        return next((params for kind, params in self.edit_specs() if kind in FUEL_EDIT_KINDS), None)
+
+    def weather_edit(self) -> tuple[str, dict[str, Any]] | None:
+        """The (kind, params) of the weather-table edit this scenario applies, or None."""
+
+        return next(((kind, params) for kind, params in self.edit_specs() if kind in WEATHER_EDIT_KINDS), None)
 
 
 @dataclass(frozen=True)
