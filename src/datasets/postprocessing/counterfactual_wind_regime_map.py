@@ -16,11 +16,8 @@ import matplotlib
 import numpy as np
 import pandas as pd
 import rasterio
-import yaml
 from matplotlib.colors import Normalize, TwoSlopeNorm
 
-from data_preparation.paths import Paths
-from data_preparation.spatial.utils import load_spatial_raster
 from src.datasets.postprocessing.counterfactual_viz import (
     downsample_for_display,
     finite_values,
@@ -31,7 +28,13 @@ from src.datasets.postprocessing.counterfactual_viz import (
     restrict_to_support,
     symmetric_percentile_limit,
 )
-from src.datasets.postprocessing.fuel_barrier_geometry import parse_fuel_barrier_info
+from src.datasets.postprocessing.counterfactual_weather_maps import (
+    block_response,
+    extent_km,
+    load_burnable_support,
+    load_ground_truth,
+    raw_data_dir_from_config,
+)
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -53,33 +56,6 @@ ENDPOINT = "ros"
 DELTA_COLOR = "#b2182b"
 
 
-def _extent_km(extent_m: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
-    left, right, bottom, top = extent_m
-    return ((left - left) / 1000.0, (right - left) / 1000.0, (bottom - bottom) / 1000.0, (top - bottom) / 1000.0)
-
-
-def _raw_data_dir_from_config(experiment_dir: Path) -> Path:
-    config_path = experiment_dir / "generated_configs" / f"baseline_{ENDPOINT}.yaml"
-    with config_path.open() as handle:
-        config = yaml.safe_load(handle)
-    return Path(config["data"]["raw_data_dir"])
-
-
-def load_ground_truth(raw_data_dir: Path, hex_id: str, reference_profile: dict) -> np.ma.MaskedArray:
-    gt_path = raw_data_dir / f"hex{int(hex_id):02d}" / GT_RELATIVE_PATH
-    gt, _ = load_spatial_raster(path=gt_path, reference_profile=reference_profile)
-    return gt
-
-
-def load_burnable_support(raw_data_dir: Path, hex_id: str, reference_profile: dict) -> np.ndarray:
-    """Boolean mask of burnable pixels (non-fuel/water excluded) on the prediction grid."""
-    paths = Paths(hex_id=hex_id, root_dir=raw_data_dir)
-    fuel_ma, _ = load_spatial_raster(path=paths.fuel_grid(hex_id), reference_profile=reference_profile)
-    fuel_values = np.ma.asarray(fuel_ma).filled(-32768).astype(np.int32)
-    fuel_info = parse_fuel_barrier_info(paths, hex_id)
-    return ~np.isin(fuel_values, fuel_info.nonfuel_ids)
-
-
 def load_response(prediction_dirs: dict[tuple[str, str], Path], hex_id: str, raw_data_dir: Path):
     baseline_dir = prediction_dirs.get(("baseline", ENDPOINT))
     if baseline_dir is None:
@@ -93,7 +69,7 @@ def load_response(prediction_dirs: dict[tuple[str, str], Path], hex_id: str, raw
     burnable = load_burnable_support(raw_data_dir, hex_id, reference_profile)
     support = burnable & ~np.ma.getmaskarray(baseline)
 
-    ground_truth = load_ground_truth(raw_data_dir, hex_id, reference_profile)
+    ground_truth = load_ground_truth(raw_data_dir, hex_id, reference_profile, gt_relative_path=GT_RELATIVE_PATH)
     if ground_truth.shape != baseline.shape:
         raise ValueError(f"Ground-truth shape {ground_truth.shape} does not match prediction grid {baseline.shape}.")
     ground_truth = restrict_to_support(ground_truth, support)
@@ -110,12 +86,6 @@ def load_response(prediction_dirs: dict[tuple[str, str], Path], hex_id: str, raw
     return ground_truth, baseline, scenario_ros, delta, extent, reference_profile
 
 
-def load_zone_labels(raw_data_dir: Path, hex_id: str, reference_profile: dict) -> np.ma.MaskedArray:
-    firezones_path = raw_data_dir / f"hex{int(hex_id):02d}" / f"spatial/hex{int(hex_id):02d}_firezones.tif"
-    zones, _ = load_spatial_raster(path=firezones_path, reference_profile=reference_profile)
-    return zones
-
-
 def plot_response_maps(
     ground_truth: np.ma.MaskedArray,
     baseline: np.ma.MaskedArray,
@@ -130,7 +100,7 @@ def plot_response_maps(
     ros_norm = Normalize(vmin=0.0, vmax=float(np.percentile(pooled, 99.0)))
     delta_limit = symmetric_percentile_limit([delta], percentile=99.0)
     delta_norm = TwoSlopeNorm(vcenter=0.0, vmin=-delta_limit, vmax=delta_limit)
-    extent = _extent_km(extent_m)
+    extent = extent_km(extent_m)
 
     panels = [
         (ground_truth, "Ground truth ROS (BurnP3+)", "viridis", ros_norm, "ROS (m/min)"),
@@ -161,18 +131,8 @@ def plot_response_maps(
     plt.close(fig)
 
 
-def _block_response(delta: np.ma.MaskedArray, block: int) -> np.ndarray:
-    abs_delta = np.abs(np.ma.filled(delta, 0.0))
-    valid = (~np.ma.getmaskarray(delta)).astype(np.float64)
-    rows = (abs_delta.shape[0] // block) * block
-    cols = (abs_delta.shape[1] // block) * block
-    summed = abs_delta[:rows, :cols].reshape(rows // block, block, cols // block, block).sum(axis=(1, 3))
-    counts = valid[:rows, :cols].reshape(rows // block, block, cols // block, block).sum(axis=(1, 3))
-    return np.where(counts > 0, summed / np.maximum(counts, 1.0), 0.0)
-
-
 def _hotspot_centers(delta: np.ma.MaskedArray, block: int, *, count: int, window: int) -> list[tuple[int, int]]:
-    scores = _block_response(delta, block)
+    scores = block_response(delta, block)
     suppress = max(window // block, 1)
     centers: list[tuple[int, int]] = []
     for _ in range(count):
@@ -294,7 +254,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     out_dir = args.out_dir if args.out_dir is not None else args.experiment_dir / "figures" / "wind_zone_peak"
-    raw_data_dir = args.raw_data_dir if args.raw_data_dir is not None else _raw_data_dir_from_config(args.experiment_dir)
+    raw_data_dir = args.raw_data_dir if args.raw_data_dir is not None else raw_data_dir_from_config(args.experiment_dir, endpoint=ENDPOINT)
     prediction_dirs = prediction_dirs_from_index(args.experiment_dir)
     ground_truth, baseline, scenario_ros, delta, extent, _ = load_response(prediction_dirs, args.hex_id, raw_data_dir)
 
