@@ -26,11 +26,7 @@ from src.datasets.postprocessing.diagnose_bp_barrier_halo import parse_fuel_barr
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-DEFAULT_MAP_SCENARIOS: tuple[str, ...] = (
-    "wind_from_west_p95",
-    "wind_speed50_original_direction",
-    "remove_barriers_adjacent_modal",
-)
+DEFAULT_MAP_SCENARIOS: tuple[str, ...] = ("remove_barriers_adjacent_modal",)
 REFERENCE_SUPPORT_POLICY = "native_actual_gt_model_prediction"
 
 

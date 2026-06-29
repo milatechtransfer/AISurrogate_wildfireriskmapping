@@ -63,16 +63,6 @@ from src.datasets.postprocessing.counterfactual_weather import (
     recover_wind_encoding_stats,
     validate_wind_roundtrip,
 )
-from src.datasets.postprocessing.counterfactual_wind_shadow_profile import (
-    SECTOR_CROSSWIND as WIND_SECTOR_CROSSWIND,
-)
-from src.datasets.postprocessing.counterfactual_wind_shadow_profile import (
-    SECTOR_DOWNWIND,
-    SECTOR_UPWIND,
-    bp_sector_distance_profile,
-    endpoint_sector_distance_profile,
-    summarize_near_band,
-)
 
 
 def test_hex16_counterfactual_config_loads() -> None:
@@ -728,63 +718,6 @@ def test_hazard_reference_summary_uses_shared_display_scale() -> None:
     assert summary.n_pixels == 3
     assert summary.hazard_mean == pytest.approx((2.0 + 8.0 + 16.0) / 3.0)
     assert summary.display_vmax == pytest.approx(16.0)
-
-
-def test_bp_sector_distance_profile_and_near_summary() -> None:
-    bp = np.array([[0.1, 0.2, 0.3, 0.4]])
-    analysis = np.ones_like(bp, dtype=bool)
-    dist_m = np.array([[150.0, 200.0, 300.0, 350.0]])
-    sectors = np.array([[SECTOR_DOWNWIND, SECTOR_DOWNWIND, SECTOR_UPWIND, WIND_SECTOR_CROSSWIND]], dtype=object)
-
-    profile = bp_sector_distance_profile(
-        bp=bp,
-        analysis_mask=analysis,
-        dist_m=dist_m,
-        sector_labels=sectors,
-        bin_edges_m=(250.0, 500.0),
-        source="gt_bp",
-        hex_id="16",
-        zone="fru11",
-        zone_id=11,
-    )
-    summary = summarize_near_band(profile, near_min_m=0.0, near_max_m=500.0)
-
-    row = summary.iloc[0]
-    assert row["downwind_n"] == 2
-    assert row["upwind_n"] == 1
-    assert row["crosswind_n"] == 1
-    assert row["downwind_bp_mean"] == pytest.approx(0.15)
-    assert row["upwind_bp_mean"] == pytest.approx(0.3)
-    assert row["crosswind_bp_mean"] == pytest.approx(0.4)
-    assert row["downwind_over_upwind"] == pytest.approx(0.5)
-
-
-def test_endpoint_sector_distance_profile_groups_by_endpoint() -> None:
-    values = np.array([[10.0, 20.0, 30.0, 40.0]])
-    analysis = np.ones_like(values, dtype=bool)
-    dist_m = np.array([[150.0, 200.0, 300.0, 350.0]])
-    sectors = np.array([[SECTOR_DOWNWIND, SECTOR_DOWNWIND, SECTOR_UPWIND, WIND_SECTOR_CROSSWIND]], dtype=object)
-
-    profile = endpoint_sector_distance_profile(
-        values=values,
-        analysis_mask=analysis,
-        dist_m=dist_m,
-        sector_labels=sectors,
-        bin_edges_m=(250.0, 500.0),
-        source="model_baseline",
-        endpoint="fi",
-        hex_id="16",
-        zone="fru11",
-        zone_id=11,
-    )
-    summary = summarize_near_band(profile, near_min_m=0.0, near_max_m=500.0)
-
-    row = summary.iloc[0]
-    assert row["endpoint"] == "fi"
-    assert row["source"] == "model_baseline"
-    assert row["downwind_value_mean"] == pytest.approx(15.0)
-    assert row["upwind_value_mean"] == pytest.approx(30.0)
-    assert row["crosswind_value_mean"] == pytest.approx(40.0)
 
 
 def test_endpoint_reference_summary_uses_shared_display_scale() -> None:

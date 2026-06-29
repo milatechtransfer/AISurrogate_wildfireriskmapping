@@ -39,15 +39,7 @@ PROFILE_SECTORS: tuple[str, ...] = (
 )
 
 ENDPOINT_ORDER: tuple[str, ...] = ("bp", "ros", "fi", "hazard_bp_x_fi")
-SCENARIO_ORDER: tuple[str, ...] = (
-    "wind_roundtrip_placebo",
-    "wind_from_west_p95",
-    "wind_zone_consistent_direction",
-    "wind_speed50_zone_consistent_direction",
-    "wind_speed100_zone_consistent_direction",
-    "wind_speed50_original_direction",
-    "remove_barriers_adjacent_modal",
-)
+SCENARIO_ORDER: tuple[str, ...] = ("remove_barriers_adjacent_modal",)
 LOCALIZATION_THRESHOLDS_M: tuple[float, ...] = (250.0, 500.0, 1000.0)
 
 SECTOR_COLOURS = {
@@ -57,12 +49,6 @@ SECTOR_COLOURS = {
     "upwind_of_barrier": "#1a9850",
 }
 SCENARIO_COLOURS = {
-    "wind_roundtrip_placebo": "#888888",
-    "wind_from_west_p95": "#4575b4",
-    "wind_zone_consistent_direction": "#4daf4a",
-    "wind_speed50_zone_consistent_direction": "#e7298a",
-    "wind_speed100_zone_consistent_direction": "#a65628",
-    "wind_speed50_original_direction": "#984ea3",
     "remove_barriers_adjacent_modal": "#d73027",
 }
 
@@ -73,12 +59,6 @@ DISPLAY_ENDPOINT = {
     "hazard_bp_x_fi": "Hazard = BP x FI",
 }
 DISPLAY_SCENARIO = {
-    "wind_roundtrip_placebo": "Wind roundtrip placebo",
-    "wind_from_west_p95": "Wind from west, p95 speed",
-    "wind_zone_consistent_direction": "Wind zone-consistent directions",
-    "wind_speed50_zone_consistent_direction": "Wind speed 50, zone-consistent directions",
-    "wind_speed100_zone_consistent_direction": "Wind speed 100, zone-consistent directions",
-    "wind_speed50_original_direction": "Wind speed 50, original directions",
     "remove_barriers_adjacent_modal": "Remove non-fuel barriers",
 }
 DISPLAY_SECTOR = {
@@ -770,65 +750,6 @@ def plot_remove_barriers_fi_hazard_response_profile(profile_df: pd.DataFrame, ou
     return out_path
 
 
-def plot_wind_speed50_endpoint_response_profile(profile_df: pd.DataFrame, out_dir: Path) -> Path | None:
-    """Plot BP, FI, and ROS distance profiles for the extreme speed-only wind intervention."""
-
-    scenario = "wind_speed50_original_direction"
-    sub = profile_df[
-        profile_df["scenario"].eq(scenario) & profile_df["sector"].eq(SECTOR_ALL) & profile_df["endpoint"].isin(["bp", "fi", "ros"])
-    ].copy()
-    if sub.empty:
-        return None
-
-    x_positions, labels = _profile_x_positions(sub)
-    x_by_bin = {
-        int(row.dist_bin_idx): x
-        for x, row in zip(
-            x_positions,
-            sub[["dist_bin_idx", "dist_bin", "dist_min_m", "dist_max_m"]]
-            .drop_duplicates()
-            .sort_values("dist_bin_idx")
-            .itertuples(index=False),
-            strict=False,
-        )
-    }
-    panels = [
-        ("bp", "Mean ΔBP", "ΔBP = WindSpeed 50 − baseline", "#7570b3"),
-        ("fi", "Mean ΔFI", "ΔFI = WindSpeed 50 − baseline", "#1b9e77"),
-        ("ros", "Mean ΔROS", "ΔROS = WindSpeed 50 − baseline", "#d95f02"),
-    ]
-
-    fig, axes = plt.subplots(3, 1, figsize=(8.4, 9.0), sharex=True)
-    for ax, (endpoint, title, ylabel, colour) in zip(axes, panels, strict=False):
-        line = sub[sub["endpoint"].eq(endpoint)].sort_values("dist_bin_idx")
-        if line.empty:
-            ax.axis("off")
-            continue
-        x = np.array([x_by_bin[int(idx)] for idx in line["dist_bin_idx"]], dtype=float)
-        mean = line["delta_mean"].to_numpy(dtype=float)
-        p25 = line["delta_p25"].to_numpy(dtype=float)
-        p75 = line["delta_p75"].to_numpy(dtype=float)
-        ax.fill_between(x, p25, p75, color=colour, alpha=0.18, linewidth=0.0, label="IQR")
-        ax.plot(x, mean, color=colour, marker="o", linewidth=2.2, label="Mean")
-        ax.axhline(0.0, color="0.45", linestyle="--", linewidth=0.9)
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.grid(axis="y", alpha=0.25)
-        ax.legend(frameon=False, loc="best")
-
-    axes[-1].set_xscale("log")
-    axes[-1].set_xticks(x_positions)
-    axes[-1].set_xticklabels(labels, rotation=25, ha="right")
-    axes[-1].set_xlabel("Distance to original non-fuel barrier")
-    fig.suptitle("Extreme wind-speed response by endpoint", y=1.02)
-    fig.tight_layout()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "wind_speed50_bp_fi_ros_barrier_relative_profile.png"
-    fig.savefig(out_path, dpi=220, bbox_inches="tight")
-    plt.close(fig)
-    return out_path
-
-
 def _safe_share(numerator: float, denominator: float) -> float:
     if np.isclose(denominator, 0.0):
         return float("nan")
@@ -1061,46 +982,6 @@ def plot_relative_hazard_decomposition(summary_df: pd.DataFrame, out_dir: Path) 
     return out_path
 
 
-def plot_hazard_decomposition(decomposition_df: pd.DataFrame, out_dir: Path) -> Path | None:
-    sub = decomposition_df[decomposition_df["scenario"].eq("wind_from_west_p95") & decomposition_df["sector"].eq(SECTOR_ALL)].copy()
-    if sub.empty:
-        return None
-    sub = sub.sort_values("dist_bin_idx")
-    labels = sub["dist_bin"].astype(str).tolist()
-    x = np.arange(len(labels))
-    terms = [
-        ("bp_component_mean", "ΔBP × baseline FI", "#7b3294"),
-        ("fi_component_mean", "baseline BP × ΔFI", "#008837"),
-        ("interaction_component_mean", "ΔBP × ΔFI", "#fdb863"),
-    ]
-
-    fig, ax = plt.subplots(figsize=(9, 4.8))
-    bottoms_positive = np.zeros(len(sub), dtype=float)
-    bottoms_negative = np.zeros(len(sub), dtype=float)
-    for column, label, colour in terms:
-        values = sub[column].to_numpy(dtype=float)
-        bottoms = np.where(values >= 0.0, bottoms_positive, bottoms_negative)
-        ax.bar(x, values, bottom=bottoms, color=colour, label=label, width=0.72)
-        bottoms_positive += np.where(values >= 0.0, values, 0.0)
-        bottoms_negative += np.where(values < 0.0, values, 0.0)
-
-    ax.plot(x, sub["delta_hazard_mean"], color="black", marker="o", linewidth=1.8, label="Total Δhazard")
-    ax.axhline(0.0, color="0.5", linestyle="--", linewidth=0.9)
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=35, ha="right")
-    ax.set_xlabel("Distance to original non-fuel barrier")
-    ax.set_ylabel("Mean contribution to Δhazard")
-    ax.set_title("Wind-from-west p95 hazard decrease decomposition")
-    ax.legend(frameon=False)
-    ax.grid(axis="y", alpha=0.25)
-    fig.tight_layout()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "wind_from_west_hazard_decomposition_all_pixels.png"
-    fig.savefig(out_path, dpi=220, bbox_inches="tight")
-    plt.close(fig)
-    return out_path
-
-
 def write_barrier_relative_profiles(
     experiment_dir: Path,
     raw_data_dir: Path,
@@ -1139,8 +1020,6 @@ def write_barrier_relative_profiles(
             plot_relative_hazard_decomposition(relative_decomposition, plot_dir),
             plot_hazard_profile_by_sector(profiles, plot_dir),
             plot_endpoint_profile_all_pixels(profiles, plot_dir),
-            plot_hazard_decomposition(decomposition, plot_dir),
-            plot_wind_speed50_endpoint_response_profile(profiles, plot_dir),
         )
         if path is not None
     ]
