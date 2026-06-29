@@ -18,7 +18,6 @@ import yaml
 
 from data_preparation.paths import Paths
 from data_preparation.spatial.utils import FUEL_GROUP_MAP
-from src.datasets.postprocessing.bp_restricted_zero import bp_nonfuel_restricted_ids
 from src.datasets.postprocessing.counterfactual import (
     CounterfactualConfig,
     EndpointConfig,
@@ -40,6 +39,7 @@ from src.datasets.postprocessing.counterfactual_weather import (
     validate_wind_roundtrip,
 )
 from src.datasets.postprocessing.counterfactual_wind_regime import apply_wind_regime_scenario
+from src.datasets.postprocessing.utils import bp_nonfuel_restricted_ids
 
 
 @dataclass(frozen=True)

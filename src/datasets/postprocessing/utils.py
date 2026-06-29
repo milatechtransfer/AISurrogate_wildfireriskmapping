@@ -863,3 +863,30 @@ def print_and_log_eval_metrics(
 
         if experiment_logger:
             experiment_logger.log_metrics({f"hexel/{k}": v for k, v in hexel_metrics.items()})
+
+
+def bp_nonfuel_restricted_ids(paths: Paths, hex_id: str) -> tuple[list[int], list[int], list[str]]:
+    """Return non-fuel and ignition-restricted fuel IDs for a hexel.
+
+    Returns the union of non-fuel and ignition-restricted fuel IDs, the non-fuel
+    IDs alone, and the restricted fuel names.
+    """
+    fuel_table = pd.read_csv(paths.fuel_table(hex_id))
+    restrictions = pd.read_csv(paths.tabular_dir / f"hex{hex_id}_IgnitionRestrictions.csv", keep_default_na=False)
+
+    name_to_id = dict(zip(fuel_table["Name"].astype(str), fuel_table["ID"].astype(int), strict=False))
+    nonfuel_ids = sorted(fuel_table.loc[fuel_table["Description"].astype(str).eq("Non-fuel"), "ID"].astype(int).tolist())
+
+    restricted_names: list[str] = []
+    for value in restrictions["FuelType"].astype(str):
+        name = value.strip()
+        if not name or name == "All" or name.upper() == "NA":
+            continue
+        restricted_names.append(name)
+
+    missing_names = sorted({name for name in restricted_names if name not in name_to_id})
+    if missing_names:
+        raise ValueError(f"hex{hex_id}: restricted fuel names not found in FuelTypes table: {missing_names}")
+
+    restricted_ids = sorted({name_to_id[name] for name in restricted_names})
+    return sorted(set(nonfuel_ids) | set(restricted_ids)), nonfuel_ids, restricted_names

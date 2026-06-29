@@ -24,7 +24,7 @@ import pandas as pd
 from scipy.ndimage import distance_transform_edt
 
 from data_preparation.paths import Paths
-from src.datasets.postprocessing.bp_restricted_zero import bp_nonfuel_restricted_ids
+from src.datasets.postprocessing.utils import bp_nonfuel_restricted_ids
 
 FUEL_NODATA: int = -32768
 ZONE_NODATA: int = -128
