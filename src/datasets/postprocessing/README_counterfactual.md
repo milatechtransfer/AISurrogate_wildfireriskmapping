@@ -51,7 +51,10 @@ Figures (each consumes the predictions for its scenario family):
 - wind_regime: `counterfactual_wind_regime_map.py`
 - wind_direction: `counterfactual_wind_direction_map.py` (paired dominant vs +180° mirror)
 - any ROS scenario: `counterfactual_ros_scenario_map.py` (generic single-scenario
-  response maps + patch zoom + delta histogram; use for `composite` scenarios)
+  response maps + patch zoom + delta histogram; use for `composite` scenarios). For
+  fuel-editing scenarios it masks non-fuel in the ground-truth/baseline panels but
+  keeps the filled pixels in the scenario panel, with baseline treated as zero ROS
+  there so Δ shows the full barrier-removal effect.
 
 Shared helpers (keep dependency-light, no scenario-specific logic):
 - `counterfactual_viz.py` — IO/plot hub, incl. `plot_delta_histogram`

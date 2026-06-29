@@ -64,8 +64,16 @@ def load_ros_response(
     *,
     scenario: str,
     endpoint: str = ENDPOINT,
+    fuel_filled_mask: np.ndarray | None = None,
 ):
-    """Load baseline, scenario, and Δ ROS on the prediction grid for one scenario."""
+    """Load baseline, scenario, and Δ ROS on the prediction grid for one scenario.
+
+    Non-fuel/water pixels are masked using the baseline fuel grid, so the
+    ground-truth and baseline panels never show them.  For scenarios that edit the
+    fuel grid, pass ``fuel_filled_mask`` (pixels turned burnable on the prediction
+    grid): those stay visible in the scenario panel and the baseline is treated as
+    zero ROS there, so Δ shows the full barrier-removal effect.
+    """
 
     baseline_dir = prediction_dirs.get(("baseline", endpoint))
     if baseline_dir is None:
@@ -76,23 +84,29 @@ def load_ros_response(
     with rasterio.open(baseline_path) as src:
         reference_profile = src.profile.copy()
 
-    burnable = load_burnable_support(raw_data_dir, hex_id, reference_profile)
-    support = burnable & ~np.ma.getmaskarray(baseline)
-
-    ground_truth = load_ground_truth(raw_data_dir, hex_id, reference_profile, gt_relative_path=GT_RELATIVE_PATH)
-    if ground_truth.shape != baseline.shape:
-        raise ValueError(f"Ground-truth shape {ground_truth.shape} does not match prediction grid {baseline.shape}.")
-    ground_truth = restrict_to_support(ground_truth, support)
-    baseline = restrict_to_support(baseline, support)
-
     scenario_dir = prediction_dirs.get((scenario, endpoint))
     if scenario_dir is None:
         raise KeyError(f"Missing {endpoint.upper()} prediction directory for scenario={scenario!r}.")
     scenario_ros = read_prediction(prediction_raster_path(scenario_dir, hex_id))
     if scenario_ros.shape != baseline.shape:
         raise ValueError(f"Scenario ROS shape {scenario_ros.shape} does not match baseline grid {baseline.shape}.")
-    scenario_ros = restrict_to_support(scenario_ros, support)
-    delta = restrict_to_support(scenario_ros - baseline, support)
+
+    finite = ~np.ma.getmaskarray(baseline) & ~np.ma.getmaskarray(scenario_ros)
+    base_support = load_burnable_support(raw_data_dir, hex_id, reference_profile) & finite
+    if fuel_filled_mask is None:
+        scenario_support = base_support
+        baseline_for_delta: np.ma.MaskedArray = baseline
+    else:
+        scenario_support = base_support | (np.asarray(fuel_filled_mask, dtype=bool) & finite)
+        baseline_for_delta = np.ma.where(base_support, baseline, 0.0)
+
+    ground_truth = load_ground_truth(raw_data_dir, hex_id, reference_profile, gt_relative_path=GT_RELATIVE_PATH)
+    if ground_truth.shape != baseline.shape:
+        raise ValueError(f"Ground-truth shape {ground_truth.shape} does not match prediction grid {baseline.shape}.")
+    ground_truth = restrict_to_support(ground_truth, base_support)
+    baseline = restrict_to_support(baseline, base_support)
+    scenario_ros = restrict_to_support(scenario_ros, scenario_support)
+    delta = restrict_to_support(scenario_ros - baseline_for_delta, scenario_support)
     return ground_truth, baseline, scenario_ros, delta, extent, reference_profile
 
 

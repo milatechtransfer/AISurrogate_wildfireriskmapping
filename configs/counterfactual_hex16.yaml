@@ -81,3 +81,15 @@ scenarios:
           params:
             mode: uniform_direction
             offset_deg: 180.0
+  - name: remove_barriers_wind_dominant
+    kind: composite
+    description: Combine non-fuel barrier removal with the dominant wind direction to probe their joint spatial ROS response.
+    params:
+      edits:
+        - kind: fuel
+          params:
+            mode: nonfuel_to_burnable_local_adjacent_modal
+        - kind: wind_direction
+          params:
+            mode: uniform_direction
+            offset_deg: 0.0

@@ -15,6 +15,8 @@ from pathlib import Path
 
 import numpy as np
 
+from src.datasets.postprocessing.counterfactual import load_counterfactual_config
+from src.datasets.postprocessing.counterfactual_fuel_intervention_map import intervention_layers_on_prediction_grid
 from src.datasets.postprocessing.counterfactual_ros_maps import (
     ENDPOINT,
     load_ros_response,
@@ -36,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scenario", required=True, help="Scenario name from scenario_prediction_index.csv.")
     parser.add_argument("--label", default=None, help="Human-readable scenario label for titles (defaults to the name).")
     parser.add_argument("--experiment_dir", type=Path, default=Path("experiments/counterfactual_hex16"))
+    parser.add_argument("--config", type=Path, default=Path("configs/counterfactual_hex16.yaml"))
     parser.add_argument("--hex_id", type=str, default="16")
     parser.add_argument("--downsample", type=int, default=3, help="Stride factor for map display only.")
     parser.add_argument("--raw_data_dir", type=Path, default=None, help="Defaults to baseline config data.raw_data_dir.")
@@ -53,8 +56,23 @@ def main() -> None:
     raw_data_dir = args.raw_data_dir if args.raw_data_dir is not None else raw_data_dir_from_config(args.experiment_dir, endpoint=ENDPOINT)
     prediction_dirs = prediction_dirs_from_index(args.experiment_dir)
 
+    config = load_counterfactual_config(args.config)
+    scenario_cfg = next((s for s in config.scenarios if s.name == args.scenario), None)
+    if scenario_cfg is None:
+        raise KeyError(f"Scenario {args.scenario!r} not found in {args.config}.")
+
+    fuel_filled_mask = None
+    if scenario_cfg.fuel_edit() is not None:
+        _, fuel_filled_mask, _, _ = intervention_layers_on_prediction_grid(
+            experiment_dir=args.experiment_dir,
+            raw_data_dir=raw_data_dir,
+            scenario=args.scenario,
+            endpoint=ENDPOINT,
+            hex_id=args.hex_id,
+        )
+
     ground_truth, baseline, scenario_ros, delta, extent, _ = load_ros_response(
-        prediction_dirs, args.hex_id, raw_data_dir, scenario=args.scenario
+        prediction_dirs, args.hex_id, raw_data_dir, scenario=args.scenario, fuel_filled_mask=fuel_filled_mask
     )
 
     plot_ros_response_maps(
