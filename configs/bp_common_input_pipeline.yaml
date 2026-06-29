@@ -93,7 +93,7 @@ data:
         aggregation: "mean"
         zone_channel_key: "firezones_grid"
         missing_value_strategy: "global_mean"
-        include_missing_firezone_mask: true
+        include_missing_firezone_mask: false
         shuffle_lut: false
         shuffle_seed: 42
         transforms_list: []

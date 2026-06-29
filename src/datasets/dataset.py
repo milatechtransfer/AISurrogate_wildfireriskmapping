@@ -132,10 +132,6 @@ def build_dataset(config: DataConfig, csv_name: str, modelling_approach: str = "
         if source_conf.name == "grid":
             source_kwargs["raw_data_dir"] = config.raw_data_dir
             source_kwargs["train_split_csv_name"] = config.train_split
-        if source_conf.name in SPATIALIZED_TABULAR_SOURCE_NAMES:
-            source_kwargs["train_split_csv_name"] = config.train_split
-            source_kwargs["filename_col"] = config.filename_col
-            source_kwargs["valid_mask_threshold"] = config.valid_mask_threshold
         sources[source_conf.name] = source_class(**source_kwargs)
 
     dataset = MultiSourceDataset(

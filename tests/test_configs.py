@@ -47,10 +47,11 @@ def test_common_input_pipeline_configs_share_unified_input_pipeline():
         assert sources["grid"].feature_names_list[:2] == ["ignition_grid_human", "ignition_grid_lightning"]
         assert sources["grid"].terrain_derivatives == ["slope", "aspect_sin", "aspect_cos"]
 
-        # Spatialized weather + fire-size, each with a missing mask.
+        # Spatialized weather + fire-size. The weather LUT covers every firezone, so its
+        # missing-firezone mask is dropped; the fire-size table lacks some zones, so it is kept.
         assert isinstance(sources["spatialized_weather"], SpatializedTabularParams)
         assert isinstance(sources["spatialized_fire_size"], SpatializedTabularParams)
-        assert sources["spatialized_weather"].include_missing_firezone_mask is True
+        assert sources["spatialized_weather"].include_missing_firezone_mask is False
         assert sources["spatialized_fire_size"].include_missing_firezone_mask is True
 
         # Wind is expressed as Cartesian components only; WindSpeed is dropped.

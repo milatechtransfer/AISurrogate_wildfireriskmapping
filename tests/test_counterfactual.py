@@ -510,15 +510,12 @@ def test_build_scenario_endpoint_config_rewrites_data_and_save_paths(tmp_path: P
         data_root=tmp_path / "data_root",
         prediction_dir=tmp_path / "predictions",
         raw_data_dir=tmp_path / "raw",
-        imputation_stats_paths={"spatialized_weather": "spatialized_weather_train_imputation_stats.json"},
     )
     assert scenario_config["save_dir"] == str(tmp_path / "predictions")
     assert scenario_config["logger"]["enabled"] is False
     assert scenario_config["data"]["root_dir"] == str(tmp_path / "data_root")
     assert scenario_config["data"]["raw_data_dir"] == str(tmp_path / "raw")
-    assert (
-        scenario_config["data"]["input_sources"][0]["params"]["imputation_stats_path"] == "spatialized_weather_train_imputation_stats.json"
-    )
+    assert "imputation_stats_path" not in scenario_config["data"]["input_sources"][0]["params"]
 
 
 def test_prepared_nonfuel_ids_maps_raw_fbp_to_grouped_patch_ids() -> None:

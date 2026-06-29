@@ -40,8 +40,6 @@ from src.datasets.postprocessing.counterfactual_weather import (
     validate_wind_roundtrip,
 )
 from src.datasets.postprocessing.counterfactual_wind_regime import apply_wind_regime_scenario
-from src.datasets.sources.spatialized_tabular import write_train_global_fill_stats
-from src.datasets.utils import SPATIALIZED_TABULAR_SOURCE_NAMES
 
 
 @dataclass(frozen=True)
@@ -147,49 +145,6 @@ def _weather_csv_name(endpoint_config: dict[str, Any]) -> str | None:
         if isinstance(params, dict) and "csv_name" in params:
             return str(params["csv_name"])
     return None
-
-
-def _spatialized_tabular_imputation_stats(
-    *,
-    baseline_root: Path,
-    scenario_root: Path,
-    endpoint_config: dict[str, Any],
-    modelling_approach: str,
-    overwrite: bool,
-) -> dict[str, str]:
-    """Write frozen training-derived imputation stats for spatialized tabular sources."""
-
-    data_cfg = endpoint_config.get("data", {})
-    train_split = str(data_cfg.get("train_split", "train_indices.csv"))
-    filename_col = str(data_cfg.get("filename_col", "filename"))
-    valid_mask_threshold = float(data_cfg.get("valid_mask_threshold", 0.01))
-    stats_paths: dict[str, str] = {}
-    for source in data_cfg.get("input_sources", []):
-        if not isinstance(source, dict) or source.get("name") not in SPATIALIZED_TABULAR_SOURCE_NAMES:
-            continue
-        source_name = str(source["name"])
-        params = source.get("params", {})
-        if not isinstance(params, dict) or str(params.get("missing_value_strategy", "global_mean")).lower() != "global_mean":
-            continue
-        output_name = f"{source_name}_train_imputation_stats.json"
-        output_path = scenario_root / output_name
-        if output_path.exists() and not overwrite:
-            raise FileExistsError(f"{output_path} already exists; pass --overwrite to replace it.")
-        write_train_global_fill_stats(
-            root_dir=baseline_root,
-            output_path=output_path,
-            source_name=source_name,
-            csv_name=str(params["csv_name"]),
-            feature_names_list=[str(feature) for feature in params["feature_names_list"]],
-            zone_id_col=str(params.get("fire_weather_zone_id_col", "WeatherZone")),
-            zone_channel_key=str(params.get("zone_channel_key", "firezones_grid")),
-            train_split_csv_name=train_split,
-            filename_col=filename_col,
-            valid_mask_threshold=valid_mask_threshold,
-            modelling_approach=modelling_approach,
-        )
-        stats_paths[source_name] = output_name
-    return stats_paths
 
 
 def _source_csv_names(endpoint_config: dict[str, Any]) -> set[str]:
@@ -575,7 +530,6 @@ def build_scenario_endpoint_config(
     data_root: Path,
     prediction_dir: Path,
     raw_data_dir: Path,
-    imputation_stats_paths: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Return an evaluator config pointed at a materialized scenario root."""
 
@@ -588,12 +542,6 @@ def build_scenario_endpoint_config(
     scenario_config["data"]["train_split"] = str(scenario_config["data"].get("train_split", "train_indices.csv"))
     scenario_config["data"]["val_split"] = str(scenario_config["data"].get("val_split", "val_indices.csv"))
     scenario_config["data"]["test_split"] = str(scenario_config["data"].get("test_split", "test_indices.csv"))
-    for source in scenario_config["data"].get("input_sources", []):
-        if not isinstance(source, dict) or not isinstance(source.get("params"), dict):
-            continue
-        source_name = str(source.get("name", ""))
-        if imputation_stats_paths and source_name in imputation_stats_paths:
-            source["params"]["imputation_stats_path"] = imputation_stats_paths[source_name]
     return scenario_config
 
 
@@ -636,13 +584,6 @@ def _materialize_one(
         scenario_root=scenario_root,
         endpoint_config=endpoint_config,
         weather_csv_name=weather_csv_name,
-        overwrite=overwrite,
-    )
-    imputation_stats_paths = _spatialized_tabular_imputation_stats(
-        baseline_root=baseline_root,
-        scenario_root=scenario_root,
-        endpoint_config=endpoint_config,
-        modelling_approach=modelling_approach,
         overwrite=overwrite,
     )
     metadata = _write_split_files(
@@ -691,7 +632,6 @@ def _materialize_one(
         data_root=scenario_root,
         prediction_dir=prediction_dir,
         raw_data_dir=cfg.raw_data_dir,
-        imputation_stats_paths=imputation_stats_paths,
     )
     _write_yaml(generated_config, generated_config_path, overwrite=overwrite)
     _link_checkpoint(
