@@ -52,21 +52,34 @@ Shared helpers (keep dependency-light, no scenario-specific logic):
 
 ## Running it
 
+The unit of work is one `(scenario × endpoint)` pair, so scope to exactly what
+you need. Below runs a single scenario end-to-end; drop the `--scenario`/
+`--endpoint` flags to sweep all of that axis.
+
 ```bash
-# 1. Materialize inputs for every scenario × endpoint
-python -m src.datasets.postprocessing.counterfactual_materialize --overwrite
+# 1. Materialize inputs for one scenario (optionally one endpoint)
+python -m src.datasets.postprocessing.counterfactual_materialize \
+    --scenario fwi_daily_low_to_high --endpoint fi --overwrite
 
-# 2. Inference (SLURM) — one eval per generated config under the prediction dirs
-sbatch run_files/eval_hexels.sh   # iterate the generated configs
+# 2. Inference (SLURM) — one eval per generated config this scenario produced
+sbatch run_files/eval_hexels.sh   # point it at the generated config(s)
 
-# 3. Paired metrics
+# 3. Paired metrics (reads whatever is in scenario_prediction_index.csv)
 python -m src.datasets.postprocessing.counterfactual_compare
 
-# 4. Figures (run the scripts for the scenarios you materialized)
-python -m src.datasets.postprocessing.counterfactual_hazard_map
+# 4. Figures for that scenario's family (see the module map above)
 python -m src.datasets.postprocessing.counterfactual_fwi_map
-python -m src.datasets.postprocessing.counterfactual_wind_regime_map
 ```
+
+Scoping notes:
+- `--scenario` and `--endpoint` are repeatable (`--scenario a --scenario b`);
+  omitting a flag = all scenarios / all enabled endpoints.
+- The full sweep is just the no-flag default:
+  `python -m ...counterfactual_materialize --overwrite`.
+- Targeted re-materialization is safe: `scenario_prediction_index.csv` is
+  **merged**, not overwritten, so untouched scenarios keep their index rows.
+- `--overwrite` lets a re-run replace existing generated files; without it the
+  step errors if any target already exists (a guard against accidental reruns).
 
 ## Adding a new scenario
 
