@@ -8,6 +8,7 @@ duplicating the plotting code.
 
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 
 import matplotlib
@@ -47,6 +48,13 @@ plt.rcParams.update(
 
 GT_RELATIVE_PATH = "results/burnP3Plus_OutputRateOfSpreadSummaryMap/fbpSummary-RateOfSpread-Average.tif"
 ENDPOINT = "ros"
+PANEL_TITLE_WIDTH = 30
+
+
+def _panel_title(title: str) -> str:
+    """Wrap a long panel title so it stays within the axis and clears the colorbar."""
+
+    return textwrap.fill(title, width=PANEL_TITLE_WIDTH)
 
 
 def load_ros_response(
@@ -143,7 +151,7 @@ def plot_ros_response_maps(
             origin="upper",
             interpolation="nearest",
         )
-        ax.set_title(title)
+        ax.set_title(_panel_title(title), pad=12)
         ax.set_aspect("equal")
         ax.set_xticks([])
         ax.set_yticks([])
@@ -168,8 +176,13 @@ def plot_ros_patch_zoom(
     window: int,
     hotspot_block: int,
     patch_count: int,
+    centers: list[tuple[int, int]] | None = None,
 ) -> None:
-    """Ground-truth/baseline/scenario/Δ ROS zoom-ins on the highest-response windows."""
+    """Ground-truth/baseline/scenario/Δ ROS zoom-ins on the highest-response windows.
+
+    Pass ``centers`` to render fixed windows (e.g. shared across a scenario pair);
+    otherwise the highest-response windows of this scenario's ``delta`` are used.
+    """
 
     pooled = np.concatenate([finite_values(ground_truth), finite_values(baseline), finite_values(scenario_ros)])
     ros_norm = Normalize(vmin=0.0, vmax=float(np.percentile(pooled, 99.0)))
@@ -177,7 +190,8 @@ def plot_ros_patch_zoom(
     delta_norm = TwoSlopeNorm(vcenter=0.0, vmin=-delta_limit, vmax=delta_limit)
     half = window // 2
 
-    centers = hotspot_centers(delta, hotspot_block, count=patch_count, window=window)
+    if centers is None:
+        centers = hotspot_centers(delta, hotspot_block, count=patch_count, window=window)
     fig, axes = plt.subplots(len(centers), 4, figsize=(20.0, 5.0 * len(centers)), squeeze=False)
     for row, (center_row, center_col) in enumerate(centers):
         r0 = max(center_row - half, 0)
@@ -193,7 +207,7 @@ def plot_ros_patch_zoom(
         for col, (data, title, cmap, norm, cbar_label) in enumerate(panels):
             ax = axes[row, col]
             image = ax.imshow(data, cmap=cmap, norm=norm, origin="upper", interpolation="nearest")
-            ax.set_title(title)
+            ax.set_title(_panel_title(title), pad=12)
             ax.set_aspect("equal")
             ax.set_xticks([])
             ax.set_yticks([])

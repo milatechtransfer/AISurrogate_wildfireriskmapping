@@ -20,6 +20,7 @@ from matplotlib.colors import TwoSlopeNorm
 
 from src.datasets.postprocessing.counterfactual_ros_maps import (
     ENDPOINT,
+    hotspot_centers,
     load_ros_response,
     plot_ros_patch_zoom,
     plot_ros_response_maps,
@@ -80,7 +81,7 @@ def plot_direction_pair_delta(
             origin="upper",
             interpolation="nearest",
         )
-        ax.set_title(title)
+        ax.set_title(title, pad=12)
         ax.set_aspect("equal")
         ax.set_xticks([])
         ax.set_yticks([])
@@ -115,14 +116,25 @@ def main() -> None:
     edit_summary_path = args.experiment_dir / "wind_direction_edit_summary.csv"
     edit_summary = pd.read_csv(edit_summary_path) if edit_summary_path.exists() else None
 
-    deltas: dict[str, np.ma.MaskedArray] = {}
+    responses: dict[str, tuple] = {}
+    labels: dict[str, str] = {}
     extent: tuple[float, float, float, float] | None = None
     for scenario, fallback_label, slug in DIRECTIONS:
-        label = _bearing_label(edit_summary, scenario, fallback_label)
+        labels[slug] = _bearing_label(edit_summary, scenario, fallback_label)
         ground_truth, baseline, scenario_ros, delta, extent, _ = load_ros_response(
             prediction_dirs, args.hex_id, raw_data_dir, scenario=scenario
         )
-        deltas[slug] = delta
+        responses[slug] = (ground_truth, baseline, scenario_ros, delta)
+
+    deltas = {slug: response[3] for slug, response in responses.items()}
+    if extent is None:
+        raise RuntimeError("No wind-direction scenarios were loaded.")
+    combined_abs_delta = np.ma.maximum(np.ma.abs(deltas["dominant"]), np.ma.abs(deltas["opposite"]))
+    shared_centers = hotspot_centers(combined_abs_delta, args.hotspot_block, count=args.patch_count, window=args.patch_window)
+
+    for scenario, _fallback_label, slug in DIRECTIONS:
+        label = labels[slug]
+        ground_truth, baseline, scenario_ros, delta = responses[slug]
         scenario_dir = out_dir / slug
 
         plot_ros_response_maps(
@@ -143,10 +155,11 @@ def main() -> None:
             delta,
             out_path=scenario_dir / f"{scenario}_patch_zoom.png",
             scenario_label=label,
-            suptitle=f"High-response {args.patch_window}\u00d7{args.patch_window}-pixel windows \u2014 {label} (hex 16)",
+            suptitle=f"Shared high-response {args.patch_window}\u00d7{args.patch_window}-pixel windows \u2014 {label} (hex 16)",
             window=args.patch_window,
             hotspot_block=args.hotspot_block,
             patch_count=args.patch_count,
+            centers=shared_centers,
         )
         plot_delta_histogram(
             delta,
