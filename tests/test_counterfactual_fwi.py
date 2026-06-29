@@ -8,7 +8,6 @@ from src.datasets.postprocessing.counterfactual_fwi import (
     apply_fwi_scenario,
     daily_regime_swap,
     fwi_tercile_labels,
-    summary_zone_swap,
 )
 from src.datasets.postprocessing.counterfactual_weather import (
     WindEncodingStats,
@@ -105,20 +104,6 @@ def test_daily_swap_is_deterministic_for_a_fixed_seed() -> None:
     first, _ = daily_regime_swap(raw, processed, stats, direction="low_to_high", thermo_columns=SWAP_COLUMNS, seed=123)
     second, _ = daily_regime_swap(raw, processed, stats, direction="low_to_high", thermo_columns=SWAP_COLUMNS, seed=123)
     pd.testing.assert_frame_equal(first, second)
-
-
-def test_summary_low_to_high_overwrites_recipient_zone_with_donor_summary() -> None:
-    raw, processed, stats = _build_weather({0: [1.0, 1.0, 1.0], 1: [5.0, 5.0, 5.0], 2: [9.0, 9.0, 9.0]})
-    edited, report = summary_zone_swap(raw, processed, stats, direction="low_to_high", thermo_columns=SWAP_COLUMNS, seed=0)
-    donor_mean = processed.loc[processed["WeatherZone"] == 2, "FireWeatherIndex"].mean()
-    recipient_mean = edited.loc[edited["WeatherZone"] == 0, "FireWeatherIndex"].mean()
-    assert recipient_mean == pytest.approx(donor_mean)
-    # The mid zone is untouched.
-    assert np.allclose(
-        edited.loc[edited["WeatherZone"] == 1, "FireWeatherIndex"],
-        processed.loc[processed["WeatherZone"] == 1, "FireWeatherIndex"],
-    )
-    assert int(report.loc[report["zone"] == 0, "donor_zone"].iloc[0]) == 2
 
 
 def test_apply_fwi_scenario_dispatches_and_rejects_unknown_mode() -> None:

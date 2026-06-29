@@ -51,24 +51,6 @@ scenarios:
       low_quantile: 33.0
       high_quantile: 66.0
       zone_column: WeatherZone
-  - name: fwi_summary_low_to_high
-    kind: fwi
-    description: Overwrite low-summary-FWI zones with the donor high-summary-FWI zone profile.
-    params:
-      mode: summary_zone_swap
-      direction: low_to_high
-      low_quantile: 33.0
-      high_quantile: 66.0
-      zone_column: WeatherZone
-  - name: fwi_summary_high_to_low
-    kind: fwi
-    description: Overwrite high-summary-FWI zones with the donor low-summary-FWI zone profile.
-    params:
-      mode: summary_zone_swap
-      direction: high_to_low
-      low_quantile: 33.0
-      high_quantile: 66.0
-      zone_column: WeatherZone
   - name: wind_zone_peak_day
     kind: wind_regime
     description: Per zone, transplant the single highest-WindSpeed day's full weather regime onto every day in the zone.

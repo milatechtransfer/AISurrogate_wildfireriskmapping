@@ -1,15 +1,13 @@
 """FWI-regime weather counterfactuals for fixed-model analyses.
 
-Two intervention levels share one mechanism: produce an edited
-``weather_table_processed.csv`` whose zone means encode a high- or low-FWI
-regime.  The spatialized-weather source re-aggregates that table by WeatherZone
-at inference time, so editing the rows is sufficient.
+The intervention produces an edited ``weather_table_processed.csv`` whose zone
+means encode a high- or low-FWI regime.  The spatialized-weather source
+re-aggregates that table by WeatherZone at inference time, so editing the rows
+is sufficient.
 
 - ``daily_regime_swap`` (pre-aggregation): within each zone, bin daily rows by
   FireWeatherIndex terciles and replace low rows with sampled high rows (or the
   reverse).
-- ``summary_zone_swap`` (post-aggregation): bin zones by their summary FWI and
-  overwrite a low zone's rows with a donor high zone's summary (or the reverse).
 
 The swapped feature set covers every FWI driver except WindDirection.  WindSpeed
 is swapped, and because ``wind_x``/``wind_y`` are derived they are recomputed
@@ -45,7 +43,7 @@ THERMO_SWAP_COLUMNS: tuple[str, ...] = (
 FWI_COLUMN = "FireWeatherIndex"
 RAW_WIND_SPEED_COLUMN = "WindSpeed"
 SWAP_DIRECTIONS: tuple[str, ...] = ("low_to_high", "high_to_low")
-SWAP_MODES: tuple[str, ...] = ("daily_regime_swap", "summary_zone_swap")
+SWAP_MODES: tuple[str, ...] = ("daily_regime_swap",)
 
 
 @dataclass(frozen=True)
@@ -177,90 +175,6 @@ def daily_regime_swap(
     return processed_edited, _report_frame(reports)
 
 
-def summary_zone_swap(
-    raw_hex: pd.DataFrame,
-    processed_hex: pd.DataFrame,
-    stats: WindEncodingStats,
-    *,
-    direction: str,
-    low_quantile: float = 33.0,
-    high_quantile: float = 66.0,
-    zone_column: str = "WeatherZone",
-    thermo_columns: tuple[str, ...] = THERMO_SWAP_COLUMNS,
-    seed: int = 42,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Overwrite low-summary zones with the donor high-summary zone profile (or reverse)."""
-
-    if direction not in SWAP_DIRECTIONS:
-        raise ValueError(f"direction={direction!r}; expected one of {SWAP_DIRECTIONS}.")
-    if len(raw_hex) != len(processed_hex):
-        raise ValueError(f"Raw/processed row count mismatch: {len(raw_hex)} != {len(processed_hex)}.")
-    _validate_columns(processed_hex, (zone_column, FWI_COLUMN, *thermo_columns, *RAW_WIND_COLUMNS), frame_name="processed weather")
-    _validate_columns(raw_hex, (RAW_WIND_SPEED_COLUMN, "WindDirection"), frame_name="raw weather")
-
-    processed_edited = processed_hex.reset_index(drop=True).copy()
-    raw_edited = raw_hex.reset_index(drop=True).copy()
-
-    zones = processed_edited[zone_column].to_numpy()
-    fwi_baseline = processed_edited[FWI_COLUMN].to_numpy(dtype=np.float64)
-    zone_mean_fwi = pd.Series(fwi_baseline).groupby(zones).mean()
-    low_threshold = float(np.percentile(zone_mean_fwi.to_numpy(), low_quantile))
-    high_threshold = float(np.percentile(zone_mean_fwi.to_numpy(), high_quantile))
-    low_zones = zone_mean_fwi.index[zone_mean_fwi <= low_threshold].to_numpy()
-    high_zones = zone_mean_fwi.index[zone_mean_fwi >= high_threshold].to_numpy()
-    recipient_zones = low_zones if direction == "low_to_high" else high_zones
-    donor_zones = high_zones if direction == "low_to_high" else low_zones
-
-    if donor_zones.size == 0:
-        raise ValueError(f"summary_zone_swap has no donor zones for direction={direction!r}.")
-    donor_zones_set = set(int(zone) for zone in donor_zones)
-    donor_mask = np.array([int(zone) in donor_zones_set for zone in zones])
-    donor_thermo = {column: float(np.mean(processed_edited[column].to_numpy(dtype=np.float64)[donor_mask])) for column in thermo_columns}
-    donor_mean_raw_speed = float(np.mean(raw_edited[RAW_WIND_SPEED_COLUMN].to_numpy(dtype=np.float64)[donor_mask]))
-    donor_zone_label = (
-        int(donor_zones[int(np.argmax(zone_mean_fwi.loc[donor_zones].to_numpy()))])
-        if direction == "low_to_high"
-        else int(donor_zones[int(np.argmin(zone_mean_fwi.loc[donor_zones].to_numpy()))])
-    )
-
-    thermo_edited = {column: processed_edited[column].to_numpy(dtype=np.float64).copy() for column in thermo_columns}
-    raw_speed_edited = raw_edited[RAW_WIND_SPEED_COLUMN].to_numpy(dtype=np.float64).copy()
-    recipient_zones_set = set(int(zone) for zone in recipient_zones)
-    recipient_positions: list[int] = []
-    reports: list[FwiZoneEditReport] = []
-
-    for zone in np.unique(zones):
-        zone_positions = np.flatnonzero(zones == zone)
-        is_recipient = int(zone) in recipient_zones_set
-        note = "ok" if is_recipient else "non-recipient zone unchanged"
-        if is_recipient:
-            for column in thermo_columns:
-                thermo_edited[column][zone_positions] = donor_thermo[column]
-            raw_speed_edited[zone_positions] = donor_mean_raw_speed
-            recipient_positions.extend(int(position) for position in zone_positions)
-
-        reports.append(
-            FwiZoneEditReport(
-                zone=int(zone),
-                n_rows=int(zone_positions.size),
-                n_low=0,
-                n_mid=0,
-                n_high=0,
-                n_recipients=int(zone_positions.size if is_recipient else 0),
-                donor_zone=donor_zone_label if is_recipient else None,
-                baseline_fwi_mean=float(np.mean(fwi_baseline[zone_positions])),
-                scenario_fwi_mean=float(np.mean(thermo_edited[FWI_COLUMN][zone_positions])),
-                note=note,
-            )
-        )
-
-    for column in thermo_columns:
-        processed_edited[column] = thermo_edited[column]
-    raw_edited[RAW_WIND_SPEED_COLUMN] = raw_speed_edited
-    processed_edited = _reencode_recipient_wind(raw_edited, processed_edited, stats, np.asarray(recipient_positions, dtype=np.int64))
-    return processed_edited, _report_frame(reports)
-
-
 def apply_fwi_scenario(
     raw_hex: pd.DataFrame,
     processed_hex: pd.DataFrame,
@@ -269,12 +183,12 @@ def apply_fwi_scenario(
     *,
     seed: int = 42,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Dispatch an FWI scenario to the daily or summary swap."""
+    """Apply the daily FWI regime swap."""
 
     mode = str(params.get("mode", "daily_regime_swap"))
     if mode not in SWAP_MODES:
         raise ValueError(f"Unknown FWI scenario mode {mode!r}; expected one of {SWAP_MODES}.")
-    swap_fn = daily_regime_swap if mode == "daily_regime_swap" else summary_zone_swap
+    swap_fn = daily_regime_swap
     thermo_columns = tuple(params["swap_columns"]) if "swap_columns" in params else THERMO_SWAP_COLUMNS
     return swap_fn(
         raw_hex,
