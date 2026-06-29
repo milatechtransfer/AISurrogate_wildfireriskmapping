@@ -149,6 +149,7 @@ def _hotspot_centers(delta: np.ma.MaskedArray, block: int, *, count: int, window
 
 
 def plot_patch_zoom(
+    ground_truth: np.ma.MaskedArray,
     baseline: np.ma.MaskedArray,
     scenario_ros: np.ma.MaskedArray,
     delta: np.ma.MaskedArray,
@@ -158,20 +159,21 @@ def plot_patch_zoom(
     hotspot_block: int,
     patch_count: int,
 ) -> None:
-    pooled = np.concatenate([finite_values(baseline), finite_values(scenario_ros)])
+    pooled = np.concatenate([finite_values(ground_truth), finite_values(baseline), finite_values(scenario_ros)])
     ros_norm = Normalize(vmin=0.0, vmax=float(np.percentile(pooled, 99.0)))
     delta_limit = symmetric_percentile_limit([delta], percentile=99.0)
     delta_norm = TwoSlopeNorm(vcenter=0.0, vmin=-delta_limit, vmax=delta_limit)
     half = window // 2
 
     centers = _hotspot_centers(delta, hotspot_block, count=patch_count, window=window)
-    fig, axes = plt.subplots(len(centers), 3, figsize=(15.0, 5.0 * len(centers)), squeeze=False)
+    fig, axes = plt.subplots(len(centers), 4, figsize=(20.0, 5.0 * len(centers)), squeeze=False)
     for row, (center_row, center_col) in enumerate(centers):
         r0 = max(center_row - half, 0)
         c0 = max(center_col - half, 0)
         r1 = min(r0 + window, baseline.shape[0])
         c1 = min(c0 + window, baseline.shape[1])
         panels = [
+            (ground_truth[r0:r1, c0:c1], "Ground truth ROS (BurnP3+)", "viridis", ros_norm, "ROS (m/min)"),
             (baseline[r0:r1, c0:c1], "Baseline ROS", "viridis", ros_norm, "ROS (m/min)"),
             (scenario_ros[r0:r1, c0:c1], "Scenario ROS \u2014 peak-wind", "viridis", ros_norm, "ROS (m/min)"),
             (delta[r0:r1, c0:c1], "\u0394ROS", "RdBu_r", delta_norm, "\u0394ROS (m/min)"),
@@ -268,6 +270,7 @@ def main() -> None:
         downsample=args.downsample,
     )
     plot_patch_zoom(
+        ground_truth,
         baseline,
         scenario_ros,
         delta,
