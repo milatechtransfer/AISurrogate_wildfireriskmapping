@@ -13,14 +13,6 @@ from src.datasets.postprocessing.counterfactual import (
     flow_components_from_from_bearing,
     load_counterfactual_config,
 )
-from src.datasets.postprocessing.counterfactual_barrier_profile import (
-    SECTOR_ALL,
-    SECTOR_CROSSWIND,
-    cumulative_hazard_delta_share,
-    hazard_decomposition_from_arrays,
-    profile_from_arrays,
-    relative_hazard_decomposition_summary,
-)
 from src.datasets.postprocessing.counterfactual_compare import paired_delta_summary
 from src.datasets.postprocessing.counterfactual_fi_map import distance_binned_delta_map
 from src.datasets.postprocessing.counterfactual_fuel import (
@@ -62,6 +54,14 @@ from src.datasets.postprocessing.counterfactual_weather import (
     raw_wind_features,
     recover_wind_encoding_stats,
     validate_wind_roundtrip,
+)
+from src.datasets.postprocessing.fuel_barrier_geometry import (
+    SECTOR_ALL,
+    SECTOR_CROSSWIND,
+    cumulative_hazard_delta_share,
+    hazard_decomposition_from_arrays,
+    profile_from_arrays,
+    relative_hazard_decomposition_summary,
 )
 
 

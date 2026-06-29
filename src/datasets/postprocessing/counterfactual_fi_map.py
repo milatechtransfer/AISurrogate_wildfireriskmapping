@@ -14,7 +14,6 @@ from matplotlib.colors import Normalize, TwoSlopeNorm
 
 from data_preparation.paths import Paths
 from data_preparation.spatial.utils import load_spatial_raster
-from src.datasets.postprocessing.counterfactual_barrier_profile import _load_barrier_layers_on_prediction_grid
 from src.datasets.postprocessing.counterfactual_hazard_map import (
     downsample_for_display,
     prediction_dirs_from_index,
@@ -29,6 +28,7 @@ from src.datasets.postprocessing.fuel_barrier_geometry import (
     DEFAULT_DIST_BIN_EDGES_M,
     compute_distance_fields,
     dist_bin_label,
+    load_barrier_layers_on_prediction_grid,
     parse_fuel_barrier_info,
 )
 
@@ -96,9 +96,10 @@ def replacement_mask_on_prediction_grid(
 ) -> tuple[np.ndarray, float, float]:
     """Original non-fuel pixels that the fuel scenario replaced with burnable fuel."""
 
-    layers = _load_barrier_layers_on_prediction_grid(
+    reference_profile = prediction_reference_profile(prediction_dirs, hex_id)
+    layers = load_barrier_layers_on_prediction_grid(
         raw_data_dir=raw_data_dir,
-        prediction_dirs=prediction_dirs,
+        reference_profile=reference_profile,
         hex_id=hex_id,
     )
     paths = Paths(hex_id=hex_id, root_dir=raw_data_dir)
