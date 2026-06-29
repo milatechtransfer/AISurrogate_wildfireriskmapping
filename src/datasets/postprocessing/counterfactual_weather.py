@@ -127,6 +127,12 @@ def encode_raw_wind_features(raw_features: pd.DataFrame, stats: WindEncodingStat
     return encoded
 
 
+def validate_columns(frame: pd.DataFrame, columns: tuple[str, ...], *, frame_name: str) -> None:
+    missing = [column for column in columns if column not in frame.columns]
+    if missing:
+        raise ValueError(f"{frame_name} is missing required columns: {missing}.")
+
+
 def validate_wind_roundtrip(
     raw_weather: pd.DataFrame,
     processed_weather: pd.DataFrame,

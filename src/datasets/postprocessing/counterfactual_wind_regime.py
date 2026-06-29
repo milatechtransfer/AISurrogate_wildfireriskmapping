@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from src.datasets.postprocessing.counterfactual_weather import WindEncodingStats
+from src.datasets.postprocessing.counterfactual_weather import WindEncodingStats, validate_columns
 
 WIND_SPEED_COLUMN = "WindSpeed"
 STRUCTURAL_COLUMNS = ("Order", "Season")
@@ -33,12 +33,6 @@ class WindZoneEditReport:
     note: str
 
 
-def _validate_columns(frame: pd.DataFrame, columns: tuple[str, ...], *, frame_name: str) -> None:
-    missing = [column for column in columns if column not in frame.columns]
-    if missing:
-        raise ValueError(f"{frame_name} is missing required columns: {missing}.")
-
-
 def zone_peak_wind_transplant(
     raw_hex: pd.DataFrame,
     processed_hex: pd.DataFrame,
@@ -49,8 +43,8 @@ def zone_peak_wind_transplant(
 
     if len(raw_hex) != len(processed_hex):
         raise ValueError(f"Raw/processed row count mismatch: {len(raw_hex)} != {len(processed_hex)}.")
-    _validate_columns(processed_hex, (zone_column,), frame_name="processed weather")
-    _validate_columns(raw_hex, (WIND_SPEED_COLUMN,), frame_name="raw weather")
+    validate_columns(processed_hex, (zone_column,), frame_name="processed weather")
+    validate_columns(raw_hex, (WIND_SPEED_COLUMN,), frame_name="raw weather")
 
     processed_edited = processed_hex.reset_index(drop=True).copy()
     raw_speed = raw_hex.reset_index(drop=True)[WIND_SPEED_COLUMN].to_numpy(dtype=np.float64)

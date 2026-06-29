@@ -27,6 +27,7 @@ from src.datasets.postprocessing.counterfactual_weather import (
     WindEncodingStats,
     encode_raw_wind_features,
     raw_wind_features,
+    validate_columns,
 )
 
 THERMO_SWAP_COLUMNS: tuple[str, ...] = (
@@ -76,12 +77,6 @@ def fwi_tercile_labels(fwi_values: np.ndarray, *, low_quantile: float, high_quan
     return labels
 
 
-def _validate_columns(frame: pd.DataFrame, columns: tuple[str, ...], *, frame_name: str) -> None:
-    missing = [column for column in columns if column not in frame.columns]
-    if missing:
-        raise ValueError(f"{frame_name} is missing required columns: {missing}.")
-
-
 def _reencode_recipient_wind(
     raw_edited: pd.DataFrame,
     processed_edited: pd.DataFrame,
@@ -118,8 +113,8 @@ def daily_regime_swap(
         raise ValueError(f"direction={direction!r}; expected one of {SWAP_DIRECTIONS}.")
     if len(raw_hex) != len(processed_hex):
         raise ValueError(f"Raw/processed row count mismatch: {len(raw_hex)} != {len(processed_hex)}.")
-    _validate_columns(processed_hex, (zone_column, FWI_COLUMN, *thermo_columns, *RAW_WIND_COLUMNS), frame_name="processed weather")
-    _validate_columns(raw_hex, (RAW_WIND_SPEED_COLUMN, "WindDirection"), frame_name="raw weather")
+    validate_columns(processed_hex, (zone_column, FWI_COLUMN, *thermo_columns, *RAW_WIND_COLUMNS), frame_name="processed weather")
+    validate_columns(raw_hex, (RAW_WIND_SPEED_COLUMN, "WindDirection"), frame_name="raw weather")
 
     processed_edited = processed_hex.reset_index(drop=True).copy()
     raw_edited = raw_hex.reset_index(drop=True).copy()
