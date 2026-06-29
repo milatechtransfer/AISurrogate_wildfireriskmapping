@@ -23,6 +23,7 @@ from src.datasets.postprocessing.counterfactual_fwi import THERMO_SWAP_COLUMNS
 from src.datasets.postprocessing.counterfactual_viz import (
     downsample_for_display,
     finite_values,
+    plot_delta_histogram,
     prediction_dirs_from_index,
     prediction_raster_path,
     read_prediction,
@@ -676,6 +677,13 @@ def main() -> None:
     for scenario in DAILY_SCENARIOS:
         delta_values = finite_values(scenarios[scenario]["delta"])
         _, valid = values_and_valid(scenarios[scenario]["delta"])
+        plot_delta_histogram(
+            scenarios[scenario]["delta"],
+            out_path=out_dir / f"{scenario}_fi_delta_distribution.png",
+            xlabel="\u0394FI per pixel (scenario \u2212 baseline, kW/m)",
+            title=f"Per-pixel FI change \u2014 {SCENARIO_SHORT[scenario]} FWI (hex 16)",
+            color=DELTA_COLORS[scenario],
+        )
         print(
             f"{scenario}: n={int(valid.sum())} mean_dFI={float(np.mean(delta_values)):+.1f} "
             f"median={float(np.median(delta_values)):+.1f}"
