@@ -59,10 +59,18 @@ Figures (each consumes the predictions for its scenario family):
 Shared helpers (keep dependency-light, no scenario-specific logic):
 - `counterfactual_viz.py` — IO/plot hub, incl. `plot_delta_histogram`
   (log-count histogram + |Δ| concentration curve) reusable across interventions
+  and `overlay_zone_boundaries` (firezone borders as a `LineCollection`, drawn on
+  every hex map; clip to the displayed hexagon via `load_zone_labels(..., support=)`)
 - `counterfactual_ros_maps.py` — ROS response-map + GT patch-zoom plotting shared
   by the wind_regime and wind_direction figure scripts
-- `counterfactual_weather_maps.py` — spatialized-weather map IO
+- `counterfactual_weather_maps.py` — spatialized-weather map IO, incl.
+  `load_zone_labels` (firezone raster on the prediction grid)
 - `fuel_barrier_geometry.py` — fuel grouping + barrier-relative geometry
+
+Every `*_map.py` writes its PNGs under `experiments/<exp>/figures/<group>/`
+(`fwi_daily`, `wind_direction`, `wind_zone_peak`, `<scenario>` for generic ROS,
+`fuel_fi`, `fuel_intervention`, `hazard`, `fuel_local_zoom`); override with
+`--out_dir`. Summary CSVs stay at the experiment-dir root.
 
 ## Running it
 

@@ -28,11 +28,12 @@ from src.datasets.postprocessing.counterfactual_ros_maps import (
 from src.datasets.postprocessing.counterfactual_viz import (
     downsample_for_display,
     finite_values,
+    overlay_zone_boundaries,
     plot_delta_histogram,
     prediction_dirs_from_index,
     symmetric_percentile_limit,
 )
-from src.datasets.postprocessing.counterfactual_weather_maps import extent_km, raw_data_dir_from_config
+from src.datasets.postprocessing.counterfactual_weather_maps import extent_km, load_zone_labels, raw_data_dir_from_config
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -60,6 +61,7 @@ def plot_direction_pair_delta(
     *,
     out_path: Path,
     downsample: int,
+    zone_labels: np.ma.MaskedArray | None = None,
 ) -> None:
     """Side-by-side ΔROS maps for the dominant and opposite wind directions."""
 
@@ -81,6 +83,7 @@ def plot_direction_pair_delta(
             origin="upper",
             interpolation="nearest",
         )
+        overlay_zone_boundaries(ax, zone_labels, extent=extent)
         ax.set_title(title, pad=12)
         ax.set_aspect("equal")
         ax.set_xticks([])
@@ -119,12 +122,15 @@ def main() -> None:
     responses: dict[str, tuple] = {}
     labels: dict[str, str] = {}
     extent: tuple[float, float, float, float] | None = None
+    zone_labels: np.ma.MaskedArray | None = None
     for scenario, fallback_label, slug in DIRECTIONS:
         labels[slug] = _bearing_label(edit_summary, scenario, fallback_label)
-        ground_truth, baseline, scenario_ros, delta, extent, _ = load_ros_response(
+        ground_truth, baseline, scenario_ros, delta, extent, reference_profile = load_ros_response(
             prediction_dirs, args.hex_id, raw_data_dir, scenario=scenario
         )
         responses[slug] = (ground_truth, baseline, scenario_ros, delta)
+        if zone_labels is None:
+            zone_labels = load_zone_labels(raw_data_dir, args.hex_id, reference_profile, support=~np.ma.getmaskarray(baseline))
 
     deltas = {slug: response[3] for slug, response in responses.items()}
     if extent is None:
@@ -147,6 +153,7 @@ def main() -> None:
             scenario_label=label,
             suptitle=f"ROS response to uniform wind direction \u2014 {label} (hex 16)",
             downsample=args.downsample,
+            zone_labels=zone_labels,
         )
         plot_ros_patch_zoom(
             ground_truth,
@@ -160,6 +167,7 @@ def main() -> None:
             hotspot_block=args.hotspot_block,
             patch_count=args.patch_count,
             centers=shared_centers,
+            zone_labels=zone_labels,
         )
         plot_delta_histogram(
             delta,
@@ -178,6 +186,7 @@ def main() -> None:
             extent,
             out_path=out_dir / "wind_direction_pair_ros_delta.png",
             downsample=args.downsample,
+            zone_labels=zone_labels,
         )
     print(f"Figures written under: {out_dir}")
 

@@ -27,7 +27,7 @@ from src.datasets.postprocessing.counterfactual_viz import (
     plot_delta_histogram,
     prediction_dirs_from_index,
 )
-from src.datasets.postprocessing.counterfactual_weather_maps import raw_data_dir_from_config
+from src.datasets.postprocessing.counterfactual_weather_maps import load_zone_labels, raw_data_dir_from_config
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -78,9 +78,10 @@ def main() -> None:
     out_dir = args.out_dir if args.out_dir is not None else args.experiment_dir / "figures" / "wind_zone_peak"
     raw_data_dir = args.raw_data_dir if args.raw_data_dir is not None else raw_data_dir_from_config(args.experiment_dir, endpoint=ENDPOINT)
     prediction_dirs = prediction_dirs_from_index(args.experiment_dir)
-    ground_truth, baseline, scenario_ros, delta, extent, _ = load_ros_response(
+    ground_truth, baseline, scenario_ros, delta, extent, reference_profile = load_ros_response(
         prediction_dirs, args.hex_id, raw_data_dir, scenario=SCENARIO
     )
+    zone_labels = load_zone_labels(raw_data_dir, args.hex_id, reference_profile, support=~np.ma.getmaskarray(baseline))
 
     plot_ros_response_maps(
         ground_truth,
@@ -92,6 +93,7 @@ def main() -> None:
         scenario_label=SCENARIO_LABEL,
         suptitle="ROS response to per-zone peak-wind regime transplant (hex 16)",
         downsample=args.downsample,
+        zone_labels=zone_labels,
     )
     plot_ros_patch_zoom(
         ground_truth,
@@ -104,6 +106,7 @@ def main() -> None:
         window=args.patch_window,
         hotspot_block=args.hotspot_block,
         patch_count=args.patch_count,
+        zone_labels=zone_labels,
     )
     plot_delta_histogram(
         delta,

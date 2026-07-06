@@ -19,6 +19,28 @@ from data_preparation.spatial.utils import load_spatial_raster
 from src.datasets.postprocessing.fuel_barrier_geometry import parse_fuel_barrier_info
 
 FUEL_NODATA: int = -32768
+FIREZONES_RELATIVE_PATH = "spatial/hex{hex_int:02d}_firezones.tif"
+
+
+def load_zone_labels(
+    raw_data_dir: Path,
+    hex_id: str,
+    reference_profile: dict,
+    *,
+    support: np.ndarray | None = None,
+) -> np.ma.MaskedArray:
+    """Firezone label raster aligned to the prediction grid.
+
+    The firezone raster is valid across the full hex tile, which extends beyond
+    the sharp hexagon of pixels that the model actually predicts.  Pass the
+    displayed map's boolean ``support`` mask to clip the labels to it so that the
+    boundary overlay never traces borders outside the predicted hexagon.
+    """
+    firezones_path = raw_data_dir / f"hex{int(hex_id):02d}" / FIREZONES_RELATIVE_PATH.format(hex_int=int(hex_id))
+    zones, _ = load_spatial_raster(path=firezones_path, reference_profile=reference_profile)
+    if support is not None:
+        zones = np.ma.masked_where(~support, zones)
+    return zones
 
 
 def extent_km(extent_m: tuple[float, float, float, float]) -> tuple[float, float, float, float]:

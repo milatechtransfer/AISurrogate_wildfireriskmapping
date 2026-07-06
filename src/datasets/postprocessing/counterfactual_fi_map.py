@@ -16,6 +16,7 @@ from data_preparation.spatial.utils import load_spatial_raster
 from src.datasets.postprocessing.counterfactual_viz import (
     downsample_for_display,
     finite_values,
+    overlay_zone_boundaries,
     prediction_dirs_from_index,
     prediction_raster_path,
     prediction_reference_profile,
@@ -25,6 +26,7 @@ from src.datasets.postprocessing.counterfactual_viz import (
     symmetric_percentile_limit,
     values_and_valid,
 )
+from src.datasets.postprocessing.counterfactual_weather_maps import load_zone_labels
 from src.datasets.postprocessing.fuel_barrier_geometry import (
     DEFAULT_DIST_BIN_EDGES_M,
     compute_distance_fields,
@@ -202,6 +204,7 @@ def plot_single_map(
     out_path: Path,
     downsample: int,
     overlay_replacements: bool = True,
+    zone_labels: np.ma.MaskedArray | None = None,
 ) -> None:
     fig, ax = plt.subplots(figsize=(7.0, 7.4))
     image = ax.imshow(
@@ -212,6 +215,7 @@ def plot_single_map(
         origin="upper",
         interpolation="nearest",
     )
+    overlay_zone_boundaries(ax, zone_labels, extent=extent)
     if overlay_replacements:
         contour_replacement_overlay(ax, replacement_mask, extent=extent, downsample=downsample)
     ax.set_title(title)
@@ -237,6 +241,7 @@ def plot_combined_fi_maps(
     replacement_norm: Normalize,
     out_path: Path,
     downsample: int,
+    zone_labels: np.ma.MaskedArray | None = None,
 ) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(18.0, 7.0), squeeze=False)
     panels = [
@@ -260,6 +265,7 @@ def plot_combined_fi_maps(
             origin="upper",
             interpolation="nearest",
         )
+        overlay_zone_boundaries(ax, zone_labels, extent=extent)
         if overlay:
             contour_replacement_overlay(ax, replacement_mask, extent=extent, downsample=downsample)
         ax.set_title(title)
@@ -326,6 +332,7 @@ def write_fi_replacement_maps(
     scenario: str = SCENARIO,
     percentile: float = 99.5,
     downsample: int = 2,
+    out_dir: Path | None = None,
 ) -> tuple[Path, list[Path]]:
     prediction_dirs = prediction_dirs_from_index(experiment_dir)
     baseline_fi, scenario_fi, delta = fi_delta(prediction_dirs, scenario=scenario, hex_id=hex_id)
@@ -354,8 +361,14 @@ def write_fi_replacement_maps(
 
     baseline_fi_dir = prediction_dirs[("baseline", "fi")]
     extent = read_prediction_extent(prediction_raster_path(baseline_fi_dir, hex_id))
+    zone_labels = load_zone_labels(
+        raw_data_dir,
+        hex_id,
+        prediction_reference_profile(prediction_dirs, hex_id, baseline_endpoint="fi"),
+        support=~np.ma.getmaskarray(baseline_fi),
+    )
 
-    out_dir = experiment_dir / "plots"
+    out_dir = out_dir if out_dir is not None else experiment_dir / "figures" / "fuel_fi"
     out_dir.mkdir(parents=True, exist_ok=True)
     combined_path = out_dir / f"hex{int(hex_id):02d}_{scenario}_fi_maps.png"
     continuous_path = out_dir / f"hex{int(hex_id):02d}_{scenario}_fi_delta_continuous.png"
@@ -372,6 +385,7 @@ def write_fi_replacement_maps(
         replacement_norm=replacement_norm,
         out_path=combined_path,
         downsample=downsample,
+        zone_labels=zone_labels,
     )
     plot_single_map(
         paired_delta,
@@ -383,6 +397,7 @@ def write_fi_replacement_maps(
         extent=extent,
         out_path=continuous_path,
         downsample=downsample,
+        zone_labels=zone_labels,
     )
     plot_single_map(
         binned_delta,
@@ -394,6 +409,7 @@ def write_fi_replacement_maps(
         extent=extent,
         out_path=binned_path,
         downsample=downsample,
+        zone_labels=zone_labels,
     )
     plot_single_map(
         replacement_scenario_fi,
@@ -405,6 +421,7 @@ def write_fi_replacement_maps(
         extent=extent,
         out_path=replacement_path,
         downsample=downsample,
+        zone_labels=zone_labels,
     )
 
     summary = summarize_fi_maps(
@@ -436,6 +453,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scenario", default=SCENARIO)
     parser.add_argument("--percentile", type=float, default=99.5)
     parser.add_argument("--downsample", type=int, default=2)
+    parser.add_argument("--out_dir", type=Path, default=None, help="Defaults to experiment_dir/figures/fuel_fi.")
     return parser.parse_args()
 
 
@@ -448,6 +466,7 @@ def main() -> None:
         scenario=args.scenario,
         percentile=args.percentile,
         downsample=max(1, int(args.downsample)),
+        out_dir=args.out_dir,
     )
     print(f"Wrote FI map summary: {summary_path}")
     for path in plot_paths:

@@ -43,6 +43,7 @@ from src.datasets.postprocessing.counterfactual_materialize import (
 from src.datasets.postprocessing.counterfactual_viz import (
     abs_share_at,
     cumulative_abs_share,
+    zone_boundary_segments,
 )
 from src.datasets.postprocessing.counterfactual_weather import (
     encode_raw_wind_features,
@@ -604,3 +605,33 @@ def test_cumulative_abs_share_ignores_masked_and_handles_empty() -> None:
     assert abs_share_at(pixel_fraction, cumulative, 0.5) == pytest.approx(5.0 / 8.0)
     empty_fraction, empty_cumulative = cumulative_abs_share(np.ma.masked_array(np.array([np.nan]), mask=[True]))
     assert abs_share_at(empty_fraction, empty_cumulative, 0.1) == pytest.approx(0.0)
+
+
+def test_zone_boundary_segments_traces_only_valid_interzone_borders() -> None:
+    labels = np.ma.masked_array(
+        np.array([[1, 1, 2], [1, 3, 2], [1, 3, 2]], dtype=np.int64),
+        mask=np.zeros((3, 3), dtype=bool),
+    )
+    segments = zone_boundary_segments(labels)
+    edges = {(tuple(np.round(a, 3)), tuple(np.round(b, 3))) for a, b in segments}
+    expected = {
+        ((0.5, 0.5), (0.5, 1.5)),
+        ((0.5, 1.5), (0.5, 2.5)),
+        ((1.5, -0.5), (1.5, 0.5)),
+        ((1.5, 0.5), (1.5, 1.5)),
+        ((1.5, 1.5), (1.5, 2.5)),
+        ((0.5, 0.5), (1.5, 0.5)),
+    }
+    assert edges == expected
+
+
+def test_zone_boundary_segments_skips_masked_neighbours() -> None:
+    labels = np.ma.masked_array(
+        np.array([[1, 2], [1, 2]], dtype=np.int64),
+        mask=np.array([[False, True], [False, False]], dtype=bool),
+    )
+    segments = zone_boundary_segments(labels)
+    assert segments.shape[0] == 1
+    (start, end) = segments[0]
+    assert tuple(np.round(start, 3)) == (0.5, 0.5)
+    assert tuple(np.round(end, 3)) == (0.5, 1.5)

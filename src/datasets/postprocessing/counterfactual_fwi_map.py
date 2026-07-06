@@ -18,11 +18,11 @@ import pandas as pd
 import rasterio
 from matplotlib.colors import Normalize, TwoSlopeNorm
 
-from data_preparation.spatial.utils import load_spatial_raster
 from src.datasets.postprocessing.counterfactual_fwi import THERMO_SWAP_COLUMNS
 from src.datasets.postprocessing.counterfactual_viz import (
     downsample_for_display,
     finite_values,
+    overlay_zone_boundaries,
     plot_delta_histogram,
     prediction_dirs_from_index,
     prediction_raster_path,
@@ -43,6 +43,7 @@ from src.datasets.postprocessing.counterfactual_weather_maps import (
     extent_km,
     load_burnable_support,
     load_ground_truth,
+    load_zone_labels,
     raw_data_dir_from_config,
 )
 
@@ -61,7 +62,6 @@ plt.rcParams.update(
 )
 
 GT_RELATIVE_PATH = "results/burnP3Plus_OutputFireIntensitySummaryMap/fbpSummary-FireIntensity-Average.tif"
-FIREZONES_RELATIVE_PATH = "spatial/hex{hex_int:02d}_firezones.tif"
 DAILY_SCENARIOS = ("fwi_daily_low_to_high", "fwi_daily_high_to_low")
 SCENARIO_TITLES = {
     "fwi_daily_low_to_high": "Low\u2192High FWI (intensified regime)",
@@ -110,12 +110,6 @@ def load_response(prediction_dirs: dict[tuple[str, str], Path], hex_id: str, raw
     return ground_truth, baseline, scenarios, extent, reference_profile
 
 
-def load_zone_labels(raw_data_dir: Path, hex_id: str, reference_profile: dict) -> np.ma.MaskedArray:
-    firezones_path = raw_data_dir / f"hex{int(hex_id):02d}" / FIREZONES_RELATIVE_PATH.format(hex_int=int(hex_id))
-    zones, _ = load_spatial_raster(path=firezones_path, reference_profile=reference_profile)
-    return zones
-
-
 def plot_before_after_change(
     ground_truth: np.ma.MaskedArray,
     baseline: np.ma.MaskedArray,
@@ -124,6 +118,7 @@ def plot_before_after_change(
     *,
     out_path: Path,
     downsample: int,
+    zone_labels: np.ma.MaskedArray | None = None,
 ) -> None:
     pooled_fi = [finite_values(ground_truth), finite_values(baseline)] + [finite_values(scenarios[s]["fi"]) for s in DAILY_SCENARIOS]
     fi_vmax = float(np.percentile(np.concatenate(pooled_fi), 99.0))
@@ -157,6 +152,7 @@ def plot_before_after_change(
         for col, (data, title, cmap, norm, cbar_label) in enumerate(panels):
             ax = axes[row, col]
             image = ax.imshow(data, cmap=cmap, norm=norm, extent=extent, origin="upper", interpolation="nearest")
+            overlay_zone_boundaries(ax, zone_labels, extent=extent)
             ax.set_title(title)
             ax.set_aspect("equal")
             ax.set_xticks([])
@@ -321,6 +317,7 @@ def plot_zone_fwi_map(
                 origin="upper",
                 interpolation="nearest",
             )
+            overlay_zone_boundaries(ax, zone_labels, extent=extent)
             ax.set_title(title, fontsize=14)
             ax.set_aspect("equal")
             ax.set_xticks([])
@@ -565,6 +562,7 @@ def plot_patch_zoom(
     window: int,
     center: tuple[int, int],
     rank: int,
+    zone_labels: np.ma.MaskedArray | None = None,
 ) -> None:
     pooled_fi = [finite_values(baseline)] + [finite_values(scenarios[s]["fi"]) for s in DAILY_SCENARIOS]
     fi_norm = Normalize(vmin=0.0, vmax=float(np.percentile(np.concatenate(pooled_fi), 99.0)))
@@ -577,6 +575,7 @@ def plot_patch_zoom(
     c0 = max(center_col - half, 0)
     r1 = min(r0 + window, baseline.shape[0])
     c1 = min(c0 + window, baseline.shape[1])
+    zone_window = zone_labels[r0:r1, c0:c1] if zone_labels is not None else None
 
     fig, axes = plt.subplots(2, 3, figsize=(15.0, 10.0))
     for row, scenario in enumerate(DAILY_SCENARIOS):
@@ -594,6 +593,7 @@ def plot_patch_zoom(
         for col, (data, title, cmap, norm, cbar_label) in enumerate(panels):
             ax = axes[row, col]
             image = ax.imshow(data, cmap=cmap, norm=norm, origin="upper", interpolation="nearest")
+            overlay_zone_boundaries(ax, zone_window)
             ax.set_title(title)
             ax.set_aspect("equal")
             ax.set_xticks([])
@@ -627,7 +627,7 @@ def main() -> None:
     raw_data_dir = args.raw_data_dir if args.raw_data_dir is not None else raw_data_dir_from_config(args.experiment_dir, endpoint="fi")
     prediction_dirs = prediction_dirs_from_index(args.experiment_dir)
     ground_truth, baseline, scenarios, extent, reference_profile = load_response(prediction_dirs, args.hex_id, raw_data_dir)
-    zone_labels = load_zone_labels(raw_data_dir, args.hex_id, reference_profile)
+    zone_labels = load_zone_labels(raw_data_dir, args.hex_id, reference_profile, support=~np.ma.getmaskarray(baseline))
 
     plot_before_after_change(
         ground_truth,
@@ -636,6 +636,7 @@ def main() -> None:
         extent,
         out_path=out_dir / "fwi_daily_fi_response_maps.png",
         downsample=args.downsample,
+        zone_labels=zone_labels,
     )
     plot_delta_distribution(scenarios, out_path=out_dir / "fwi_daily_delta_distribution.png")
     plot_delta_vs_baseline(baseline, scenarios, out_path=out_dir / "fwi_daily_delta_vs_baseline.png")
@@ -654,6 +655,7 @@ def main() -> None:
             window=args.patch_window,
             center=center,
             rank=rank,
+            zone_labels=zone_labels,
         )
 
     edit_summary_path = args.experiment_dir / "fwi_edit_summary.csv"

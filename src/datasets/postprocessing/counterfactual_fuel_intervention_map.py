@@ -19,11 +19,13 @@ from src.datasets.postprocessing.counterfactual_materialize import (
     _patch_records,
 )
 from src.datasets.postprocessing.counterfactual_viz import (
+    overlay_zone_boundaries,
     prediction_dirs_from_index,
     prediction_raster_path,
     prediction_reference_profile,
     read_prediction,
 )
+from src.datasets.postprocessing.counterfactual_weather_maps import load_zone_labels
 from src.datasets.postprocessing.fuel_barrier_geometry import load_grouped_fuel_on_prediction_grid
 
 matplotlib.use("Agg")
@@ -266,6 +268,7 @@ def plot_intervention_map(
     hex_id: str,
     out_path: Path,
     downsample: int = 2,
+    zone_labels: np.ma.MaskedArray | None = None,
 ) -> None:
     """Write the two-panel original fuel/replacement intervention map."""
 
@@ -291,6 +294,7 @@ def plot_intervention_map(
 
     fig, axes = plt.subplots(1, 2, figsize=(14.5, 7.5), constrained_layout=True, sharex=True, sharey=True)
     ax_original, ax_replacement = axes
+    zone_display = _downsample(zone_labels, downsample) if zone_labels is not None else None
 
     ax_original.imshow(
         _downsample(support_context, downsample),
@@ -312,6 +316,7 @@ def plot_intervention_map(
         origin="upper",
     )
     ax_original.set_title("A. Original grouped fuel map\n(non-fuel barriers in black)")
+    overlay_zone_boundaries(ax_original, zone_display)
     ax_original.set_xticks([])
     ax_original.set_yticks([])
     ax_original.set_aspect("equal")
@@ -330,6 +335,7 @@ def plot_intervention_map(
             origin="upper",
         )
     ax_replacement.set_title("B. Counterfactual replacement map\n(edited barrier pixels coloured by assigned fuel)")
+    overlay_zone_boundaries(ax_replacement, zone_display)
     ax_replacement.set_xticks([])
     ax_replacement.set_yticks([])
     ax_replacement.set_aspect("equal")
@@ -379,6 +385,7 @@ def write_fuel_intervention_map(
     hex_id: str = "16",
     downsample: int = 2,
     support_policy: str = "prediction",
+    out_dir: Path | None = None,
 ) -> tuple[Path, Path]:
     if support_policy not in {"prediction", "prepared_patch"}:
         raise ValueError("support_policy must be one of {'prediction', 'prepared_patch'}.")
@@ -410,8 +417,18 @@ def write_fuel_intervention_map(
         unexpected_burnable_changes=unexpected_burnable_changes,
     )
 
-    plot_path = experiment_dir / "plots" / f"hex{int(hex_id):02d}_{scenario}_fuel_intervention_map.png"
+    out_dir = out_dir if out_dir is not None else experiment_dir / "figures" / "fuel_intervention"
+    plot_path = out_dir / f"hex{int(hex_id):02d}_{scenario}_fuel_intervention_map.png"
     summary_path = experiment_dir / f"counterfactual_{scenario}_fuel_intervention_summary.csv"
+    zone_labels = None
+    if raw_data_dir is not None:
+        prediction_dirs = prediction_dirs_from_index(experiment_dir)
+        zone_labels = load_zone_labels(
+            raw_data_dir,
+            hex_id,
+            prediction_reference_profile(prediction_dirs, hex_id),
+            support=np.isfinite(np.asarray(baseline_fuel)),
+        )
     plot_intervention_map(
         baseline_fuel=baseline_fuel,
         replacement_map=replacement_map,
@@ -420,6 +437,7 @@ def write_fuel_intervention_map(
         hex_id=hex_id,
         out_path=plot_path,
         downsample=max(1, int(downsample)),
+        zone_labels=zone_labels,
     )
     pd.DataFrame([asdict(summary)]).to_csv(summary_path, index=False)
     return plot_path, summary_path
@@ -438,6 +456,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hex_id", default="16")
     parser.add_argument("--downsample", type=int, default=2)
     parser.add_argument("--support_policy", choices=("prediction", "prepared_patch"), default="prediction")
+    parser.add_argument("--out_dir", type=Path, default=None, help="Defaults to experiment_dir/figures/fuel_intervention.")
     return parser.parse_args()
 
 
@@ -451,6 +470,7 @@ def main() -> None:
         hex_id=str(args.hex_id).zfill(2),
         downsample=args.downsample,
         support_policy=args.support_policy,
+        out_dir=args.out_dir,
     )
     print(f"Wrote fuel intervention map: {plot_path}")
     print(f"Wrote fuel intervention summary: {summary_path}")

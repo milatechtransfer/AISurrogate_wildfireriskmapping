@@ -28,7 +28,7 @@ from src.datasets.postprocessing.counterfactual_viz import (
     plot_delta_histogram,
     prediction_dirs_from_index,
 )
-from src.datasets.postprocessing.counterfactual_weather_maps import raw_data_dir_from_config
+from src.datasets.postprocessing.counterfactual_weather_maps import load_zone_labels, raw_data_dir_from_config
 
 DELTA_COLOR = "#b2182b"
 
@@ -71,9 +71,10 @@ def main() -> None:
             hex_id=args.hex_id,
         )
 
-    ground_truth, baseline, scenario_ros, delta, extent, _ = load_ros_response(
+    ground_truth, baseline, scenario_ros, delta, extent, reference_profile = load_ros_response(
         prediction_dirs, args.hex_id, raw_data_dir, scenario=args.scenario, fuel_filled_mask=fuel_filled_mask
     )
+    zone_labels = load_zone_labels(raw_data_dir, args.hex_id, reference_profile, support=~np.ma.getmaskarray(baseline))
 
     plot_ros_response_maps(
         ground_truth,
@@ -85,6 +86,7 @@ def main() -> None:
         scenario_label=label,
         suptitle=f"ROS response \u2014 {label} (hex 16)",
         downsample=args.downsample,
+        zone_labels=zone_labels,
     )
     plot_ros_patch_zoom(
         ground_truth,
@@ -97,6 +99,7 @@ def main() -> None:
         window=args.patch_window,
         hotspot_block=args.hotspot_block,
         patch_count=args.patch_count,
+        zone_labels=zone_labels,
     )
     plot_delta_histogram(
         delta,

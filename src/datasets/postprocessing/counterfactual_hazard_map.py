@@ -19,6 +19,7 @@ from data_preparation.paths import Paths
 from data_preparation.spatial.utils import load_spatial_raster
 from src.datasets.postprocessing.counterfactual_viz import (
     downsample_for_display,
+    overlay_zone_boundaries,
     prediction_dirs_from_index,
     prediction_raster_path,
     prediction_reference_profile,
@@ -28,6 +29,7 @@ from src.datasets.postprocessing.counterfactual_viz import (
     symmetric_percentile_limit,
     values_and_valid,
 )
+from src.datasets.postprocessing.counterfactual_weather_maps import load_zone_labels
 from src.datasets.postprocessing.fuel_barrier_geometry import (
     DISPLAY_SCENARIO,
     load_barrier_layers_on_prediction_grid,
@@ -219,6 +221,7 @@ def plot_hazard_delta_maps(
     downsample: int = 2,
     overlay_barriers: bool = True,
     support_policy: str = "raw_valid_output",
+    out_dir: Path | None = None,
 ) -> tuple[Path, Path]:
     """Write a full-hex map of counterfactual hazard deltas."""
 
@@ -255,6 +258,12 @@ def plot_hazard_delta_maps(
 
     baseline_bp_dir = prediction_dirs[("baseline", "bp")]
     extent = read_prediction_extent(prediction_raster_path(baseline_bp_dir, hex_id))
+    zone_labels = load_zone_labels(
+        raw_data_dir,
+        hex_id,
+        prediction_reference_profile(prediction_dirs, hex_id),
+        support=~np.ma.getmaskarray(next(iter(scenario_data.values()))[0]),
+    )
     barrier_mask = None
     if overlay_barriers:
         barrier_mask = original_barrier_mask(
@@ -275,6 +284,7 @@ def plot_hazard_delta_maps(
             origin="upper",
             interpolation="nearest",
         )
+        overlay_zone_boundaries(ax, zone_labels, extent=extent)
         if barrier_mask is not None:
             ax.contour(
                 downsample_for_display(barrier_mask.astype(np.float32), downsample),
@@ -295,7 +305,7 @@ def plot_hazard_delta_maps(
         cbar.set_label(f"Δ hazard = scenario − baseline (clipped at pooled p{percentile:g})")
 
     fig.suptitle(f"Hex{int(hex_id):02d} counterfactual hazard delta maps", y=0.96)
-    out_dir = experiment_dir / "plots"
+    out_dir = out_dir if out_dir is not None else experiment_dir / "figures" / "hazard"
     out_dir.mkdir(parents=True, exist_ok=True)
     plot_path = out_dir / f"hex{int(hex_id):02d}_hazard_delta_maps_{support_policy}.png"
     fig.savefig(plot_path, dpi=220, bbox_inches="tight")
@@ -342,6 +352,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--no_barrier_overlay", action="store_true")
+    parser.add_argument("--out_dir", type=Path, default=None, help="Defaults to experiment_dir/figures/hazard.")
     return parser.parse_args()
 
 
@@ -357,6 +368,7 @@ def main() -> None:
         downsample=max(1, int(args.downsample)),
         overlay_barriers=not args.no_barrier_overlay,
         support_policy=args.support_policy,
+        out_dir=args.out_dir,
     )
     print(f"Wrote hazard delta map: {plot_path}")
     print(f"Wrote hazard delta map summary: {summary_path}")

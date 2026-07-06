@@ -19,6 +19,7 @@ from matplotlib.colors import Normalize, TwoSlopeNorm
 from src.datasets.postprocessing.counterfactual_viz import (
     downsample_for_display,
     finite_values,
+    overlay_zone_boundaries,
     prediction_raster_path,
     read_prediction,
     read_prediction_extent,
@@ -140,6 +141,7 @@ def plot_ros_response_maps(
     scenario_label: str,
     suptitle: str,
     downsample: int,
+    zone_labels: np.ma.MaskedArray | None = None,
 ) -> None:
     """Ground-truth / baseline / scenario / Δ ROS maps across the whole hex."""
 
@@ -165,6 +167,7 @@ def plot_ros_response_maps(
             origin="upper",
             interpolation="nearest",
         )
+        overlay_zone_boundaries(ax, zone_labels, extent=extent)
         ax.set_title(_panel_title(title), pad=12)
         ax.set_aspect("equal")
         ax.set_xticks([])
@@ -191,6 +194,7 @@ def plot_ros_patch_zoom(
     hotspot_block: int,
     patch_count: int,
     centers: list[tuple[int, int]] | None = None,
+    zone_labels: np.ma.MaskedArray | None = None,
 ) -> None:
     """Ground-truth/baseline/scenario/Δ ROS zoom-ins on the highest-response windows.
 
@@ -212,6 +216,7 @@ def plot_ros_patch_zoom(
         c0 = max(center_col - half, 0)
         r1 = min(r0 + window, baseline.shape[0])
         c1 = min(c0 + window, baseline.shape[1])
+        zone_window = zone_labels[r0:r1, c0:c1] if zone_labels is not None else None
         panels = [
             (ground_truth[r0:r1, c0:c1], "Ground truth ROS (BurnP3+)", "viridis", ros_norm, "ROS (m/min)"),
             (baseline[r0:r1, c0:c1], "Baseline ROS", "viridis", ros_norm, "ROS (m/min)"),
@@ -221,6 +226,7 @@ def plot_ros_patch_zoom(
         for col, (data, title, cmap, norm, cbar_label) in enumerate(panels):
             ax = axes[row, col]
             image = ax.imshow(data, cmap=cmap, norm=norm, origin="upper", interpolation="nearest")
+            overlay_zone_boundaries(ax, zone_window)
             ax.set_title(_panel_title(title), pad=12)
             ax.set_aspect("equal")
             ax.set_xticks([])

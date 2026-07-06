@@ -21,12 +21,14 @@ from src.datasets.postprocessing.counterfactual_fuel_intervention_map import (
 )
 from src.datasets.postprocessing.counterfactual_viz import (
     finite_values,
+    overlay_zone_boundaries,
     prediction_dirs_from_index,
     prediction_raster_path,
     prediction_reference_profile,
     read_prediction,
     values_and_valid,
 )
+from src.datasets.postprocessing.counterfactual_weather_maps import load_zone_labels
 from src.datasets.postprocessing.fuel_barrier_geometry import load_grouped_fuel_on_prediction_grid
 
 matplotlib.use("Agg")
@@ -324,6 +326,7 @@ def plot_neighborhood_grid(
     delta_label: str,
     out_path: Path,
     row_labels: list[str] | None = None,
+    zone_labels: np.ma.MaskedArray | None = None,
 ) -> None:
     """Plot intervention, replacement, baseline, scenario, and delta for selected windows."""
 
@@ -378,6 +381,7 @@ def plot_neighborhood_grid(
         row_label = row_labels[row_idx] if row_labels is not None and row_idx < len(row_labels) else f"Neighborhood {window.rank}"
         support_crop = crop(valid_mask, window).filled(False).astype(bool)
         barrier_crop = crop(barrier_mask, window).filled(False).astype(bool) & support_crop
+        zone_crop = crop(zone_labels, window) if zone_labels is not None else None
         replacement_crop = np.ma.masked_where(~support_crop, crop(replacement_map, window))
         replacement_codes = _categorical_codes(replacement_crop, replacement_categories)
         support_context = np.where(support_crop, 1.0, 0.0)
@@ -414,6 +418,7 @@ def plot_neighborhood_grid(
                     sequential_image = image
                 else:
                     delta_image = image
+            overlay_zone_boundaries(ax, zone_crop)
             ax.set_xticks([])
             ax.set_yticks([])
             ax.set_aspect("equal")
@@ -484,6 +489,7 @@ def write_local_neighborhood_panels(
     min_barrier_pixels: int = 1500,
     exclude_border_pixels: int = 100,
     min_valid_fraction: float = 0.95,
+    out_dir: Path | None = None,
 ) -> tuple[Path, Path, Path]:
     prediction_dirs = prediction_dirs_from_index(experiment_dir)
     baseline_bp, scenario_bp, baseline_fi, scenario_fi = _prediction_arrays(
@@ -505,6 +511,7 @@ def write_local_neighborhood_panels(
     hazard_values, hazard_valid = values_and_valid(delta_hazard)
     fi_values, fi_valid = values_and_valid(delta_fi)
     valid_mask = hazard_valid & fi_valid & np.isfinite(hazard_values) & np.isfinite(fi_values)
+    zone_labels = load_zone_labels(raw_data_dir, hex_id, prediction_reference_profile(prediction_dirs, hex_id), support=valid_mask)
     selection_barrier_mask = original_nonfuel & valid_mask
     replacement_map = np.where(selection_barrier_mask, replacement_map, np.nan)
     windows = select_neighborhood_windows(
@@ -520,7 +527,8 @@ def write_local_neighborhood_panels(
         min_valid_fraction=min_valid_fraction,
     )
 
-    out_dir = experiment_dir / "plots"
+    out_dir = out_dir if out_dir is not None else experiment_dir / "figures" / "fuel_local_zoom"
+    out_dir.mkdir(parents=True, exist_ok=True)
     fi_plot_path = out_dir / f"hex{int(hex_id):02d}_{scenario}_local_neighborhood_fi.png"
     hazard_plot_path = out_dir / f"hex{int(hex_id):02d}_{scenario}_local_neighborhood_hazard.png"
     plot_neighborhood_grid(
@@ -536,6 +544,7 @@ def write_local_neighborhood_panels(
         sequential_label="Predicted FI",
         delta_label="ΔFI = counterfactual − baseline",
         out_path=fi_plot_path,
+        zone_labels=zone_labels,
     )
     plot_neighborhood_grid(
         grouped_fuel=grouped_fuel,
@@ -550,6 +559,7 @@ def write_local_neighborhood_panels(
         sequential_label="Predicted hazard = BP × FI",
         delta_label="Δhazard = counterfactual − baseline",
         out_path=hazard_plot_path,
+        zone_labels=zone_labels,
     )
 
     rows = [
@@ -598,6 +608,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min_barrier_pixels", type=int, default=1500)
     parser.add_argument("--exclude_border_pixels", type=int, default=100)
     parser.add_argument("--min_valid_fraction", type=float, default=0.95)
+    parser.add_argument("--out_dir", type=Path, default=None, help="Defaults to experiment_dir/figures/fuel_local_zoom.")
     return parser.parse_args()
 
 
@@ -614,6 +625,7 @@ def main() -> None:
         min_barrier_pixels=max(1, int(args.min_barrier_pixels)),
         exclude_border_pixels=max(0, int(args.exclude_border_pixels)),
         min_valid_fraction=float(args.min_valid_fraction),
+        out_dir=args.out_dir,
     )
     print(f"Wrote local FI neighborhood panels: {fi_plot_path}")
     print(f"Wrote local hazard neighborhood panels: {hazard_plot_path}")
