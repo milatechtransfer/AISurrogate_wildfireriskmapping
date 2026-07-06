@@ -337,11 +337,13 @@ def write_fi_replacement_maps(
     prediction_dirs = prediction_dirs_from_index(experiment_dir)
     baseline_fi, scenario_fi, delta = fi_delta(prediction_dirs, scenario=scenario, hex_id=hex_id)
     support = original_valid_fi_support(raw_data_dir=raw_data_dir, prediction_dirs=prediction_dirs, hex_id=hex_id)
+    hex_support = ~np.ma.getmaskarray(baseline_fi)
     replacement_mask, pixel_h_m, pixel_w_m = replacement_mask_on_prediction_grid(
         raw_data_dir=raw_data_dir,
         prediction_dirs=prediction_dirs,
         hex_id=hex_id,
     )
+    replacement_mask = replacement_mask & hex_support
     dist_m, _, _ = compute_distance_fields(replacement_mask, pixel_h_m, pixel_w_m, return_nearest_indices=False)
 
     paired_baseline_fi = restrict_to_support(baseline_fi, support)
@@ -365,7 +367,7 @@ def write_fi_replacement_maps(
         raw_data_dir,
         hex_id,
         prediction_reference_profile(prediction_dirs, hex_id, baseline_endpoint="fi"),
-        support=~np.ma.getmaskarray(baseline_fi),
+        support=hex_support,
     )
 
     out_dir = out_dir if out_dir is not None else experiment_dir / "figures" / "fuel_fi"

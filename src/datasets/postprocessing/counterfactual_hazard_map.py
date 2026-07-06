@@ -258,11 +258,12 @@ def plot_hazard_delta_maps(
 
     baseline_bp_dir = prediction_dirs[("baseline", "bp")]
     extent = read_prediction_extent(prediction_raster_path(baseline_bp_dir, hex_id))
+    display_support = ~np.ma.getmaskarray(next(iter(scenario_data.values()))[0])
     zone_labels = load_zone_labels(
         raw_data_dir,
         hex_id,
         prediction_reference_profile(prediction_dirs, hex_id),
-        support=~np.ma.getmaskarray(next(iter(scenario_data.values()))[0]),
+        support=display_support,
     )
     barrier_mask = None
     if overlay_barriers:
@@ -271,6 +272,7 @@ def plot_hazard_delta_maps(
             prediction_dirs=prediction_dirs,
             hex_id=hex_id,
         )
+        barrier_mask = barrier_mask & display_support
 
     fig, axes = plt.subplots(1, len(scenarios), figsize=(6.0 * len(scenarios), 7.0), squeeze=False)
     image = None
