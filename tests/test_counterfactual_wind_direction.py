@@ -14,6 +14,7 @@ from src.datasets.postprocessing.counterfactual_wind_direction import (
     apply_wind_direction_scenario,
     dominant_from_bearing,
     uniform_direction_edit,
+    zone_uniform_direction_edit,
 )
 
 
@@ -77,6 +78,36 @@ def test_uniform_direction_keeps_wind_speed() -> None:
     assert np.allclose(edited["WindSpeed"], processed["WindSpeed"])
 
 
+def test_zone_uniform_direction_uses_zone_dominant_bearings() -> None:
+    raw, processed, stats = _build_weather([1.0, 100.0, 50.0, 1.0], [0.0, 90.0, 180.0, 270.0])
+    raw["WeatherZone"] = [1, 1, 2, 2]
+    processed["WeatherZone"] = raw["WeatherZone"]
+
+    edited, report = zone_uniform_direction_edit(raw, processed, stats)
+
+    zone_1_bearing = float(report.loc[report["zone"] == 1, "from_bearing_deg"].iloc[0])
+    zone_2_bearing = float(report.loc[report["zone"] == 2, "from_bearing_deg"].iloc[0])
+    assert zone_1_bearing == pytest.approx(dominant_from_bearing(np.array([1.0, 100.0]), np.array([0.0, 90.0])))
+    assert zone_2_bearing == pytest.approx(dominant_from_bearing(np.array([50.0, 1.0]), np.array([180.0, 270.0])))
+    assert np.allclose(edited.loc[raw["WeatherZone"] == 1, "WindDirection"], zone_1_bearing)
+    assert np.allclose(edited.loc[raw["WeatherZone"] == 2, "WindDirection"], zone_2_bearing)
+    assert np.allclose(edited["WindSpeed"], processed["WindSpeed"])
+
+
+def test_zone_uniform_direction_applies_opposite_offset_per_zone() -> None:
+    raw, processed, stats = _build_weather([1.0, 100.0, 50.0, 1.0], [0.0, 90.0, 180.0, 270.0])
+    raw["WeatherZone"] = [1, 1, 2, 2]
+    processed["WeatherZone"] = raw["WeatherZone"]
+
+    dominant, dominant_report = zone_uniform_direction_edit(raw, processed, stats)
+    opposite, opposite_report = zone_uniform_direction_edit(raw, processed, stats, offset_deg=180.0)
+
+    merged = dominant_report.merge(opposite_report, on="zone", suffixes=("_dominant", "_opposite"))
+    assert np.allclose((merged["from_bearing_deg_opposite"] - merged["from_bearing_deg_dominant"]) % 360.0, 180.0)
+    assert np.allclose(_reconstruct_raw(opposite, stats, "wind_x"), -_reconstruct_raw(dominant, stats, "wind_x"))
+    assert np.allclose(_reconstruct_raw(opposite, stats, "wind_y"), -_reconstruct_raw(dominant, stats, "wind_y"))
+
+
 def test_opposite_offset_flips_raw_components_and_bearing() -> None:
     raw, processed, stats = _build_weather([4.0, 10.0, 16.0, 22.0], [10.0, 120.0, 210.0, 300.0])
     base, base_report = uniform_direction_edit(raw, processed, stats, offset_deg=0.0)
@@ -98,5 +129,8 @@ def test_apply_wind_direction_scenario_dispatches_and_rejects_unknown_mode() -> 
     edited, report = apply_wind_direction_scenario(raw, processed, stats, {"mode": "uniform_direction", "offset_deg": 180.0})
     assert not edited.empty
     assert not report.empty
+    edited, report = apply_wind_direction_scenario(raw, processed, stats, {"mode": "zone_uniform_direction"})
+    assert not edited.empty
+    assert set(report["zone"]) == {1}
     with pytest.raises(ValueError):
         apply_wind_direction_scenario(raw, processed, stats, {"mode": "nope"})

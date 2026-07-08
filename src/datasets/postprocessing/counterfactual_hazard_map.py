@@ -18,6 +18,10 @@ from rasterio.features import geometry_mask
 from data_preparation.paths import Paths
 from data_preparation.spatial.utils import load_spatial_raster
 from src.datasets.postprocessing.counterfactual_viz import (
+    DEFAULT_ZONE_OVERLAY_ALPHA,
+    DEFAULT_ZONE_OVERLAY_COLOR,
+    DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    add_zone_overlay_args,
     downsample_for_display,
     overlay_zone_boundaries,
     prediction_dirs_from_index,
@@ -220,6 +224,10 @@ def plot_hazard_delta_maps(
     percentile: float = 99.5,
     downsample: int = 2,
     overlay_barriers: bool = True,
+    zone_overlay: bool = False,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
     support_policy: str = "raw_valid_output",
     out_dir: Path | None = None,
 ) -> tuple[Path, Path]:
@@ -259,12 +267,14 @@ def plot_hazard_delta_maps(
     baseline_bp_dir = prediction_dirs[("baseline", "bp")]
     extent = read_prediction_extent(prediction_raster_path(baseline_bp_dir, hex_id))
     display_support = ~np.ma.getmaskarray(next(iter(scenario_data.values()))[0])
-    zone_labels = load_zone_labels(
-        raw_data_dir,
-        hex_id,
-        prediction_reference_profile(prediction_dirs, hex_id),
-        support=display_support,
-    )
+    zone_labels = None
+    if zone_overlay:
+        zone_labels = load_zone_labels(
+            raw_data_dir,
+            hex_id,
+            prediction_reference_profile(prediction_dirs, hex_id),
+            support=display_support,
+        )
     barrier_mask = None
     if overlay_barriers:
         barrier_mask = original_barrier_mask(
@@ -286,7 +296,14 @@ def plot_hazard_delta_maps(
             origin="upper",
             interpolation="nearest",
         )
-        overlay_zone_boundaries(ax, zone_labels, extent=extent)
+        overlay_zone_boundaries(
+            ax,
+            zone_labels,
+            extent=extent,
+            color=zone_overlay_color,
+            linewidth=zone_overlay_linewidth,
+            alpha=zone_overlay_alpha,
+        )
         if barrier_mask is not None:
             ax.contour(
                 downsample_for_display(barrier_mask.astype(np.float32), downsample),
@@ -355,6 +372,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--no_barrier_overlay", action="store_true")
     parser.add_argument("--out_dir", type=Path, default=None, help="Defaults to experiment_dir/figures/hazard.")
+    add_zone_overlay_args(parser)
     return parser.parse_args()
 
 
@@ -369,6 +387,10 @@ def main() -> None:
         percentile=args.percentile,
         downsample=max(1, int(args.downsample)),
         overlay_barriers=not args.no_barrier_overlay,
+        zone_overlay=args.zone_overlay,
+        zone_overlay_color=args.zone_overlay_color,
+        zone_overlay_linewidth=args.zone_overlay_linewidth,
+        zone_overlay_alpha=args.zone_overlay_alpha,
         support_policy=args.support_policy,
         out_dir=args.out_dir,
     )

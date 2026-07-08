@@ -23,9 +23,11 @@ from src.datasets.postprocessing.counterfactual_ros_maps import (
     plot_ros_response_maps,
 )
 from src.datasets.postprocessing.counterfactual_viz import (
+    add_zone_overlay_args,
     finite_values,
     plot_delta_histogram,
     prediction_dirs_from_index,
+    prediction_footprint,
 )
 from src.datasets.postprocessing.counterfactual_weather_maps import load_zone_labels, raw_data_dir_from_config
 
@@ -70,6 +72,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hotspot_block", type=int, default=64, help="Block size for locating high-response windows.")
     parser.add_argument("--patch_count", type=int, default=3, help="Number of distinct high-response windows to render.")
     parser.add_argument("--out_dir", type=Path, default=None, help="Defaults to experiment_dir/figures/wind_zone_peak.")
+    add_zone_overlay_args(parser)
     return parser.parse_args()
 
 
@@ -81,7 +84,14 @@ def main() -> None:
     ground_truth, baseline, scenario_ros, delta, extent, reference_profile = load_ros_response(
         prediction_dirs, args.hex_id, raw_data_dir, scenario=SCENARIO
     )
-    zone_labels = load_zone_labels(raw_data_dir, args.hex_id, reference_profile, support=~np.ma.getmaskarray(baseline))
+    zone_labels = None
+    if args.zone_overlay:
+        zone_labels = load_zone_labels(
+            raw_data_dir,
+            args.hex_id,
+            reference_profile,
+            support=prediction_footprint(prediction_dirs, args.hex_id, endpoint=ENDPOINT),
+        )
 
     plot_ros_response_maps(
         ground_truth,
@@ -94,6 +104,9 @@ def main() -> None:
         suptitle="ROS response to per-zone peak-wind regime transplant (hex 16)",
         downsample=args.downsample,
         zone_labels=zone_labels,
+        zone_overlay_color=args.zone_overlay_color,
+        zone_overlay_linewidth=args.zone_overlay_linewidth,
+        zone_overlay_alpha=args.zone_overlay_alpha,
     )
     plot_ros_patch_zoom(
         ground_truth,
@@ -107,6 +120,9 @@ def main() -> None:
         hotspot_block=args.hotspot_block,
         patch_count=args.patch_count,
         zone_labels=zone_labels,
+        zone_overlay_color=args.zone_overlay_color,
+        zone_overlay_linewidth=args.zone_overlay_linewidth,
+        zone_overlay_alpha=args.zone_overlay_alpha,
     )
     plot_delta_histogram(
         delta,

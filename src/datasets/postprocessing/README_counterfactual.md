@@ -32,7 +32,7 @@ Edit logic (one per scenario `kind`):
 - `counterfactual_fuel.py` — fuel-grid edits (`kind: fuel`)
 - `counterfactual_fwi.py` — daily FWI-regime swap (`kind: fwi`)
 - `counterfactual_wind_regime.py` — per-zone wind regime transplant (`kind: wind_regime`)
-- `counterfactual_wind_direction.py` — uniform wind-direction rotation (`kind: wind_direction`)
+- `counterfactual_wind_direction.py` — uniform wind-direction rotation (`kind: wind_direction`), either hex-wide or per-zone
 - `counterfactual_weather.py` — wind re-encoding + roundtrip validation shared by the weather kinds
 
 A `composite` kind applies one fuel edit **and** one weather edit in a single
@@ -49,7 +49,8 @@ Figures (each consumes the predictions for its scenario family):
   `counterfactual_fuel_intervention_map.py`, `counterfactual_local_zoom_panels.py`
 - fwi: `counterfactual_fwi_map.py`
 - wind_regime: `counterfactual_wind_regime_map.py`
-- wind_direction: `counterfactual_wind_direction_map.py` (paired dominant vs +180° mirror)
+- wind_direction: `counterfactual_wind_direction_map.py` (paired dominant vs +180° mirror; add
+  `--direction_scope zone` for per-zone dominant/opposite scenarios)
 - any ROS scenario: `counterfactual_ros_scenario_map.py` (generic single-scenario
   response maps + patch zoom + delta histogram; use for `composite` scenarios). For
   fuel-editing scenarios it masks non-fuel in the ground-truth/baseline panels but
@@ -91,6 +92,15 @@ python -m src.datasets.postprocessing.counterfactual_compare
 
 # 4. Figures for that scenario's family (see the module map above)
 python -m src.datasets.postprocessing.counterfactual_fwi_map
+```
+
+Firezone boundaries are opt-in on counterfactual map scripts:
+
+```bash
+python -m src.datasets.postprocessing.counterfactual_wind_direction_map \
+    --zone_overlay \
+    --zone_overlay_linewidth 1.4 \
+    --zone_overlay_color "#111111"
 ```
 
 Scoping notes:

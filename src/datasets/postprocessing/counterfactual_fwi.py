@@ -44,7 +44,8 @@ THERMO_SWAP_COLUMNS: tuple[str, ...] = (
 FWI_COLUMN = "FireWeatherIndex"
 RAW_WIND_SPEED_COLUMN = "WindSpeed"
 SWAP_DIRECTIONS: tuple[str, ...] = ("low_to_high", "high_to_low")
-SWAP_MODES: tuple[str, ...] = ("daily_regime_swap",)
+SWAP_MODES: tuple[str, ...] = ("daily_regime_swap", "external_extreme_transplant")
+STRUCTURAL_COLUMNS: tuple[str, ...] = ("Order", "Season", "WeatherZone")
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,27 @@ class FwiZoneEditReport:
     n_high: int
     n_recipients: int
     donor_zone: int | None
+    baseline_fwi_mean: float
+    scenario_fwi_mean: float
+    note: str
+
+
+@dataclass(frozen=True)
+class ExternalExtremeWeatherReport:
+    """Summary of one external high-FWI weather-row transplant."""
+
+    donor_hex_id: str
+    donor_row_index: int
+    donor_order: int
+    donor_season: int | str
+    donor_zone: int | str
+    donor_fwi: float
+    donor_temperature: float
+    donor_relative_humidity: float
+    donor_wind_speed: float
+    donor_wind_direction: float
+    n_rows: int
+    n_zones: int
     baseline_fwi_mean: float
     scenario_fwi_mean: float
     note: str
@@ -170,6 +192,49 @@ def daily_regime_swap(
     return processed_edited, _report_frame(reports)
 
 
+def external_extreme_weather_transplant(
+    processed_hex: pd.DataFrame,
+    *,
+    donor_processed_row: pd.Series,
+    donor_raw_row: pd.Series,
+    donor_hex_id: str,
+    donor_row_index: int,
+    transplant_columns: tuple[str, ...] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Copy one external donor weather row into every recipient row."""
+
+    processed_edited = processed_hex.reset_index(drop=True).copy()
+    if transplant_columns is None:
+        transplant_columns = tuple(column for column in processed_edited.columns if column not in STRUCTURAL_COLUMNS)
+    missing = sorted(
+        column for column in transplant_columns if column not in processed_edited.columns or column not in donor_processed_row.index
+    )
+    if missing:
+        raise ValueError(f"Cannot transplant missing processed weather columns: {missing}.")
+
+    for column in transplant_columns:
+        processed_edited[column] = donor_processed_row[column]
+
+    report = ExternalExtremeWeatherReport(
+        donor_hex_id=str(donor_hex_id).zfill(2),
+        donor_row_index=int(donor_row_index),
+        donor_order=int(donor_raw_row["Order"]),
+        donor_season=donor_raw_row["Season"],
+        donor_zone=donor_raw_row["WeatherZone"],
+        donor_fwi=float(donor_raw_row[FWI_COLUMN]),
+        donor_temperature=float(donor_raw_row["Temperature"]),
+        donor_relative_humidity=float(donor_raw_row["RelativeHumidity"]),
+        donor_wind_speed=float(donor_raw_row[RAW_WIND_SPEED_COLUMN]),
+        donor_wind_direction=float(donor_raw_row["WindDirection"]),
+        n_rows=int(len(processed_edited)),
+        n_zones=int(processed_hex["WeatherZone"].nunique()) if "WeatherZone" in processed_hex.columns else 0,
+        baseline_fwi_mean=float(processed_hex[FWI_COLUMN].mean()),
+        scenario_fwi_mean=float(processed_edited[FWI_COLUMN].mean()),
+        note="ok",
+    )
+    return processed_edited, pd.DataFrame([report.__dict__])
+
+
 def apply_fwi_scenario(
     raw_hex: pd.DataFrame,
     processed_hex: pd.DataFrame,
@@ -183,6 +248,8 @@ def apply_fwi_scenario(
     mode = str(params.get("mode", "daily_regime_swap"))
     if mode not in SWAP_MODES:
         raise ValueError(f"Unknown FWI scenario mode {mode!r}; expected one of {SWAP_MODES}.")
+    if mode == "external_extreme_transplant":
+        raise ValueError("external_extreme_transplant requires a donor row selected by counterfactual_materialize.")
     swap_fn = daily_regime_swap
     thermo_columns = tuple(params["swap_columns"]) if "swap_columns" in params else THERMO_SWAP_COLUMNS
     return swap_fn(

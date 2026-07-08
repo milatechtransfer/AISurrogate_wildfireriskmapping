@@ -7,6 +7,7 @@ import pytest
 from src.datasets.postprocessing.counterfactual_fwi import (
     apply_fwi_scenario,
     daily_regime_swap,
+    external_extreme_weather_transplant,
     fwi_tercile_labels,
 )
 from src.datasets.postprocessing.counterfactual_weather import (
@@ -106,6 +107,43 @@ def test_daily_swap_is_deterministic_for_a_fixed_seed() -> None:
     pd.testing.assert_frame_equal(first, second)
 
 
+def test_external_extreme_weather_transplant_copies_donor_features_and_preserves_structure() -> None:
+    _, processed, _ = _build_weather({10: [1.0, 5.0], 11: [2.0, 6.0]})
+    processed = processed.assign(Order=[1, 2, 3, 4], Season=[1, 1, 2, 2])
+    donor_processed_row = processed.iloc[2].copy()
+    donor_processed_row["WeatherZone"] = 99
+    donor_processed_row["Order"] = 123
+    donor_processed_row["Season"] = 3
+    donor_raw_row = pd.Series(
+        {
+            "Order": 123,
+            "Season": "s3",
+            "WeatherZone": "fru99",
+            "Temperature": 31.2,
+            "RelativeHumidity": 22.0,
+            "WindSpeed": 28.1,
+            "WindDirection": 267.0,
+            "FireWeatherIndex": 76.6,
+        }
+    )
+
+    edited, report = external_extreme_weather_transplant(
+        processed,
+        donor_processed_row=donor_processed_row,
+        donor_raw_row=donor_raw_row,
+        donor_hex_id="17",
+        donor_row_index=63799,
+    )
+
+    for column in [column for column in processed.columns if column not in ("Order", "Season", "WeatherZone")]:
+        assert np.allclose(edited[column], donor_processed_row[column])
+    assert edited["Order"].tolist() == processed["Order"].tolist()
+    assert edited["Season"].tolist() == processed["Season"].tolist()
+    assert edited["WeatherZone"].tolist() == processed["WeatherZone"].tolist()
+    assert report["donor_hex_id"].iloc[0] == "17"
+    assert report["donor_fwi"].iloc[0] == pytest.approx(76.6)
+
+
 def test_apply_fwi_scenario_dispatches_and_rejects_unknown_mode() -> None:
     raw, processed, stats = _build_weather({0: [1.0, 5.0, 9.0], 1: [2.0, 6.0, 10.0]})
     edited, _ = apply_fwi_scenario(
@@ -121,3 +159,5 @@ def test_apply_fwi_scenario_dispatches_and_rejects_unknown_mode() -> None:
     )
     with pytest.raises(ValueError, match="Unknown FWI scenario mode"):
         apply_fwi_scenario(raw, processed, stats, {"mode": "nope"})
+    with pytest.raises(ValueError, match="requires a donor row"):
+        apply_fwi_scenario(raw, processed, stats, {"mode": "external_extreme_transplant"})

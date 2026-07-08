@@ -26,11 +26,16 @@ from src.datasets.postprocessing.counterfactual_ros_maps import (
     plot_ros_response_maps,
 )
 from src.datasets.postprocessing.counterfactual_viz import (
+    DEFAULT_ZONE_OVERLAY_ALPHA,
+    DEFAULT_ZONE_OVERLAY_COLOR,
+    DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    add_zone_overlay_args,
     downsample_for_display,
     finite_values,
     overlay_zone_boundaries,
     plot_delta_histogram,
     prediction_dirs_from_index,
+    prediction_footprint,
     symmetric_percentile_limit,
 )
 from src.datasets.postprocessing.counterfactual_weather_maps import extent_km, load_zone_labels, raw_data_dir_from_config
@@ -39,10 +44,16 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 DELTA_COLOR = "#b2182b"
-DIRECTIONS = (
-    ("wind_dir_dominant", "dominant direction", "dominant"),
-    ("wind_dir_dominant_opposite", "opposite direction", "opposite"),
-)
+DIRECTION_SCOPES = {
+    "hex": (
+        ("wind_dir_dominant", "dominant direction", "dominant"),
+        ("wind_dir_dominant_opposite", "opposite direction", "opposite"),
+    ),
+    "zone": (
+        ("wind_zone_dir_dominant", "per-zone dominant directions", "zone_dominant"),
+        ("wind_zone_dir_dominant_opposite", "per-zone opposite directions", "zone_opposite"),
+    ),
+}
 
 
 def _bearing_label(edit_summary: pd.DataFrame | None, scenario: str, fallback: str) -> str:
@@ -51,6 +62,8 @@ def _bearing_label(edit_summary: pd.DataFrame | None, scenario: str, fallback: s
     rows = edit_summary[edit_summary["scenario"] == scenario]
     if rows.empty:
         return fallback
+    if len(rows) > 1:
+        return f"{fallback} ({len(rows)} zones)"
     return f"{fallback} ({float(rows['from_bearing_deg'].iloc[0]):.0f}\u00b0 from-bearing)"
 
 
@@ -61,7 +74,13 @@ def plot_direction_pair_delta(
     *,
     out_path: Path,
     downsample: int,
+    suptitle: str,
+    dominant_title: str = "\u0394ROS \u2014 dominant direction",
+    opposite_title: str = "\u0394ROS \u2014 opposite direction",
     zone_labels: np.ma.MaskedArray | None = None,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
 ) -> None:
     """Side-by-side ΔROS maps for the dominant and opposite wind directions."""
 
@@ -72,7 +91,7 @@ def plot_direction_pair_delta(
     fig, axes = plt.subplots(1, 2, figsize=(12.0, 5.8))
     for ax, (data, title) in zip(
         axes,
-        [(delta_dominant, "\u0394ROS \u2014 dominant direction"), (delta_opposite, "\u0394ROS \u2014 opposite direction")],
+        [(delta_dominant, dominant_title), (delta_opposite, opposite_title)],
         strict=True,
     ):
         image = ax.imshow(
@@ -83,14 +102,21 @@ def plot_direction_pair_delta(
             origin="upper",
             interpolation="nearest",
         )
-        overlay_zone_boundaries(ax, zone_labels, extent=extent)
+        overlay_zone_boundaries(
+            ax,
+            zone_labels,
+            extent=extent,
+            color=zone_overlay_color,
+            linewidth=zone_overlay_linewidth,
+            alpha=zone_overlay_alpha,
+        )
         ax.set_title(title, pad=12)
         ax.set_aspect("equal")
         ax.set_xticks([])
         ax.set_yticks([])
         cbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.02)
         cbar.set_label("\u0394ROS (m/min)", fontsize=14)
-    fig.suptitle("Spatial ROS response under reversed wind direction (hex 16)", y=1.0)
+    fig.suptitle(suptitle, y=1.0)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
@@ -106,13 +132,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patch_window", type=int, default=400, help="Side length (pixels) of patch zoom windows.")
     parser.add_argument("--hotspot_block", type=int, default=64, help="Block size for locating high-response windows.")
     parser.add_argument("--patch_count", type=int, default=3, help="Number of distinct high-response windows to render.")
+    parser.add_argument(
+        "--direction_scope",
+        choices=tuple(DIRECTION_SCOPES),
+        default="hex",
+        help="Render the hex-wide or per-zone wind-direction intervention pair.",
+    )
     parser.add_argument("--out_dir", type=Path, default=None, help="Defaults to experiment_dir/figures/wind_direction.")
+    add_zone_overlay_args(parser)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    out_dir = args.out_dir if args.out_dir is not None else args.experiment_dir / "figures" / "wind_direction"
+    directions = DIRECTION_SCOPES[args.direction_scope]
+    default_out_dir = "wind_direction" if args.direction_scope == "hex" else "wind_direction_zone"
+    out_dir = args.out_dir if args.out_dir is not None else args.experiment_dir / "figures" / default_out_dir
     raw_data_dir = args.raw_data_dir if args.raw_data_dir is not None else raw_data_dir_from_config(args.experiment_dir, endpoint=ENDPOINT)
     prediction_dirs = prediction_dirs_from_index(args.experiment_dir)
 
@@ -123,22 +158,29 @@ def main() -> None:
     labels: dict[str, str] = {}
     extent: tuple[float, float, float, float] | None = None
     zone_labels: np.ma.MaskedArray | None = None
-    for scenario, fallback_label, slug in DIRECTIONS:
+    for scenario, fallback_label, slug in directions:
         labels[slug] = _bearing_label(edit_summary, scenario, fallback_label)
         ground_truth, baseline, scenario_ros, delta, extent, reference_profile = load_ros_response(
             prediction_dirs, args.hex_id, raw_data_dir, scenario=scenario
         )
         responses[slug] = (ground_truth, baseline, scenario_ros, delta)
-        if zone_labels is None:
-            zone_labels = load_zone_labels(raw_data_dir, args.hex_id, reference_profile, support=~np.ma.getmaskarray(baseline))
+        if args.zone_overlay and zone_labels is None:
+            zone_labels = load_zone_labels(
+                raw_data_dir,
+                args.hex_id,
+                reference_profile,
+                support=prediction_footprint(prediction_dirs, args.hex_id, endpoint=ENDPOINT),
+            )
 
     deltas = {slug: response[3] for slug, response in responses.items()}
     if extent is None:
         raise RuntimeError("No wind-direction scenarios were loaded.")
-    combined_abs_delta = np.ma.maximum(np.ma.abs(deltas["dominant"]), np.ma.abs(deltas["opposite"]))
+    dominant_key = directions[0][2]
+    opposite_key = directions[1][2]
+    combined_abs_delta = np.ma.maximum(np.ma.abs(deltas[dominant_key]), np.ma.abs(deltas[opposite_key]))
     shared_centers = hotspot_centers(combined_abs_delta, args.hotspot_block, count=args.patch_count, window=args.patch_window)
 
-    for scenario, _fallback_label, slug in DIRECTIONS:
+    for scenario, _fallback_label, slug in directions:
         label = labels[slug]
         ground_truth, baseline, scenario_ros, delta = responses[slug]
         scenario_dir = out_dir / slug
@@ -154,6 +196,9 @@ def main() -> None:
             suptitle=f"ROS response to uniform wind direction \u2014 {label} (hex 16)",
             downsample=args.downsample,
             zone_labels=zone_labels,
+            zone_overlay_color=args.zone_overlay_color,
+            zone_overlay_linewidth=args.zone_overlay_linewidth,
+            zone_overlay_alpha=args.zone_overlay_alpha,
         )
         plot_ros_patch_zoom(
             ground_truth,
@@ -168,6 +213,9 @@ def main() -> None:
             patch_count=args.patch_count,
             centers=shared_centers,
             zone_labels=zone_labels,
+            zone_overlay_color=args.zone_overlay_color,
+            zone_overlay_linewidth=args.zone_overlay_linewidth,
+            zone_overlay_alpha=args.zone_overlay_alpha,
         )
         plot_delta_histogram(
             delta,
@@ -180,13 +228,32 @@ def main() -> None:
         print(f"{scenario}: n={values.size} mean_dROS={float(np.mean(values)):+.3f} median={float(np.median(values)):+.3f}")
 
     if extent is not None and {"dominant", "opposite"} <= deltas.keys():
+        pair_out_name = "wind_direction_pair_ros_delta.png"
+        pair_suptitle = "Spatial ROS response under reversed wind direction (hex 16)"
+        dominant_title = "\u0394ROS \u2014 dominant direction"
+        opposite_title = "\u0394ROS \u2014 opposite direction"
+    elif extent is not None and {"zone_dominant", "zone_opposite"} <= deltas.keys():
+        pair_out_name = "wind_zone_direction_pair_ros_delta.png"
+        pair_suptitle = "Spatial ROS response under reversed per-zone wind directions (hex 16)"
+        dominant_title = "\u0394ROS \u2014 per-zone dominant directions"
+        opposite_title = "\u0394ROS \u2014 per-zone opposite directions"
+    else:
+        pair_out_name = ""
+
+    if pair_out_name:
         plot_direction_pair_delta(
-            deltas["dominant"],
-            deltas["opposite"],
+            deltas[dominant_key],
+            deltas[opposite_key],
             extent,
-            out_path=out_dir / "wind_direction_pair_ros_delta.png",
+            out_path=out_dir / pair_out_name,
             downsample=args.downsample,
+            suptitle=pair_suptitle,
+            dominant_title=dominant_title,
+            opposite_title=opposite_title,
             zone_labels=zone_labels,
+            zone_overlay_color=args.zone_overlay_color,
+            zone_overlay_linewidth=args.zone_overlay_linewidth,
+            zone_overlay_alpha=args.zone_overlay_alpha,
         )
     print(f"Figures written under: {out_dir}")
 

@@ -31,7 +31,7 @@ from src.datasets.postprocessing.counterfactual_fuel import (
     replace_nonfuel_components_with_adjacent_modal,
     replace_nonfuel_with_burnable,
 )
-from src.datasets.postprocessing.counterfactual_fwi import apply_fwi_scenario
+from src.datasets.postprocessing.counterfactual_fwi import FWI_COLUMN, apply_fwi_scenario, external_extreme_weather_transplant
 from src.datasets.postprocessing.counterfactual_weather import (
     normalize_raw_weather_ids,
     raw_weather_path,
@@ -169,6 +169,41 @@ def _processed_weather_hex_slice(raw_data_dir: Path, hex_id: str) -> slice:
             return slice(offset, offset + count)
         offset += count
     raise FileNotFoundError(f"Missing raw weather table for hex{hex_id}: {target_path}")
+
+
+def _select_external_extreme_weather_donor(
+    *,
+    raw_data_dir: Path,
+    full_processed: pd.DataFrame,
+    donor_hex_ids: list[str],
+    rank_column: str,
+) -> tuple[str, int, pd.Series, pd.Series]:
+    if not donor_hex_ids:
+        raise ValueError("external_extreme_transplant requires at least one donor hex ID.")
+
+    best: tuple[float, int, str, int, pd.Series, pd.Series] | None = None
+    for order, hex_id_raw in enumerate(donor_hex_ids):
+        hex_id = str(hex_id_raw).zfill(2)
+        raw_hex = normalize_raw_weather_ids(pd.read_csv(raw_weather_path(raw_data_dir, hex_id)))
+        if rank_column not in raw_hex.columns:
+            raise ValueError(f"Donor raw weather for hex{hex_id} is missing rank column {rank_column!r}.")
+        values = raw_hex[rank_column].to_numpy(dtype=np.float64)
+        finite = np.isfinite(values)
+        if not finite.any():
+            continue
+        local_row = int(np.flatnonzero(finite)[int(np.argmax(values[finite]))])
+        rank_value = float(values[local_row])
+        donor_slice = _processed_weather_hex_slice(raw_data_dir, hex_id)
+        processed_row = full_processed.iloc[donor_slice.start + local_row]
+        raw_row = raw_hex.iloc[local_row]
+        candidate = (rank_value, -order, hex_id, local_row, raw_row, processed_row)
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
+
+    if best is None:
+        raise ValueError(f"No finite {rank_column!r} donor rows found for donor_hex_ids={donor_hex_ids}.")
+    _, _, donor_hex_id, donor_row_index, donor_raw_row, donor_processed_row = best
+    return donor_hex_id, donor_row_index, donor_raw_row, donor_processed_row
 
 
 def _copy_static_root_assets(
@@ -507,6 +542,22 @@ def _write_weather_table(
             stats,
             weather_params,
             seed=seed,
+        )
+    elif str(weather_params.get("mode", "")) == "external_extreme_transplant":
+        donor_hex_id, donor_row_index, donor_raw_row, donor_processed_row = _select_external_extreme_weather_donor(
+            raw_data_dir=raw_data_dir,
+            full_processed=full_processed,
+            donor_hex_ids=[str(hex_id) for hex_id in weather_params.get("donor_hex_ids", [])],
+            rank_column=str(weather_params.get("rank_column", FWI_COLUMN)),
+        )
+        transplant_columns = tuple(weather_params["transplant_columns"]) if "transplant_columns" in weather_params else None
+        scenario_processed_hex, edit_report = external_extreme_weather_transplant(
+            processed_hex,
+            donor_processed_row=donor_processed_row,
+            donor_raw_row=donor_raw_row,
+            donor_hex_id=donor_hex_id,
+            donor_row_index=donor_row_index,
+            transplant_columns=transplant_columns,
         )
     else:
         scenario_processed_hex, edit_report = apply_fwi_scenario(

@@ -20,11 +20,16 @@ from matplotlib.colors import Normalize, TwoSlopeNorm
 
 from src.datasets.postprocessing.counterfactual_fwi import THERMO_SWAP_COLUMNS
 from src.datasets.postprocessing.counterfactual_viz import (
+    DEFAULT_ZONE_OVERLAY_ALPHA,
+    DEFAULT_ZONE_OVERLAY_COLOR,
+    DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    add_zone_overlay_args,
     downsample_for_display,
     finite_values,
     overlay_zone_boundaries,
     plot_delta_histogram,
     prediction_dirs_from_index,
+    prediction_footprint,
     prediction_raster_path,
     read_prediction,
     read_prediction_extent,
@@ -119,6 +124,9 @@ def plot_before_after_change(
     out_path: Path,
     downsample: int,
     zone_labels: np.ma.MaskedArray | None = None,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
 ) -> None:
     pooled_fi = [finite_values(ground_truth), finite_values(baseline)] + [finite_values(scenarios[s]["fi"]) for s in DAILY_SCENARIOS]
     fi_vmax = float(np.percentile(np.concatenate(pooled_fi), 99.0))
@@ -152,7 +160,14 @@ def plot_before_after_change(
         for col, (data, title, cmap, norm, cbar_label) in enumerate(panels):
             ax = axes[row, col]
             image = ax.imshow(data, cmap=cmap, norm=norm, extent=extent, origin="upper", interpolation="nearest")
-            overlay_zone_boundaries(ax, zone_labels, extent=extent)
+            overlay_zone_boundaries(
+                ax,
+                zone_labels,
+                extent=extent,
+                color=zone_overlay_color,
+                linewidth=zone_overlay_linewidth,
+                alpha=zone_overlay_alpha,
+            )
             ax.set_title(title)
             ax.set_aspect("equal")
             ax.set_xticks([])
@@ -286,6 +301,10 @@ def plot_zone_fwi_map(
     support_mask: np.ndarray,
     out_path: Path,
     downsample: int = 3,
+    zone_overlay: bool = False,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
 ) -> None:
     """Choropleth map: each firezone coloured by its zone-mean raw FWI, baseline vs intervention."""
     summary = pd.read_csv(edit_summary_path)
@@ -317,7 +336,15 @@ def plot_zone_fwi_map(
                 origin="upper",
                 interpolation="nearest",
             )
-            overlay_zone_boundaries(ax, zone_labels, extent=extent)
+            if zone_overlay:
+                overlay_zone_boundaries(
+                    ax,
+                    zone_labels,
+                    extent=extent,
+                    color=zone_overlay_color,
+                    linewidth=zone_overlay_linewidth,
+                    alpha=zone_overlay_alpha,
+                )
             ax.set_title(title, fontsize=14)
             ax.set_aspect("equal")
             ax.set_xticks([])
@@ -563,6 +590,9 @@ def plot_patch_zoom(
     center: tuple[int, int],
     rank: int,
     zone_labels: np.ma.MaskedArray | None = None,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
 ) -> None:
     pooled_fi = [finite_values(baseline)] + [finite_values(scenarios[s]["fi"]) for s in DAILY_SCENARIOS]
     fi_norm = Normalize(vmin=0.0, vmax=float(np.percentile(np.concatenate(pooled_fi), 99.0)))
@@ -593,7 +623,13 @@ def plot_patch_zoom(
         for col, (data, title, cmap, norm, cbar_label) in enumerate(panels):
             ax = axes[row, col]
             image = ax.imshow(data, cmap=cmap, norm=norm, origin="upper", interpolation="nearest")
-            overlay_zone_boundaries(ax, zone_window)
+            overlay_zone_boundaries(
+                ax,
+                zone_window,
+                color=zone_overlay_color,
+                linewidth=zone_overlay_linewidth,
+                alpha=zone_overlay_alpha,
+            )
             ax.set_title(title)
             ax.set_aspect("equal")
             ax.set_xticks([])
@@ -618,6 +654,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hotspot_block", type=int, default=64, help="Block size for locating high-response windows.")
     parser.add_argument("--patch_count", type=int, default=3, help="Number of distinct high-response windows to render.")
     parser.add_argument("--out_dir", type=Path, default=None, help="Defaults to experiment_dir/figures/fwi_daily.")
+    add_zone_overlay_args(parser)
     return parser.parse_args()
 
 
@@ -627,7 +664,12 @@ def main() -> None:
     raw_data_dir = args.raw_data_dir if args.raw_data_dir is not None else raw_data_dir_from_config(args.experiment_dir, endpoint="fi")
     prediction_dirs = prediction_dirs_from_index(args.experiment_dir)
     ground_truth, baseline, scenarios, extent, reference_profile = load_response(prediction_dirs, args.hex_id, raw_data_dir)
-    zone_labels = load_zone_labels(raw_data_dir, args.hex_id, reference_profile, support=~np.ma.getmaskarray(baseline))
+    zone_labels = load_zone_labels(
+        raw_data_dir,
+        args.hex_id,
+        reference_profile,
+        support=prediction_footprint(prediction_dirs, args.hex_id, endpoint="fi"),
+    )
 
     plot_before_after_change(
         ground_truth,
@@ -636,7 +678,10 @@ def main() -> None:
         extent,
         out_path=out_dir / "fwi_daily_fi_response_maps.png",
         downsample=args.downsample,
-        zone_labels=zone_labels,
+        zone_labels=zone_labels if args.zone_overlay else None,
+        zone_overlay_color=args.zone_overlay_color,
+        zone_overlay_linewidth=args.zone_overlay_linewidth,
+        zone_overlay_alpha=args.zone_overlay_alpha,
     )
     plot_delta_distribution(scenarios, out_path=out_dir / "fwi_daily_delta_distribution.png")
     plot_delta_vs_baseline(baseline, scenarios, out_path=out_dir / "fwi_daily_delta_vs_baseline.png")
@@ -655,7 +700,10 @@ def main() -> None:
             window=args.patch_window,
             center=center,
             rank=rank,
-            zone_labels=zone_labels,
+            zone_labels=zone_labels if args.zone_overlay else None,
+            zone_overlay_color=args.zone_overlay_color,
+            zone_overlay_linewidth=args.zone_overlay_linewidth,
+            zone_overlay_alpha=args.zone_overlay_alpha,
         )
 
     edit_summary_path = args.experiment_dir / "fwi_edit_summary.csv"
@@ -671,6 +719,10 @@ def main() -> None:
             support_mask=~np.ma.getmaskarray(baseline),
             out_path=out_dir / "fwi_daily_zone_fwi_map.png",
             downsample=args.downsample,
+            zone_overlay=args.zone_overlay,
+            zone_overlay_color=args.zone_overlay_color,
+            zone_overlay_linewidth=args.zone_overlay_linewidth,
+            zone_overlay_alpha=args.zone_overlay_alpha,
         )
         zones = sorted(int(z) for z in pd.read_csv(edit_summary_path)["zone"].unique())
         plot_zone_dose_response(scenarios, zone_labels, edit_summary_path, out_path=out_dir / "fwi_daily_zone_dose_response.png")

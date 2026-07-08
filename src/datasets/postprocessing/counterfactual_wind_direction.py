@@ -1,10 +1,11 @@
 """Uniform wind-direction counterfactual for fixed-model spatial-pattern probes.
 
-Every day in the focus hex is set to a single from-bearing while per-day wind
-speeds are kept.  ``wind_x``/``wind_y`` are recomputed from the new direction
-and re-encoded with the recovered baseline z-score stats.  Running the hex's
-speed-weighted dominant from-bearing and its 180-degree opposite as paired
-scenarios tests whether the model's spatial ROS response flips with the wind.
+Every day in the focus hex, or every day within each weather zone, is set to a
+single from-bearing while per-day wind speeds are kept.  ``wind_x``/``wind_y``
+are recomputed from the new direction and re-encoded with the recovered
+baseline z-score stats.  Running the dominant from-bearing and its 180-degree
+opposite as paired scenarios tests whether the model's spatial ROS response
+flips with the wind.
 """
 
 from __future__ import annotations
@@ -92,6 +93,52 @@ def uniform_direction_edit(
     return processed_edited, pd.DataFrame([report.__dict__])
 
 
+def zone_uniform_direction_edit(
+    raw_hex: pd.DataFrame,
+    processed_hex: pd.DataFrame,
+    stats: WindEncodingStats,
+    *,
+    zone_column: str = "WeatherZone",
+    offset_deg: float = 0.0,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Set each zone to its own dominant from-bearing, recomputing wind components."""
+
+    if len(raw_hex) != len(processed_hex):
+        raise ValueError(f"Raw/processed row count mismatch: {len(raw_hex)} != {len(processed_hex)}.")
+    validate_columns(raw_hex, (WIND_SPEED_COLUMN, WIND_DIRECTION_COLUMN, zone_column), frame_name="raw weather")
+    validate_columns(processed_hex, (zone_column,), frame_name="processed weather")
+
+    raw = raw_hex.reset_index(drop=True)
+    processed_edited = processed_hex.reset_index(drop=True).copy()
+    scenario_raw = raw.copy()
+    report_rows: list[dict[str, float | int]] = []
+
+    for zone in sorted(raw[zone_column].dropna().unique()):
+        zone_mask = raw[zone_column].to_numpy() == zone
+        speed = raw.loc[zone_mask, WIND_SPEED_COLUMN].to_numpy(dtype=np.float64)
+        direction = raw.loc[zone_mask, WIND_DIRECTION_COLUMN].to_numpy(dtype=np.float64)
+        dominant = dominant_from_bearing(speed, direction)
+        target = float((dominant + offset_deg) % 360.0)
+        scenario_raw.loc[zone_mask, WIND_DIRECTION_COLUMN] = target
+        report_rows.append(
+            {
+                "zone": int(zone),
+                "n_rows": int(zone_mask.sum()),
+                "from_bearing_deg": target,
+                "dominant_from_bearing_deg": dominant,
+                "offset_deg": float(offset_deg),
+            }
+        )
+
+    encoded = encode_raw_wind_features(raw_wind_features(scenario_raw), stats)
+    for column in RAW_WIND_COLUMNS:
+        processed_edited[column] = encoded[column].to_numpy(dtype=np.float64)
+    if WIND_DIRECTION_COLUMN in processed_edited.columns:
+        processed_edited[WIND_DIRECTION_COLUMN] = scenario_raw[WIND_DIRECTION_COLUMN].to_numpy(dtype=np.float64)
+
+    return processed_edited, pd.DataFrame(report_rows)
+
+
 def apply_wind_direction_scenario(
     raw_hex: pd.DataFrame,
     processed_hex: pd.DataFrame,
@@ -103,8 +150,18 @@ def apply_wind_direction_scenario(
     """Dispatch a wind-direction scenario to its uniform-direction implementation."""
 
     mode = str(params.get("mode", "uniform_direction"))
+    if mode == "zone_uniform_direction":
+        return zone_uniform_direction_edit(
+            raw_hex,
+            processed_hex,
+            stats,
+            zone_column=str(params.get("zone_column", "WeatherZone")),
+            offset_deg=float(params.get("offset_deg", 0.0)),
+        )
     if mode != "uniform_direction":
-        raise ValueError(f"Unknown wind-direction scenario mode {mode!r}; expected 'uniform_direction'.")
+        raise ValueError(
+            f"Unknown wind-direction scenario mode {mode!r}; expected one of " "{'uniform_direction', 'zone_uniform_direction'}."
+        )
     return uniform_direction_edit(
         raw_hex,
         processed_hex,

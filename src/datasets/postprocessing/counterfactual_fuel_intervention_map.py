@@ -19,6 +19,10 @@ from src.datasets.postprocessing.counterfactual_materialize import (
     _patch_records,
 )
 from src.datasets.postprocessing.counterfactual_viz import (
+    DEFAULT_ZONE_OVERLAY_ALPHA,
+    DEFAULT_ZONE_OVERLAY_COLOR,
+    DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    add_zone_overlay_args,
     overlay_zone_boundaries,
     prediction_dirs_from_index,
     prediction_raster_path,
@@ -269,6 +273,9 @@ def plot_intervention_map(
     out_path: Path,
     downsample: int = 2,
     zone_labels: np.ma.MaskedArray | None = None,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
 ) -> None:
     """Write the two-panel original fuel/replacement intervention map."""
 
@@ -316,7 +323,13 @@ def plot_intervention_map(
         origin="upper",
     )
     ax_original.set_title("A. Original grouped fuel map\n(non-fuel barriers in black)")
-    overlay_zone_boundaries(ax_original, zone_display)
+    overlay_zone_boundaries(
+        ax_original,
+        zone_display,
+        color=zone_overlay_color,
+        linewidth=zone_overlay_linewidth,
+        alpha=zone_overlay_alpha,
+    )
     ax_original.set_xticks([])
     ax_original.set_yticks([])
     ax_original.set_aspect("equal")
@@ -335,7 +348,13 @@ def plot_intervention_map(
             origin="upper",
         )
     ax_replacement.set_title("B. Counterfactual replacement map\n(edited barrier pixels coloured by assigned fuel)")
-    overlay_zone_boundaries(ax_replacement, zone_display)
+    overlay_zone_boundaries(
+        ax_replacement,
+        zone_display,
+        color=zone_overlay_color,
+        linewidth=zone_overlay_linewidth,
+        alpha=zone_overlay_alpha,
+    )
     ax_replacement.set_xticks([])
     ax_replacement.set_yticks([])
     ax_replacement.set_aspect("equal")
@@ -385,6 +404,10 @@ def write_fuel_intervention_map(
     hex_id: str = "16",
     downsample: int = 2,
     support_policy: str = "prediction",
+    zone_overlay: bool = False,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
     out_dir: Path | None = None,
 ) -> tuple[Path, Path]:
     if support_policy not in {"prediction", "prepared_patch"}:
@@ -421,7 +444,7 @@ def write_fuel_intervention_map(
     plot_path = out_dir / f"hex{int(hex_id):02d}_{scenario}_fuel_intervention_map.png"
     summary_path = experiment_dir / f"counterfactual_{scenario}_fuel_intervention_summary.csv"
     zone_labels = None
-    if raw_data_dir is not None:
+    if zone_overlay and raw_data_dir is not None:
         prediction_dirs = prediction_dirs_from_index(experiment_dir)
         zone_labels = load_zone_labels(
             raw_data_dir,
@@ -438,6 +461,9 @@ def write_fuel_intervention_map(
         out_path=plot_path,
         downsample=max(1, int(downsample)),
         zone_labels=zone_labels,
+        zone_overlay_color=zone_overlay_color,
+        zone_overlay_linewidth=zone_overlay_linewidth,
+        zone_overlay_alpha=zone_overlay_alpha,
     )
     pd.DataFrame([asdict(summary)]).to_csv(summary_path, index=False)
     return plot_path, summary_path
@@ -457,6 +483,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--downsample", type=int, default=2)
     parser.add_argument("--support_policy", choices=("prediction", "prepared_patch"), default="prediction")
     parser.add_argument("--out_dir", type=Path, default=None, help="Defaults to experiment_dir/figures/fuel_intervention.")
+    add_zone_overlay_args(parser)
     return parser.parse_args()
 
 
@@ -470,6 +497,10 @@ def main() -> None:
         hex_id=str(args.hex_id).zfill(2),
         downsample=args.downsample,
         support_policy=args.support_policy,
+        zone_overlay=args.zone_overlay,
+        zone_overlay_color=args.zone_overlay_color,
+        zone_overlay_linewidth=args.zone_overlay_linewidth,
+        zone_overlay_alpha=args.zone_overlay_alpha,
         out_dir=args.out_dir,
     )
     print(f"Wrote fuel intervention map: {plot_path}")

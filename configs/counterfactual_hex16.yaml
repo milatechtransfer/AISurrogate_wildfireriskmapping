@@ -51,6 +51,13 @@ scenarios:
       low_quantile: 33.0
       high_quantile: 66.0
       zone_column: WeatherZone
+  - name: bc_extreme_fwi_transplant
+    kind: fwi
+    description: Replace all hex16 weather feature rows with the highest-FWI row found in configured BC-area donor hexes.
+    params:
+      mode: external_extreme_transplant
+      rank_column: FireWeatherIndex
+      donor_hex_ids: ["17", "02", "19", "25", "26", "27", "40", "50", "52"]
   - name: wind_zone_peak_day
     kind: wind_regime
     description: Per zone, transplant the single highest-WindSpeed day's full weather regime onto every day in the zone.
@@ -68,6 +75,20 @@ scenarios:
     description: Set every day to the exact opposite (180 deg) of the dominant from-bearing; mirror test for the spatial response.
     params:
       mode: uniform_direction
+      offset_deg: 180.0
+  - name: wind_zone_dir_dominant
+    kind: wind_direction
+    description: Per zone, set every day to that zone's speed-weighted dominant from-bearing; per-day speeds kept.
+    params:
+      mode: zone_uniform_direction
+      zone_column: WeatherZone
+      offset_deg: 0.0
+  - name: wind_zone_dir_dominant_opposite
+    kind: wind_direction
+    description: Per zone, set every day to the opposite of that zone's dominant from-bearing; per-day speeds kept.
+    params:
+      mode: zone_uniform_direction
+      zone_column: WeatherZone
       offset_deg: 180.0
   - name: remove_barriers_wind_opposite
     kind: composite

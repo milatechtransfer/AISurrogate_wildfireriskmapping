@@ -17,6 +17,9 @@ import rasterio
 from matplotlib.colors import Normalize, TwoSlopeNorm
 
 from src.datasets.postprocessing.counterfactual_viz import (
+    DEFAULT_ZONE_OVERLAY_ALPHA,
+    DEFAULT_ZONE_OVERLAY_COLOR,
+    DEFAULT_ZONE_OVERLAY_LINEWIDTH,
     downsample_for_display,
     finite_values,
     overlay_zone_boundaries,
@@ -142,6 +145,9 @@ def plot_ros_response_maps(
     suptitle: str,
     downsample: int,
     zone_labels: np.ma.MaskedArray | None = None,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
 ) -> None:
     """Ground-truth / baseline / scenario / Δ ROS maps across the whole hex."""
 
@@ -167,7 +173,14 @@ def plot_ros_response_maps(
             origin="upper",
             interpolation="nearest",
         )
-        overlay_zone_boundaries(ax, zone_labels, extent=extent)
+        overlay_zone_boundaries(
+            ax,
+            zone_labels,
+            extent=extent,
+            color=zone_overlay_color,
+            linewidth=zone_overlay_linewidth,
+            alpha=zone_overlay_alpha,
+        )
         ax.set_title(_panel_title(title), pad=12)
         ax.set_aspect("equal")
         ax.set_xticks([])
@@ -195,6 +208,9 @@ def plot_ros_patch_zoom(
     patch_count: int,
     centers: list[tuple[int, int]] | None = None,
     zone_labels: np.ma.MaskedArray | None = None,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
 ) -> None:
     """Ground-truth/baseline/scenario/Δ ROS zoom-ins on the highest-response windows.
 
@@ -226,7 +242,13 @@ def plot_ros_patch_zoom(
         for col, (data, title, cmap, norm, cbar_label) in enumerate(panels):
             ax = axes[row, col]
             image = ax.imshow(data, cmap=cmap, norm=norm, origin="upper", interpolation="nearest")
-            overlay_zone_boundaries(ax, zone_window)
+            overlay_zone_boundaries(
+                ax,
+                zone_window,
+                color=zone_overlay_color,
+                linewidth=zone_overlay_linewidth,
+                alpha=zone_overlay_alpha,
+            )
             ax.set_title(_panel_title(title), pad=12)
             ax.set_aspect("equal")
             ax.set_xticks([])

@@ -14,6 +14,10 @@ from matplotlib.colors import Normalize, TwoSlopeNorm
 from data_preparation.paths import Paths
 from data_preparation.spatial.utils import load_spatial_raster
 from src.datasets.postprocessing.counterfactual_viz import (
+    DEFAULT_ZONE_OVERLAY_ALPHA,
+    DEFAULT_ZONE_OVERLAY_COLOR,
+    DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    add_zone_overlay_args,
     downsample_for_display,
     finite_values,
     overlay_zone_boundaries,
@@ -205,6 +209,9 @@ def plot_single_map(
     downsample: int,
     overlay_replacements: bool = True,
     zone_labels: np.ma.MaskedArray | None = None,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
 ) -> None:
     fig, ax = plt.subplots(figsize=(7.0, 7.4))
     image = ax.imshow(
@@ -215,7 +222,14 @@ def plot_single_map(
         origin="upper",
         interpolation="nearest",
     )
-    overlay_zone_boundaries(ax, zone_labels, extent=extent)
+    overlay_zone_boundaries(
+        ax,
+        zone_labels,
+        extent=extent,
+        color=zone_overlay_color,
+        linewidth=zone_overlay_linewidth,
+        alpha=zone_overlay_alpha,
+    )
     if overlay_replacements:
         contour_replacement_overlay(ax, replacement_mask, extent=extent, downsample=downsample)
     ax.set_title(title)
@@ -242,6 +256,9 @@ def plot_combined_fi_maps(
     out_path: Path,
     downsample: int,
     zone_labels: np.ma.MaskedArray | None = None,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
 ) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(18.0, 7.0), squeeze=False)
     panels = [
@@ -265,7 +282,14 @@ def plot_combined_fi_maps(
             origin="upper",
             interpolation="nearest",
         )
-        overlay_zone_boundaries(ax, zone_labels, extent=extent)
+        overlay_zone_boundaries(
+            ax,
+            zone_labels,
+            extent=extent,
+            color=zone_overlay_color,
+            linewidth=zone_overlay_linewidth,
+            alpha=zone_overlay_alpha,
+        )
         if overlay:
             contour_replacement_overlay(ax, replacement_mask, extent=extent, downsample=downsample)
         ax.set_title(title)
@@ -332,6 +356,10 @@ def write_fi_replacement_maps(
     scenario: str = SCENARIO,
     percentile: float = 99.5,
     downsample: int = 2,
+    zone_overlay: bool = False,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
     out_dir: Path | None = None,
 ) -> tuple[Path, list[Path]]:
     prediction_dirs = prediction_dirs_from_index(experiment_dir)
@@ -363,12 +391,14 @@ def write_fi_replacement_maps(
 
     baseline_fi_dir = prediction_dirs[("baseline", "fi")]
     extent = read_prediction_extent(prediction_raster_path(baseline_fi_dir, hex_id))
-    zone_labels = load_zone_labels(
-        raw_data_dir,
-        hex_id,
-        prediction_reference_profile(prediction_dirs, hex_id, baseline_endpoint="fi"),
-        support=hex_support,
-    )
+    zone_labels = None
+    if zone_overlay:
+        zone_labels = load_zone_labels(
+            raw_data_dir,
+            hex_id,
+            prediction_reference_profile(prediction_dirs, hex_id, baseline_endpoint="fi"),
+            support=hex_support,
+        )
 
     out_dir = out_dir if out_dir is not None else experiment_dir / "figures" / "fuel_fi"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -388,6 +418,9 @@ def write_fi_replacement_maps(
         out_path=combined_path,
         downsample=downsample,
         zone_labels=zone_labels,
+        zone_overlay_color=zone_overlay_color,
+        zone_overlay_linewidth=zone_overlay_linewidth,
+        zone_overlay_alpha=zone_overlay_alpha,
     )
     plot_single_map(
         paired_delta,
@@ -400,6 +433,9 @@ def write_fi_replacement_maps(
         out_path=continuous_path,
         downsample=downsample,
         zone_labels=zone_labels,
+        zone_overlay_color=zone_overlay_color,
+        zone_overlay_linewidth=zone_overlay_linewidth,
+        zone_overlay_alpha=zone_overlay_alpha,
     )
     plot_single_map(
         binned_delta,
@@ -412,6 +448,9 @@ def write_fi_replacement_maps(
         out_path=binned_path,
         downsample=downsample,
         zone_labels=zone_labels,
+        zone_overlay_color=zone_overlay_color,
+        zone_overlay_linewidth=zone_overlay_linewidth,
+        zone_overlay_alpha=zone_overlay_alpha,
     )
     plot_single_map(
         replacement_scenario_fi,
@@ -424,6 +463,9 @@ def write_fi_replacement_maps(
         out_path=replacement_path,
         downsample=downsample,
         zone_labels=zone_labels,
+        zone_overlay_color=zone_overlay_color,
+        zone_overlay_linewidth=zone_overlay_linewidth,
+        zone_overlay_alpha=zone_overlay_alpha,
     )
 
     summary = summarize_fi_maps(
@@ -456,6 +498,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--percentile", type=float, default=99.5)
     parser.add_argument("--downsample", type=int, default=2)
     parser.add_argument("--out_dir", type=Path, default=None, help="Defaults to experiment_dir/figures/fuel_fi.")
+    add_zone_overlay_args(parser)
     return parser.parse_args()
 
 
@@ -468,6 +511,10 @@ def main() -> None:
         scenario=args.scenario,
         percentile=args.percentile,
         downsample=max(1, int(args.downsample)),
+        zone_overlay=args.zone_overlay,
+        zone_overlay_color=args.zone_overlay_color,
+        zone_overlay_linewidth=args.zone_overlay_linewidth,
+        zone_overlay_alpha=args.zone_overlay_alpha,
         out_dir=args.out_dir,
     )
     print(f"Wrote FI map summary: {summary_path}")

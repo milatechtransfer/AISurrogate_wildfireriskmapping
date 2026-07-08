@@ -37,12 +37,14 @@ from src.datasets.postprocessing.counterfactual_local_zoom_panels import (
 )
 from src.datasets.postprocessing.counterfactual_materialize import (
     _merge_materialized_index,
+    _select_external_extreme_weather_donor,
     build_scenario_endpoint_config,
     prepared_nonfuel_ids,
 )
 from src.datasets.postprocessing.counterfactual_viz import (
     abs_share_at,
     cumulative_abs_share,
+    downsample_for_display,
     zone_boundary_segments,
 )
 from src.datasets.postprocessing.counterfactual_weather import (
@@ -401,6 +403,57 @@ def test_merge_materialized_index_replaces_only_updated_rows() -> None:
     }
 
 
+def test_select_external_extreme_weather_donor_uses_max_fwi_and_processed_alignment(tmp_path: Path) -> None:
+    raw_data_dir = tmp_path / "raw"
+    (raw_data_dir / "hex01" / "tabular").mkdir(parents=True)
+    (raw_data_dir / "hex02" / "tabular").mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "Order": [1, 2],
+            "Season": ["s1", "s1"],
+            "WeatherZone": ["z1", "z2"],
+            "Temperature": [20.0, 21.0],
+            "RelativeHumidity": [40.0, 41.0],
+            "WindSpeed": [10.0, 11.0],
+            "WindDirection": [180.0, 181.0],
+            "FireWeatherIndex": [12.0, 50.0],
+        }
+    ).to_csv(raw_data_dir / "hex01" / "tabular" / "hex01_DailyWeather.csv", index=False)
+    pd.DataFrame(
+        {
+            "Order": [1, 2],
+            "Season": ["s1", "s1"],
+            "WeatherZone": ["z3", "z4"],
+            "Temperature": [30.0, 31.0],
+            "RelativeHumidity": [50.0, 51.0],
+            "WindSpeed": [20.0, 21.0],
+            "WindDirection": [280.0, 281.0],
+            "FireWeatherIndex": [49.0, 30.0],
+        }
+    ).to_csv(raw_data_dir / "hex02" / "tabular" / "hex02_DailyWeather.csv", index=False)
+    full_processed = pd.DataFrame(
+        {
+            "Order": [1, 2, 1, 2],
+            "Season": [1, 1, 1, 1],
+            "WeatherZone": [1, 2, 3, 4],
+            "Temperature": [0.1, 0.2, 0.3, 0.4],
+            "FireWeatherIndex": [0.12, 0.5, 0.49, 0.3],
+        }
+    )
+
+    donor_hex_id, donor_row_index, donor_raw_row, donor_processed_row = _select_external_extreme_weather_donor(
+        raw_data_dir=raw_data_dir,
+        full_processed=full_processed,
+        donor_hex_ids=["02", "01"],
+        rank_column="FireWeatherIndex",
+    )
+
+    assert donor_hex_id == "01"
+    assert donor_row_index == 1
+    assert donor_raw_row["FireWeatherIndex"] == pytest.approx(50.0)
+    assert donor_processed_row["Temperature"] == pytest.approx(0.2)
+
+
 def test_paired_delta_summary_uses_finite_intersection() -> None:
     baseline = np.ma.masked_invalid(np.array([[1.0, 2.0], [np.nan, 4.0]]))
     scenario = np.ma.masked_invalid(np.array([[2.0, 1.0], [3.0, np.nan]]))
@@ -605,6 +658,12 @@ def test_cumulative_abs_share_ignores_masked_and_handles_empty() -> None:
     assert abs_share_at(pixel_fraction, cumulative, 0.5) == pytest.approx(5.0 / 8.0)
     empty_fraction, empty_cumulative = cumulative_abs_share(np.ma.masked_array(np.array([np.nan]), mask=[True]))
     assert abs_share_at(empty_fraction, empty_cumulative, 0.1) == pytest.approx(0.0)
+
+
+def test_downsample_for_display_preserves_raster_edges() -> None:
+    raster = np.arange(20).reshape(4, 5)
+    display = downsample_for_display(raster, 2)
+    assert display.tolist() == [[0, 2, 4], [10, 12, 14], [15, 17, 19]]
 
 
 def test_zone_boundary_segments_traces_only_valid_interzone_borders() -> None:

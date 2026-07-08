@@ -7,6 +7,7 @@ counterfactual figure scripts.
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -14,6 +15,10 @@ import numpy as np
 import pandas as pd
 import rasterio
 from matplotlib.collections import LineCollection
+
+DEFAULT_ZONE_OVERLAY_COLOR = "#111111"
+DEFAULT_ZONE_OVERLAY_LINEWIDTH = 1.4
+DEFAULT_ZONE_OVERLAY_ALPHA = 0.9
 
 
 def prediction_dirs_from_index(experiment_dir: Path) -> dict[tuple[str, str], Path]:
@@ -60,6 +65,21 @@ def prediction_reference_profile(
         return src.profile.copy()
 
 
+def prediction_footprint(
+    prediction_dirs: dict[tuple[str, str], Path],
+    hex_id: str,
+    *,
+    endpoint: str,
+    scenario: str = "baseline",
+) -> np.ndarray:
+    """Valid raster footprint before scenario-specific map masks are applied."""
+
+    prediction_dir = prediction_dirs.get((scenario, endpoint))
+    if prediction_dir is None:
+        raise KeyError(f"Missing {scenario} {endpoint.upper()} prediction directory; cannot define prediction footprint.")
+    return ~np.ma.getmaskarray(read_prediction(prediction_raster_path(prediction_dir, hex_id)))
+
+
 def finite_values(data: np.ma.MaskedArray | np.ndarray) -> np.ndarray:
     values = np.asarray(np.ma.asarray(data).filled(np.nan), dtype=np.float64)
     return values[np.isfinite(values)]
@@ -84,9 +104,37 @@ def symmetric_percentile_limit(deltas: list[np.ma.MaskedArray], percentile: floa
 def downsample_for_display(data: np.ma.MaskedArray | np.ndarray, factor: int) -> np.ma.MaskedArray:
     """Stride-downsample a raster for plotting only."""
 
+    arr = np.ma.asarray(data)
     if factor <= 1:
-        return np.ma.asarray(data)
-    return np.ma.asarray(data)[::factor, ::factor]
+        return arr
+    row_indices = np.arange(0, arr.shape[0], factor)
+    col_indices = np.arange(0, arr.shape[1], factor)
+    if row_indices.size > 0 and row_indices[-1] != arr.shape[0] - 1:
+        row_indices = np.append(row_indices, arr.shape[0] - 1)
+    if col_indices.size > 0 and col_indices[-1] != arr.shape[1] - 1:
+        col_indices = np.append(col_indices, arr.shape[1] - 1)
+    return arr[np.ix_(row_indices, col_indices)]
+
+
+def add_zone_overlay_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--zone_overlay", action="store_true", help="Draw firezone boundary overlays on map panels.")
+    parser.add_argument(
+        "--zone_overlay_color",
+        default=DEFAULT_ZONE_OVERLAY_COLOR,
+        help="Firezone boundary overlay color.",
+    )
+    parser.add_argument(
+        "--zone_overlay_linewidth",
+        type=float,
+        default=DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+        help="Firezone boundary overlay line width.",
+    )
+    parser.add_argument(
+        "--zone_overlay_alpha",
+        type=float,
+        default=DEFAULT_ZONE_OVERLAY_ALPHA,
+        help="Firezone boundary overlay alpha.",
+    )
 
 
 def restrict_to_support(data: np.ma.MaskedArray | np.ndarray, support_mask: np.ndarray) -> np.ma.MaskedArray:
@@ -147,9 +195,9 @@ def overlay_zone_boundaries(
     zone_labels: np.ma.MaskedArray | np.ndarray | None,
     *,
     extent: tuple[float, float, float, float] | None = None,
-    color: str = "#111111",
-    linewidth: float = 0.8,
-    alpha: float = 0.9,
+    color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
 ) -> None:
     """Overlay firezone boundaries on a hex-map axis (no-op when ``zone_labels`` is None)."""
 
@@ -158,7 +206,7 @@ def overlay_zone_boundaries(
     segments = zone_boundary_segments(zone_labels, extent=extent)
     if segments.shape[0] == 0:
         return
-    ax.add_collection(LineCollection(list(segments), colors=color, linewidths=linewidth, alpha=alpha, zorder=5))
+    ax.add_collection(LineCollection(list(segments), colors=color, linewidths=linewidth, alpha=alpha, zorder=5, clip_on=False))
 
 
 def cumulative_abs_share(delta: np.ma.MaskedArray | np.ndarray) -> tuple[np.ndarray, np.ndarray]:

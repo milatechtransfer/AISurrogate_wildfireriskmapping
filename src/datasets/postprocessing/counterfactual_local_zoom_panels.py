@@ -20,6 +20,10 @@ from src.datasets.postprocessing.counterfactual_fuel_intervention_map import (
     _categorical_codes,
 )
 from src.datasets.postprocessing.counterfactual_viz import (
+    DEFAULT_ZONE_OVERLAY_ALPHA,
+    DEFAULT_ZONE_OVERLAY_COLOR,
+    DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    add_zone_overlay_args,
     finite_values,
     overlay_zone_boundaries,
     prediction_dirs_from_index,
@@ -327,6 +331,9 @@ def plot_neighborhood_grid(
     out_path: Path,
     row_labels: list[str] | None = None,
     zone_labels: np.ma.MaskedArray | None = None,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
 ) -> None:
     """Plot intervention, replacement, baseline, scenario, and delta for selected windows."""
 
@@ -418,7 +425,13 @@ def plot_neighborhood_grid(
                     sequential_image = image
                 else:
                     delta_image = image
-            overlay_zone_boundaries(ax, zone_crop)
+            overlay_zone_boundaries(
+                ax,
+                zone_crop,
+                color=zone_overlay_color,
+                linewidth=zone_overlay_linewidth,
+                alpha=zone_overlay_alpha,
+            )
             ax.set_xticks([])
             ax.set_yticks([])
             ax.set_aspect("equal")
@@ -489,6 +502,10 @@ def write_local_neighborhood_panels(
     min_barrier_pixels: int = 1500,
     exclude_border_pixels: int = 100,
     min_valid_fraction: float = 0.95,
+    zone_overlay: bool = False,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
     out_dir: Path | None = None,
 ) -> tuple[Path, Path, Path]:
     prediction_dirs = prediction_dirs_from_index(experiment_dir)
@@ -511,7 +528,9 @@ def write_local_neighborhood_panels(
     hazard_values, hazard_valid = values_and_valid(delta_hazard)
     fi_values, fi_valid = values_and_valid(delta_fi)
     valid_mask = hazard_valid & fi_valid & np.isfinite(hazard_values) & np.isfinite(fi_values)
-    zone_labels = load_zone_labels(raw_data_dir, hex_id, prediction_reference_profile(prediction_dirs, hex_id), support=valid_mask)
+    zone_labels = None
+    if zone_overlay:
+        zone_labels = load_zone_labels(raw_data_dir, hex_id, prediction_reference_profile(prediction_dirs, hex_id), support=valid_mask)
     selection_barrier_mask = original_nonfuel & valid_mask
     replacement_map = np.where(selection_barrier_mask, replacement_map, np.nan)
     windows = select_neighborhood_windows(
@@ -545,6 +564,9 @@ def write_local_neighborhood_panels(
         delta_label="ΔFI = counterfactual − baseline",
         out_path=fi_plot_path,
         zone_labels=zone_labels,
+        zone_overlay_color=zone_overlay_color,
+        zone_overlay_linewidth=zone_overlay_linewidth,
+        zone_overlay_alpha=zone_overlay_alpha,
     )
     plot_neighborhood_grid(
         grouped_fuel=grouped_fuel,
@@ -560,6 +582,9 @@ def write_local_neighborhood_panels(
         delta_label="Δhazard = counterfactual − baseline",
         out_path=hazard_plot_path,
         zone_labels=zone_labels,
+        zone_overlay_color=zone_overlay_color,
+        zone_overlay_linewidth=zone_overlay_linewidth,
+        zone_overlay_alpha=zone_overlay_alpha,
     )
 
     rows = [
@@ -609,6 +634,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exclude_border_pixels", type=int, default=100)
     parser.add_argument("--min_valid_fraction", type=float, default=0.95)
     parser.add_argument("--out_dir", type=Path, default=None, help="Defaults to experiment_dir/figures/fuel_local_zoom.")
+    add_zone_overlay_args(parser)
     return parser.parse_args()
 
 
@@ -625,6 +651,10 @@ def main() -> None:
         min_barrier_pixels=max(1, int(args.min_barrier_pixels)),
         exclude_border_pixels=max(0, int(args.exclude_border_pixels)),
         min_valid_fraction=float(args.min_valid_fraction),
+        zone_overlay=args.zone_overlay,
+        zone_overlay_color=args.zone_overlay_color,
+        zone_overlay_linewidth=args.zone_overlay_linewidth,
+        zone_overlay_alpha=args.zone_overlay_alpha,
         out_dir=args.out_dir,
     )
     print(f"Wrote local FI neighborhood panels: {fi_plot_path}")
