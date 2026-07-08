@@ -58,6 +58,38 @@ scenarios:
       mode: external_extreme_transplant
       rank_column: FireWeatherIndex
       donor_hex_ids: ["17", "02", "19", "25", "26", "27", "40", "50", "52"]
+  - name: bc_spring_high_fwi_transplant
+    kind: fwi
+    description: Replace all hex16 weather feature rows with the highest-FWI spring/leaf-off (s1) row found in configured BC-area donor hexes.
+    params:
+      mode: external_extreme_transplant
+      rank_column: FireWeatherIndex
+      season_values: [1]
+      donor_hex_ids: ["17", "02", "19", "25", "26", "27", "40", "50", "52"]
+  - name: bc_nonspring_high_fwi_transplant
+    kind: fwi
+    description: Replace all hex16 weather feature rows with the highest-FWI non-spring (s2/s3) row found in configured BC-area donor hexes.
+    params:
+      mode: external_extreme_transplant
+      rank_column: FireWeatherIndex
+      season_values: [2, 3]
+      donor_hex_ids: ["17", "02", "19", "25", "26", "27", "40", "50", "52"]
+  - name: hex16_spring_zone_high_fwi_transplant
+    kind: fwi
+    description: For each hex16 weather zone, replace rows with that same zone's highest-FWI spring/leaf-off (s1) row.
+    params:
+      mode: zone_seasonal_extreme_transplant
+      rank_column: FireWeatherIndex
+      season_values: [1]
+      zone_column: WeatherZone
+  - name: hex16_nonspring_zone_high_fwi_transplant
+    kind: fwi
+    description: For each hex16 weather zone, replace rows with that same zone's highest-FWI non-spring (s2/s3) row.
+    params:
+      mode: zone_seasonal_extreme_transplant
+      rank_column: FireWeatherIndex
+      season_values: [2, 3]
+      zone_column: WeatherZone
   - name: wind_zone_peak_day
     kind: wind_regime
     description: Per zone, transplant the single highest-WindSpeed day's full weather regime onto every day in the zone.

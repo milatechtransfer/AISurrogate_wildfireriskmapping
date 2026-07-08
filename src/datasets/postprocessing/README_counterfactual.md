@@ -51,6 +51,10 @@ Figures (each consumes the predictions for its scenario family):
 - wind_regime: `counterfactual_wind_regime_map.py`
 - wind_direction: `counterfactual_wind_direction_map.py` (paired dominant vs +180° mirror; add
   `--direction_scope zone` for per-zone dominant/opposite scenarios)
+- any BP scenario: `counterfactual_bp_scenario_map.py` (generic single-scenario
+  response maps + patch zoom + delta histogram)
+- any FI scenario: `counterfactual_fi_scenario_map.py` (generic single-scenario
+  response maps + patch zoom + delta histogram)
 - any ROS scenario: `counterfactual_ros_scenario_map.py` (generic single-scenario
   response maps + patch zoom + delta histogram; use for `composite` scenarios). For
   fuel-editing scenarios it masks non-fuel in the ground-truth/baseline panels but
@@ -69,7 +73,8 @@ Shared helpers (keep dependency-light, no scenario-specific logic):
 - `fuel_barrier_geometry.py` — fuel grouping + barrier-relative geometry
 
 Every `*_map.py` writes its PNGs under `experiments/<exp>/figures/<group>/`
-(`fwi_daily`, `wind_direction`, `wind_zone_peak`, `<scenario>` for generic ROS,
+(`fwi_daily`, `wind_direction`, `wind_zone_peak`, `<scenario>_bp`/`<scenario>_fi`,
+`<scenario>` for generic ROS,
 `fuel_fi`, `fuel_intervention`, `hazard`, `fuel_local_zoom`); override with
 `--out_dir`. Summary CSVs stay at the experiment-dir root.
 
@@ -102,6 +107,25 @@ python -m src.datasets.postprocessing.counterfactual_wind_direction_map \
     --zone_overlay_linewidth 1.4 \
     --zone_overlay_color "#111111"
 ```
+
+Season-conditioned high-FWI donor-row scenarios use the existing external
+transplant mode with `season_values`. For the current leaf-off probe,
+`bc_spring_high_fwi_transplant` selects the highest-FWI BC donor row with
+`Season == s1`; `bc_nonspring_high_fwi_transplant` selects from `s2/s3`. Render
+BP/FI after inference with:
+
+```bash
+python -m src.datasets.postprocessing.counterfactual_bp_scenario_map \
+    --scenario bc_spring_high_fwi_transplant --label "BC spring high-FWI transplant" --zone_overlay
+python -m src.datasets.postprocessing.counterfactual_fi_scenario_map \
+    --scenario bc_spring_high_fwi_transplant --label "BC spring high-FWI transplant" --zone_overlay
+```
+
+For the cleaner within-hex seasonal diagnostic, use the zone-conditioned
+scenarios `hex16_spring_zone_high_fwi_transplant` and
+`hex16_nonspring_zone_high_fwi_transplant`. These select the highest-FWI row
+within each hex16 `WeatherZone` and season set, then transplant that row back
+only into the same zone.
 
 Scoping notes:
 - `--scenario` and `--endpoint` are repeatable (`--scenario a --scenario b`);

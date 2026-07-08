@@ -171,16 +171,41 @@ def _processed_weather_hex_slice(raw_data_dir: Path, hex_id: str) -> slice:
     raise FileNotFoundError(f"Missing raw weather table for hex{hex_id}: {target_path}")
 
 
+def _normalize_season_values(values: object) -> set[int] | None:
+    if values is None:
+        return None
+    raw_values = values if isinstance(values, list | tuple | set) else [values]
+    normalized: set[int] = set()
+    for value in raw_values:
+        text = str(value).strip()
+        if text.lower().startswith("s"):
+            text = text[1:]
+        if not text:
+            raise ValueError("Season filters cannot include empty values.")
+        normalized.add(int(float(text)))
+    if not normalized:
+        raise ValueError("season_values must include at least one season.")
+    return normalized
+
+
+def _season_numbers(raw_weather: pd.DataFrame) -> np.ndarray:
+    if "Season" not in raw_weather.columns:
+        raise ValueError("Raw weather table is missing required column 'Season'.")
+    return pd.to_numeric(raw_weather["Season"].astype(str).str.extract(r"(\d+)", expand=False), errors="coerce").to_numpy(dtype=np.float64)
+
+
 def _select_external_extreme_weather_donor(
     *,
     raw_data_dir: Path,
     full_processed: pd.DataFrame,
     donor_hex_ids: list[str],
     rank_column: str,
+    season_values: object = None,
 ) -> tuple[str, int, pd.Series, pd.Series]:
     if not donor_hex_ids:
         raise ValueError("external_extreme_transplant requires at least one donor hex ID.")
 
+    allowed_seasons = _normalize_season_values(season_values)
     best: tuple[float, int, str, int, pd.Series, pd.Series] | None = None
     for order, hex_id_raw in enumerate(donor_hex_ids):
         hex_id = str(hex_id_raw).zfill(2)
@@ -188,10 +213,13 @@ def _select_external_extreme_weather_donor(
         if rank_column not in raw_hex.columns:
             raise ValueError(f"Donor raw weather for hex{hex_id} is missing rank column {rank_column!r}.")
         values = raw_hex[rank_column].to_numpy(dtype=np.float64)
-        finite = np.isfinite(values)
-        if not finite.any():
+        eligible = np.isfinite(values)
+        if allowed_seasons is not None:
+            eligible &= np.isin(_season_numbers(raw_hex), list(allowed_seasons))
+        if not eligible.any():
             continue
-        local_row = int(np.flatnonzero(finite)[int(np.argmax(values[finite]))])
+        eligible_positions = np.flatnonzero(eligible)
+        local_row = int(eligible_positions[int(np.argmax(values[eligible_positions]))])
         rank_value = float(values[local_row])
         donor_slice = _processed_weather_hex_slice(raw_data_dir, hex_id)
         processed_row = full_processed.iloc[donor_slice.start + local_row]
@@ -201,7 +229,8 @@ def _select_external_extreme_weather_donor(
             best = candidate
 
     if best is None:
-        raise ValueError(f"No finite {rank_column!r} donor rows found for donor_hex_ids={donor_hex_ids}.")
+        suffix = f" and season_values={sorted(allowed_seasons)}" if allowed_seasons is not None else ""
+        raise ValueError(f"No finite {rank_column!r} donor rows found for donor_hex_ids={donor_hex_ids}{suffix}.")
     _, _, donor_hex_id, donor_row_index, donor_raw_row, donor_processed_row = best
     return donor_hex_id, donor_row_index, donor_raw_row, donor_processed_row
 
@@ -549,6 +578,7 @@ def _write_weather_table(
             full_processed=full_processed,
             donor_hex_ids=[str(hex_id) for hex_id in weather_params.get("donor_hex_ids", [])],
             rank_column=str(weather_params.get("rank_column", FWI_COLUMN)),
+            season_values=weather_params.get("season_values"),
         )
         transplant_columns = tuple(weather_params["transplant_columns"]) if "transplant_columns" in weather_params else None
         scenario_processed_hex, edit_report = external_extreme_weather_transplant(

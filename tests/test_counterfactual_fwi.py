@@ -9,6 +9,7 @@ from src.datasets.postprocessing.counterfactual_fwi import (
     daily_regime_swap,
     external_extreme_weather_transplant,
     fwi_tercile_labels,
+    zone_extreme_weather_transplant,
 )
 from src.datasets.postprocessing.counterfactual_weather import (
     WindEncodingStats,
@@ -142,6 +143,47 @@ def test_external_extreme_weather_transplant_copies_donor_features_and_preserves
     assert edited["WeatherZone"].tolist() == processed["WeatherZone"].tolist()
     assert report["donor_hex_id"].iloc[0] == "17"
     assert report["donor_fwi"].iloc[0] == pytest.approx(76.6)
+
+
+def test_zone_extreme_weather_transplant_selects_seasonal_donor_within_each_zone() -> None:
+    raw = pd.DataFrame(
+        {
+            "Order": [1, 2, 3, 4, 5, 6],
+            "Season": ["s1", "s2", "s1", "s1", "s2", "s1"],
+            "WeatherZone": [10, 10, 10, 11, 11, 11],
+            "Temperature": [11.0, 99.0, 13.0, 21.0, 88.0, 23.0],
+            "RelativeHumidity": [40.0, 1.0, 30.0, 50.0, 2.0, 45.0],
+            "WindSpeed": [5.0, 50.0, 7.0, 8.0, 60.0, 9.0],
+            "WindDirection": [100.0, 200.0, 110.0, 120.0, 210.0, 130.0],
+            "FireWeatherIndex": [10.0, 100.0, 30.0, 20.0, 90.0, 40.0],
+        }
+    )
+    processed = pd.DataFrame(
+        {
+            "Order": raw["Order"],
+            "Season": [1, 2, 1, 1, 2, 1],
+            "WeatherZone": raw["WeatherZone"],
+            "Temperature": [0.11, 0.99, 0.13, 0.21, 0.88, 0.23],
+            "RelativeHumidity": [0.40, 0.01, 0.30, 0.50, 0.02, 0.45],
+            "WindSpeed": [0.5, 5.0, 0.7, 0.8, 6.0, 0.9],
+            "wind_x": [1.0, 9.0, 3.0, 4.0, 8.0, 6.0],
+            "wind_y": [1.5, 9.5, 3.5, 4.5, 8.5, 6.5],
+            "FireWeatherIndex": [0.10, 1.00, 0.30, 0.20, 0.90, 0.40],
+        }
+    )
+
+    edited, report = zone_extreme_weather_transplant(raw, processed, season_values=[1])
+
+    zone10 = edited["WeatherZone"] == 10
+    zone11 = edited["WeatherZone"] == 11
+    for column in ["Temperature", "RelativeHumidity", "WindSpeed", "wind_x", "wind_y", "FireWeatherIndex"]:
+        assert np.allclose(edited.loc[zone10, column], processed.loc[2, column])
+        assert np.allclose(edited.loc[zone11, column], processed.loc[5, column])
+    assert edited["Order"].tolist() == processed["Order"].tolist()
+    assert edited["Season"].tolist() == processed["Season"].tolist()
+    assert report["zone"].tolist() == [10, 11]
+    assert report["donor_row_index"].tolist() == [2, 5]
+    assert report["donor_fwi"].tolist() == [30.0, 40.0]
 
 
 def test_apply_fwi_scenario_dispatches_and_rejects_unknown_mode() -> None:

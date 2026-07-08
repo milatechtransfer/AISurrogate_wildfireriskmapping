@@ -44,7 +44,7 @@ THERMO_SWAP_COLUMNS: tuple[str, ...] = (
 FWI_COLUMN = "FireWeatherIndex"
 RAW_WIND_SPEED_COLUMN = "WindSpeed"
 SWAP_DIRECTIONS: tuple[str, ...] = ("low_to_high", "high_to_low")
-SWAP_MODES: tuple[str, ...] = ("daily_regime_swap", "external_extreme_transplant")
+SWAP_MODES: tuple[str, ...] = ("daily_regime_swap", "external_extreme_transplant", "zone_seasonal_extreme_transplant")
 STRUCTURAL_COLUMNS: tuple[str, ...] = ("Order", "Season", "WeatherZone")
 
 
@@ -85,6 +85,25 @@ class ExternalExtremeWeatherReport:
     note: str
 
 
+@dataclass(frozen=True)
+class ZoneExtremeWeatherReport:
+    """Per-zone summary of a high-FWI weather-row transplant."""
+
+    zone: int
+    donor_row_index: int
+    donor_order: int
+    donor_season: int | str
+    donor_fwi: float
+    donor_temperature: float
+    donor_relative_humidity: float
+    donor_wind_speed: float
+    donor_wind_direction: float
+    n_rows: int
+    baseline_fwi_mean: float
+    scenario_fwi_mean: float
+    note: str
+
+
 def fwi_tercile_labels(fwi_values: np.ndarray, *, low_quantile: float, high_quantile: float) -> np.ndarray:
     """Label each FWI value as 'low', 'mid', or 'high' by within-group terciles."""
 
@@ -97,6 +116,29 @@ def fwi_tercile_labels(fwi_values: np.ndarray, *, low_quantile: float, high_quan
     labels[values <= low_threshold] = "low"
     labels[values >= high_threshold] = "high"
     return labels
+
+
+def _normalize_season_values(values: object) -> set[int] | None:
+    if values is None:
+        return None
+    raw_values = values if isinstance(values, list | tuple | set) else [values]
+    normalized: set[int] = set()
+    for value in raw_values:
+        text = str(value).strip()
+        if text.lower().startswith("s"):
+            text = text[1:]
+        if not text:
+            raise ValueError("Season filters cannot include empty values.")
+        normalized.add(int(float(text)))
+    if not normalized:
+        raise ValueError("season_values must include at least one season.")
+    return normalized
+
+
+def _season_numbers(frame: pd.DataFrame) -> np.ndarray:
+    if "Season" not in frame.columns:
+        raise ValueError("Raw weather table is missing required column 'Season'.")
+    return pd.to_numeric(frame["Season"].astype(str).str.extract(r"(\d+)", expand=False), errors="coerce").to_numpy(dtype=np.float64)
 
 
 def _reencode_recipient_wind(
@@ -235,6 +277,74 @@ def external_extreme_weather_transplant(
     return processed_edited, pd.DataFrame([report.__dict__])
 
 
+def zone_extreme_weather_transplant(
+    raw_hex: pd.DataFrame,
+    processed_hex: pd.DataFrame,
+    *,
+    rank_column: str = FWI_COLUMN,
+    season_values: object = None,
+    zone_column: str = "WeatherZone",
+    transplant_columns: tuple[str, ...] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Within each zone, copy that zone's highest-ranked eligible weather row."""
+
+    if len(raw_hex) != len(processed_hex):
+        raise ValueError(f"Raw/processed row count mismatch: {len(raw_hex)} != {len(processed_hex)}.")
+    validate_columns(raw_hex, (zone_column, "Season", rank_column), frame_name="raw weather")
+    validate_columns(processed_hex, (zone_column, FWI_COLUMN), frame_name="processed weather")
+
+    raw = raw_hex.reset_index(drop=True)
+    processed = processed_hex.reset_index(drop=True)
+    processed_edited = processed.copy()
+    if transplant_columns is None:
+        transplant_columns = tuple(column for column in processed_edited.columns if column not in STRUCTURAL_COLUMNS)
+    missing = sorted(column for column in transplant_columns if column not in processed_edited.columns)
+    if missing:
+        raise ValueError(f"Cannot transplant missing processed weather columns: {missing}.")
+
+    allowed_seasons = _normalize_season_values(season_values)
+    seasons = _season_numbers(raw)
+    zones = raw[zone_column].to_numpy()
+    rank_values = raw[rank_column].to_numpy(dtype=np.float64)
+    reports: list[ZoneExtremeWeatherReport] = []
+
+    for zone in sorted(pd.Series(zones).dropna().unique()):
+        zone_positions = np.flatnonzero(zones == zone)
+        eligible = np.isfinite(rank_values) & (zones == zone)
+        if allowed_seasons is not None:
+            eligible &= np.isin(seasons, list(allowed_seasons))
+        if not eligible.any():
+            season_suffix = f" in seasons {sorted(allowed_seasons)}" if allowed_seasons is not None else ""
+            raise ValueError(f"No finite {rank_column!r} donor rows found for zone={zone!r}{season_suffix}.")
+
+        eligible_positions = np.flatnonzero(eligible)
+        donor_position = int(eligible_positions[int(np.argmax(rank_values[eligible_positions]))])
+        donor_processed_row = processed.iloc[donor_position]
+        for column in transplant_columns:
+            processed_edited.loc[zone_positions, column] = donor_processed_row[column]
+
+        donor_raw_row = raw.iloc[donor_position]
+        reports.append(
+            ZoneExtremeWeatherReport(
+                zone=int(zone),
+                donor_row_index=donor_position,
+                donor_order=int(donor_raw_row["Order"]),
+                donor_season=donor_raw_row["Season"],
+                donor_fwi=float(donor_raw_row[rank_column]),
+                donor_temperature=float(donor_raw_row["Temperature"]),
+                donor_relative_humidity=float(donor_raw_row["RelativeHumidity"]),
+                donor_wind_speed=float(donor_raw_row[RAW_WIND_SPEED_COLUMN]),
+                donor_wind_direction=float(donor_raw_row["WindDirection"]),
+                n_rows=int(zone_positions.size),
+                baseline_fwi_mean=float(processed.loc[zone_positions, FWI_COLUMN].mean()),
+                scenario_fwi_mean=float(processed_edited.loc[zone_positions, FWI_COLUMN].mean()),
+                note="ok",
+            )
+        )
+
+    return processed_edited, pd.DataFrame([report.__dict__ for report in reports])
+
+
 def apply_fwi_scenario(
     raw_hex: pd.DataFrame,
     processed_hex: pd.DataFrame,
@@ -246,6 +356,16 @@ def apply_fwi_scenario(
     """Apply the daily FWI regime swap."""
 
     mode = str(params.get("mode", "daily_regime_swap"))
+    if mode == "zone_seasonal_extreme_transplant":
+        transplant_columns = tuple(params["transplant_columns"]) if "transplant_columns" in params else None
+        return zone_extreme_weather_transplant(
+            raw_hex,
+            processed_hex,
+            rank_column=str(params.get("rank_column", FWI_COLUMN)),
+            season_values=params.get("season_values"),
+            zone_column=str(params.get("zone_column", "WeatherZone")),
+            transplant_columns=transplant_columns,
+        )
     if mode not in SWAP_MODES:
         raise ValueError(f"Unknown FWI scenario mode {mode!r}; expected one of {SWAP_MODES}.")
     if mode == "external_extreme_transplant":

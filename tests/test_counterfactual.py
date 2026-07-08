@@ -454,6 +454,46 @@ def test_select_external_extreme_weather_donor_uses_max_fwi_and_processed_alignm
     assert donor_processed_row["Temperature"] == pytest.approx(0.2)
 
 
+def test_select_external_extreme_weather_donor_filters_by_season(tmp_path: Path) -> None:
+    raw_data_dir = tmp_path / "raw"
+    (raw_data_dir / "hex01" / "tabular").mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "Order": [1, 2, 3],
+            "Season": ["s1", "s2", "s3"],
+            "WeatherZone": ["z1", "z1", "z1"],
+            "Temperature": [20.0, 30.0, 35.0],
+            "RelativeHumidity": [40.0, 30.0, 25.0],
+            "WindSpeed": [10.0, 20.0, 30.0],
+            "WindDirection": [180.0, 200.0, 220.0],
+            "FireWeatherIndex": [40.0, 80.0, 70.0],
+        }
+    ).to_csv(raw_data_dir / "hex01" / "tabular" / "hex01_DailyWeather.csv", index=False)
+    full_processed = pd.DataFrame(
+        {
+            "Order": [1, 2, 3],
+            "Season": [1, 2, 3],
+            "WeatherZone": [1, 1, 1],
+            "Temperature": [0.1, 0.2, 0.3],
+            "FireWeatherIndex": [0.4, 0.8, 0.7],
+        }
+    )
+
+    donor_hex_id, donor_row_index, donor_raw_row, donor_processed_row = _select_external_extreme_weather_donor(
+        raw_data_dir=raw_data_dir,
+        full_processed=full_processed,
+        donor_hex_ids=["01"],
+        rank_column="FireWeatherIndex",
+        season_values=["s1", 3],
+    )
+
+    assert donor_hex_id == "01"
+    assert donor_row_index == 2
+    assert donor_raw_row["Season"] == 3
+    assert donor_raw_row["FireWeatherIndex"] == pytest.approx(70.0)
+    assert donor_processed_row["Temperature"] == pytest.approx(0.3)
+
+
 def test_paired_delta_summary_uses_finite_intersection() -> None:
     baseline = np.ma.masked_invalid(np.array([[1.0, 2.0], [np.nan, 4.0]]))
     scenario = np.ma.masked_invalid(np.array([[2.0, 1.0], [3.0, np.nan]]))
