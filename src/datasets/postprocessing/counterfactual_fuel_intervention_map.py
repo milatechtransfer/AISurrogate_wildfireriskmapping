@@ -322,7 +322,7 @@ def plot_intervention_map(
         interpolation="nearest",
         origin="upper",
     )
-    ax_original.set_title("A. Original grouped fuel map\n(non-fuel barriers in black)")
+    ax_original.set_title("A. Original grouped fuel map", fontsize=15)
     overlay_zone_boundaries(
         ax_original,
         zone_display,
@@ -347,7 +347,7 @@ def plot_intervention_map(
             interpolation="nearest",
             origin="upper",
         )
-    ax_replacement.set_title("B. Counterfactual replacement map\n(edited barrier pixels coloured by assigned fuel)")
+    ax_replacement.set_title("B. Counterfactual replacement map", fontsize=15)
     overlay_zone_boundaries(
         ax_replacement,
         zone_display,
@@ -359,37 +359,20 @@ def plot_intervention_map(
     ax_replacement.set_yticks([])
     ax_replacement.set_aspect("equal")
 
-    baseline_handles = _legend_handles(baseline_categories, include_nonfuel=True)
-    replacement_handles = _legend_handles(replacement_categories, include_nonfuel=False)
-    ax_original.legend(
-        handles=baseline_handles,
-        title="Original fuel groups",
-        loc="lower left",
-        bbox_to_anchor=(0.0, -0.02),
-        fontsize=7,
-        title_fontsize=8,
+    combined_categories = sorted(set(baseline_categories) | set(replacement_categories))
+    combined_handles = _legend_handles(combined_categories, include_nonfuel=NONFUEL_GROUP in combined_categories)
+    fig.legend(
+        handles=combined_handles,
+        title="Fuel groups",
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.0),
+        fontsize=12,
+        title_fontsize=13,
         frameon=True,
-        ncol=2,
-    )
-    ax_replacement.legend(
-        handles=replacement_handles,
-        title="Replacement fuel groups",
-        loc="lower left",
-        bbox_to_anchor=(0.0, -0.02),
-        fontsize=7,
-        title_fontsize=8,
-        frameon=True,
-        ncol=2,
+        ncol=6,
     )
 
-    fig.suptitle(
-        (
-            f"Hex{int(hex_id):02d} local adjacent-modal fuel intervention\n"
-            "Each connected original non-fuel component is filled with its modal adjacent burnable fuel group"
-        ),
-        y=1.03,
-        fontsize=13,
-    )
+    fig.suptitle(f"Hex{int(hex_id):02d} local adjacent-modal fuel intervention", y=1.03, fontsize=18)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=220, bbox_inches="tight")
     plt.close(fig)
