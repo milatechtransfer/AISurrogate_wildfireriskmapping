@@ -186,7 +186,13 @@ class FuelCounterfactualTransform:
         col_end = patch_window.col + width
         edited_channel = edited_hexel[patch_window.row : row_end, patch_window.col : col_end]
         if edited_channel.shape != (height, width):
-            raise ValueError(f"Edited fuel slice for patch {key} has shape {edited_channel.shape}; expected {(height, width)}.")
+            # Patches near a hex's edge extend past the raw raster's true extent (the
+            # patch-generation pipeline pads with NODATA before windowing); pad the same way.
+            pad_height = height - edited_channel.shape[0]
+            pad_width = width - edited_channel.shape[1]
+            if pad_height < 0 or pad_width < 0:
+                raise ValueError(f"Edited fuel slice for patch {key} has shape {edited_channel.shape}; expected {(height, width)}.")
+            edited_channel = np.pad(edited_channel, ((0, pad_height), (0, pad_width)), mode="constant", constant_values=np.nan)
         edited = np.array(data, copy=True)
         edited[:, :, self.fuel_channel] = edited_channel.astype(edited.dtype, copy=False)
         return edited

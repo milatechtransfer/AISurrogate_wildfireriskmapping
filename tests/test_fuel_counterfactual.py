@@ -78,3 +78,43 @@ def test_fuel_counterfactual_loads_raw_fuel_grid_and_writes_exact_intervention(
         scenario_fuel = src.read(1, masked=True).filled(np.nan)
     assert baseline_fuel.tolist() == global_fuel.tolist()
     assert scenario_fuel[1, 1] == 1
+
+
+def test_fuel_counterfactual_pads_patches_extending_past_raster_bounds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    global_fuel = np.array([[1, 1, 2, 2], [1, 0, 2, 2], [1, 1, 2, 2]], dtype=np.float32)
+    metadata = pd.DataFrame([{"filename": "edge.npy", "hex_id": 16, "row": 1, "col": 2}])
+    scenario = ScenarioConfig(
+        name="remove_barriers",
+        kind="fuel",
+        description="",
+        params={"mode": "nonfuel_to_burnable_local_adjacent_modal", "nonfuel_ids": [0]},
+    )
+    reference_profile = {
+        "driver": "GTiff",
+        "height": 3,
+        "width": 4,
+        "count": 1,
+        "dtype": "float32",
+        "crs": "EPSG:4326",
+        "transform": from_origin(0, 3, 1, 1),
+        "nodata": -9999,
+    }
+    monkeypatch.setattr(
+        "src.datasets.postprocessing.counterfactual.fuel_counterfactual_transform.load_spatial_raster",
+        lambda **_: (np.ma.masked_array(global_fuel, mask=False), reference_profile),
+    )
+    transform = FuelCounterfactualTransform.from_metadata(
+        metadata=metadata,
+        fuel_channel=0,
+        scenario=scenario,
+        raw_data_dir=tmp_path,
+    )
+
+    edge_patch = np.zeros((3, 3, 2), dtype=np.float32)
+    edited = transform(edge_patch, metadata.iloc[0].to_dict())
+    expected_channel = np.full((3, 3), np.nan, dtype=np.float32)
+    expected_channel[:2, :2] = global_fuel[1:3, 2:4]
+    np.testing.assert_array_equal(edited[:, :, 0], expected_channel)
