@@ -1,8 +1,14 @@
 """
 Train a tabular baseline (XGBoost / RandomForest / LinearRegression) on
-spatial-only channels, evaluated with the same metric functions and target
-denormalization convention used by the UNet Trainer, at both patch level and
-hexel level. Includes phase timing and tqdm progress bars.
+spatial-only channels PLUS the per-pixel iROS fuel curve vector (no encoder --
+raw curve values used directly, per the paper's contribution), evaluated with
+the same metric functions and target denormalization convention used by the
+UNet Trainer, at both patch level and region (stitched hexel) level.
+
+Trains and predicts in NORMALIZED [0,1] space (matching the U-Net's training
+convention), denormalizing only at evaluation time for metric computation.
+
+Includes phase timing and tqdm progress bars.
 
 Usage:
     python -m src.train_baseline --config=configs/bp_spatial_only_xgb.yaml
@@ -17,6 +23,7 @@ import argparse
 import json
 import os
 import time
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -25,8 +32,6 @@ import joblib
 from scipy.stats import spearmanr
 from tqdm import tqdm
 from xgboost import XGBRegressor
-from collections import defaultdict
-
 
 from src.config import Config
 from src.datasets.dataset import get_train_val_dataloader, get_test_dataloader
@@ -37,12 +42,11 @@ from src.utils import AVAILABLE_METRICS, seed_everything
 from src.datasets.postprocessing.stitch_hexel import stitch_windows
 from src.datasets.postprocessing.utils import calculate_hexel_metrics_pytorch, load_target_grid_for_mask_scope, load_spatial_raster
 from data_preparation.paths import Paths
-from src.datasets.targets import get_target_specs
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train and evaluate a tabular baseline (XGBoost/RF/linear) on spatial-only inputs."
+        description="Train and evaluate a tabular baseline (XGBoost/RF/linear) on spatial + iROS fuel curve inputs."
     )
     parser.add_argument("--config", type=str, default="configs/bp_spatial_only_xgb.yaml", help="Path to YAML config file.")
     parser.add_argument("--pixels_per_patch", type=int, default=4096, help="Training subsample size per patch (0 = use all valid pixels).")
@@ -59,7 +63,7 @@ def load_config(path: str) -> Config:
     return Config(**raw)
 
 
-# ---------- Target denormalization (mirrors Trainer._configure_metric_target_transform, min_max only) ----------
+# ---------- Target real-scale range (used only for denormalizing PREDICTIONS at eval time) ----------
 
 def get_grid_source_params(config: Config):
     source_map = {s.name: s for s in config.data.input_sources}
@@ -91,8 +95,6 @@ def denormalize_min_max(y_norm: np.ndarray, target_min: float, target_max: float
 
 
 # ---------- Mask handling ----------
-# NOTE: assumes masks may be boolean or a continuous valid-fraction; verified
-# working against real data in the smoke test (job 10163234).
 
 def resolve_mask(masks: np.ndarray, valid_mask_threshold: float) -> np.ndarray:
     if masks.dtype == bool:
@@ -100,9 +102,23 @@ def resolve_mask(masks: np.ndarray, valid_mask_threshold: float) -> np.ndarray:
     return masks > valid_mask_threshold
 
 
+# ---------- Combine spatial grid + fuel curve channels ----------
+
+def combine_inputs(inputs_np: np.ndarray, fuel_curve_np: np.ndarray | None) -> np.ndarray:
+    """
+    inputs_np: (B, C, H, W) spatial channels.
+    fuel_curve_np: (B, L, H, W) per-pixel iROS curve values, or None if not configured.
+    Returns concatenated (B, C+L, H, W). No encoder -- raw curve values used directly.
+    """
+    if fuel_curve_np is None:
+        return inputs_np
+    return np.concatenate([inputs_np, fuel_curve_np], axis=1)
+
+
 # ---------- Batch -> tabular rows ----------
 
-def tabularize_loader(loader, target_min, target_max, valid_mask_threshold, pixels_per_patch=None, rng=None, max_batches=0):
+def tabularize_loader(loader, valid_mask_threshold, pixels_per_patch=None, rng=None, max_batches=0):
+    """Trains directly on normalized [0,1] BP targets, matching the U-Net's training space."""
     X_parts, y_parts = [], []
     n_batches = max_batches if max_batches else len(loader)
     progress = tqdm(enumerate(loader), total=n_batches, desc="Tabularizing", leave=True)
@@ -112,13 +128,18 @@ def tabularize_loader(loader, target_min, target_max, valid_mask_threshold, pixe
             break
 
         inputs, targets, masks = batch["grid"]
+        fuel_curve = batch.get("fuel_curve")
+
         inputs_np = inputs.numpy()
+        fuel_curve_np = fuel_curve.numpy() if fuel_curve is not None else None
+        combined_np = combine_inputs(inputs_np, fuel_curve_np)
+
         targets_np = targets.numpy()
         masks_np = masks.numpy()
 
-        B, C, H, W = inputs_np.shape
-        x = inputs_np.transpose(0, 2, 3, 1).reshape(-1, C)
-        y = denormalize_min_max(targets_np.reshape(-1), target_min, target_max)
+        B, C, H, W = combined_np.shape
+        x = combined_np.transpose(0, 2, 3, 1).reshape(-1, C)
+        y = targets_np.reshape(-1)  # normalized [0,1] space, no denormalization
         m = resolve_mask(masks_np.reshape(-1), valid_mask_threshold)
 
         if pixels_per_patch:
@@ -143,9 +164,7 @@ def tabularize_loader(loader, target_min, target_max, valid_mask_threshold, pixe
     return np.concatenate(X_parts), np.concatenate(y_parts)
 
 
-# ---------- Per-patch summaries (real-scale BP units; parallels HexSummaryLoss._patch_summaries
-# but operates in denormalized space rather than sigmoid-probability space, to stay consistent
-# with the rest of this script's metric reporting) ----------
+# ---------- Per-patch summaries (real-scale BP units) ----------
 
 def patch_summary(values: np.ndarray, mask: np.ndarray, top_fraction: float | None = None) -> float:
     valid = values[mask]
@@ -157,7 +176,14 @@ def patch_summary(values: np.ndarray, mask: np.ndarray, top_fraction: float | No
     return float(np.sort(valid)[-k:].mean())
 
 
-# ---------- Patch-level metrics + hexel-level aggregation ----------
+def predict_real_scale(model, x_flat: np.ndarray, target_min: float, target_max: float) -> np.ndarray:
+    """Predict in normalized space, clip to [0,1] (mirrors get_predicted_hexel's clip
+    for min_max out_norm), then denormalize to real BP units for metrics."""
+    preds_norm = np.clip(model.predict(x_flat), 0.0, 1.0)
+    return denormalize_min_max(preds_norm, target_min, target_max)
+
+
+# ---------- Patch-level metrics + scalar-summary hexel rank agreement ----------
 
 def evaluate_patchwise_and_hexel(
     model, loader, target_min, target_max, valid_mask_threshold, metric_names, top_fraction: float = 0.10, max_batches: int = 0
@@ -179,6 +205,7 @@ def evaluate_patchwise_and_hexel(
             break
 
         inputs, targets, masks = batch["grid"]
+        fuel_curve = batch.get("fuel_curve")
         patch_metadata = batch.get("patch_metadata")
         if patch_metadata is None or "hex_id" not in patch_metadata:
             raise ValueError(
@@ -186,12 +213,16 @@ def evaluate_patchwise_and_hexel(
             )
         hex_ids = patch_metadata["hex_id"].numpy()
 
-        inputs_np, targets_np, masks_np = inputs.numpy(), targets.numpy(), masks.numpy()
-        B, C, H, W = inputs_np.shape
+        inputs_np = inputs.numpy()
+        fuel_curve_np = fuel_curve.numpy() if fuel_curve is not None else None
+        combined_np = combine_inputs(inputs_np, fuel_curve_np)
 
-        x_flat = inputs_np.transpose(0, 2, 3, 1).reshape(-1, C)
-        preds_flat = model.predict(x_flat)
-        preds = preds_flat.reshape(B, H, W)[:, None, :, :]  # (B, 1, H, W)
+        targets_np, masks_np = targets.numpy(), masks.numpy()
+        B, C, H, W = combined_np.shape
+
+        x_flat = combined_np.transpose(0, 2, 3, 1).reshape(-1, C)
+        preds_real_flat = predict_real_scale(model, x_flat, target_min, target_max)
+        preds = preds_real_flat.reshape(B, H, W)[:, None, :, :]  # (B, 1, H, W)
 
         targets_real = denormalize_min_max(targets_np, target_min, target_max)
         mask_resolved = resolve_mask(masks_np, valid_mask_threshold)
@@ -245,34 +276,25 @@ def evaluate_patchwise_and_hexel(
 
     return patch_metrics, hexel_metrics
 
-def evaluate_region_level(model, loader, valid_mask_threshold, config, metric_functions, device="cpu", max_batches: int = 0):
+
+# ---------- Region-level (stitched full-hexel raster) evaluation ----------
+
+def evaluate_region_level(model, loader, target_min, target_max, valid_mask_threshold, config, metric_functions, device="cpu", max_batches: int = 0):
     """
-    Region-level (whole-hexel) evaluation: gather per-patch predictions with their
-    (row, col) placement, stitch into full hexel rasters via stitch_windows (the
-    same function the U-Net eval pipeline uses), compare against the true raw BP
-    raster, and compute the full metric suite once per hexel via
-    calculate_hexel_metrics_pytorch -- matching the "Region-Level Evaluation"
-    reporting convention used for the U-Net.
-
-    Predictions are stitched directly in real-scale units: mean-overlap averaging
-    commutes with the affine min_max denormalization, so stitching real-scale
-    values first and denormalizing (already done, since our predictions are
-    trained/predicted in real-scale space) is equivalent to stitching normalized
-    values and denormalizing after -- no double-transform risk.
-
-    Ground truth is loaded via load_target_grid_for_mask_scope (not a raw
-    load_spatial_raster call) so bp_nodata_as_zero and mask-scope handling exactly
-    match the U-Net's own evaluate_and_visualize_hexels pipeline -- otherwise the
-    two ground truths could silently diverge on nodata pixels.
+    Stitches per-patch predictions (denormalized to real-scale BP) into full hexel
+    rasters via stitch_windows, compares against the true raw BP raster (loaded via
+    load_target_grid_for_mask_scope, matching bp_nodata_as_zero handling), and
+    computes the full metric suite once per hexel via calculate_hexel_metrics_pytorch.
     """
-
     hex_data = defaultdict(lambda: {"preds": [], "locations": [], "masks": []})
     target_spec = get_target_specs("bp")[0]
 
-    for i,batch in enumerate(loader):
+    for i, batch in enumerate(loader):
         if max_batches and i >= max_batches:
             break
+
         inputs, targets, masks = batch["grid"]
+        fuel_curve = batch.get("fuel_curve")
         patch_metadata = batch.get("patch_metadata")
         if patch_metadata is None or "row" not in patch_metadata or "col" not in patch_metadata:
             raise ValueError(
@@ -284,16 +306,19 @@ def evaluate_region_level(model, loader, valid_mask_threshold, config, metric_fu
         cols = patch_metadata["col"].numpy()
 
         inputs_np = inputs.numpy()
+        fuel_curve_np = fuel_curve.numpy() if fuel_curve is not None else None
+        combined_np = combine_inputs(inputs_np, fuel_curve_np)
         masks_np = masks.numpy()
-        B, C, H, W = inputs_np.shape
+        B, C, H, W = combined_np.shape
 
-        x_flat = inputs_np.transpose(0, 2, 3, 1).reshape(-1, C)
-        preds_flat = model.predict(x_flat).reshape(B, H, W)
+        x_flat = combined_np.transpose(0, 2, 3, 1).reshape(-1, C)
+        preds_real_flat = predict_real_scale(model, x_flat, target_min, target_max)
+        preds_real = preds_real_flat.reshape(B, H, W)
         mask_resolved = resolve_mask(masks_np, valid_mask_threshold)[:, 0]  # (B, H, W)
 
         for b in range(B):
             hid = str(int(hex_ids[b])).zfill(2)
-            hex_data[hid]["preds"].append(preds_flat[b])
+            hex_data[hid]["preds"].append(preds_real[b])
             hex_data[hid]["locations"].append((int(rows[b]), int(cols[b])))
             hex_data[hid]["masks"].append(mask_resolved[b])
 
@@ -301,15 +326,12 @@ def evaluate_region_level(model, loader, valid_mask_threshold, config, metric_fu
     for hid, data in hex_data.items():
         paths = Paths(hex_id=hid, root_dir=config.data.raw_data_dir)
 
-        # Load once for shape/profile so we can stitch to the correct raster size.
         gt_grid_raw, profile = load_spatial_raster(
             path=paths.output_burn_prob(),
             mask_path=paths.mask_grid(hex_id=hid, mask_scope="actual"),
         )
         pred_grid = stitch_windows(data["preds"], data["locations"], data["masks"], gt_grid_raw.shape, mode="mean")
 
-        # Re-load ground truth via the same helper the U-Net eval pipeline uses,
-        # so bp_nodata_as_zero and mask-scope handling match exactly.
         gt_grid, pred_grid = load_target_grid_for_mask_scope(
             paths=paths,
             target=target_spec,
@@ -324,8 +346,6 @@ def evaluate_region_level(model, loader, valid_mask_threshold, config, metric_fu
             gt_grid=gt_grid, pred_grid=pred_grid, device=device, metric_functions=metric_functions
         )
 
-    # Aggregate across hexels: mean per metric, matching the single-row-per-config
-    # convention in the comparison table.
     all_metric_names = next(iter(per_hexel_metrics.values())).keys()
     aggregated = {
         name: float(np.mean([m[name] for m in per_hexel_metrics.values()]))
@@ -336,9 +356,6 @@ def evaluate_region_level(model, loader, valid_mask_threshold, config, metric_fu
 
 
 # ---------- Model dispatch ----------
-# Mirrors src.models.factory.build_model's dispatch pattern, kept as a separate
-# function since these estimators don't satisfy the nn.Module/autograd contract
-# that Trainer/factory.py assume.
 
 def build_baseline_model(model_config):
     architecture = model_config.architecture.strip().lower().replace("-", "_")
@@ -366,8 +383,10 @@ def main() -> None:
     train_loader, val_loader = get_train_val_dataloader(
         config=config.data, modelling_approach=config.modelling_approach, seed=seed
     )
-    spatial_channels, _ = get_dataset_dimensions(train_loader.dataset)
-    print(f"Detected Data Dimensions: Spatial={spatial_channels}")
+    spatial_channels, aux_dims = get_dataset_dimensions(train_loader.dataset)
+    fuel_curve_len = aux_dims.get("fuel_curve", 0) if aux_dims else 0
+    total_channels = spatial_channels + fuel_curve_len
+    print(f"Detected Data Dimensions: Spatial={spatial_channels}, FuelCurve={fuel_curve_len}, Total={total_channels}")
 
     target_min, target_max = get_bp_real_scale_range(config)
     print(f"======= BP real-scale range ========\nmin={target_min}, max={target_max}")
@@ -375,10 +394,10 @@ def main() -> None:
     valid_mask_threshold = config.data.valid_mask_threshold
     pixels_per_patch = args.pixels_per_patch if args.pixels_per_patch > 0 else None
 
-    # ---------- Tabularize ----------
+    # ---------- Tabularize (normalized [0,1] targets) ----------
     t0 = time.time()
     X_train, y_train = tabularize_loader(
-        train_loader, target_min, target_max, valid_mask_threshold,
+        train_loader, valid_mask_threshold,
         pixels_per_patch=pixels_per_patch, rng=rng, max_batches=args.max_train_batches,
     )
     tabularize_time = time.time() - t0
@@ -424,12 +443,13 @@ def main() -> None:
     for k, v in test_hex_metrics.items():
         print(f"{k}: {v}")
 
-    # ---------- Evaluate: val (region-level, stitched full-hexel rasters) ----------
+    # ---------- Evaluate: val (region-level) ----------
     region_metric_functions = {k: AVAILABLE_METRICS[k] for k in config.metrics}
 
     t0 = time.time()
     val_region_agg, val_region_per_hexel = evaluate_region_level(
-        model, val_loader, valid_mask_threshold, config, region_metric_functions
+        model, val_loader, target_min, target_max, valid_mask_threshold, config, region_metric_functions,
+        max_batches=args.max_eval_batches,
     )
     val_region_time = time.time() - t0
     print(f"======= Val Region Eval Time ========\n{val_region_time:.1f}s")
@@ -440,10 +460,11 @@ def main() -> None:
     for hid, m in val_region_per_hexel.items():
         print(f"hex{hid}: {m}")
 
-    # ---------- Evaluate: test (region-level, stitched full-hexel rasters) ----------
+    # ---------- Evaluate: test (region-level) ----------
     t0 = time.time()
     test_region_agg, test_region_per_hexel = evaluate_region_level(
-        model, test_loader, valid_mask_threshold, config, region_metric_functions
+        model, test_loader, target_min, target_max, valid_mask_threshold, config, region_metric_functions,
+        max_batches=args.max_eval_batches,
     )
     test_region_time = time.time() - t0
     print(f"======= Test Region Eval Time ========\n{test_region_time:.1f}s")
@@ -473,6 +494,7 @@ def main() -> None:
                 "val_region_per_hexel": val_region_per_hexel,
                 "test_region_aggregated": test_region_agg,
                 "test_region_per_hexel": test_region_per_hexel,
+                "feature_dims": {"spatial": spatial_channels, "fuel_curve": fuel_curve_len, "total": total_channels},
                 "timing": {
                     "tabularize_s": tabularize_time,
                     "fit_s": fit_time,
