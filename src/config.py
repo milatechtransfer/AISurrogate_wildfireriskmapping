@@ -41,6 +41,11 @@ class ModelConfig(BaseModel):
     auxiliary_embed_dims: dict[str, int] = {"tabular_weather": 128}
     auxiliary_feature_encoder_poolings: dict[str, str] = {"tabular_weather": "max"}
 
+    # Non-neural baseline hyperparameters (XGBoost/RandomForest/LinearRegression).
+    # Unused by src/models/factory.py; consumed only by src/train_baseline.py's
+    # build_baseline_model dispatch.
+    params: dict | None = None
+
 
 class OptimizerConfig(BaseModel):
     name: str = "AdamW"

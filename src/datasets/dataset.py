@@ -111,7 +111,11 @@ class MultiSourceDataset(Dataset):
         if self.include_patch_metadata:
             if "hex_id" not in patch_info:
                 raise KeyError("Patch metadata requested but split row does not contain 'hex_id'.")
-            sample["patch_metadata"] = {"hex_id": torch.tensor(int(patch_info["hex_id"]), dtype=torch.long)}
+            sample["patch_metadata"] = {
+                "hex_id": torch.tensor(int(patch_info["hex_id"]), dtype=torch.long),
+                "row": torch.tensor(int(patch_info["row"]), dtype=torch.long),
+                "col": torch.tensor(int(patch_info["col"]), dtype=torch.long),
+                }
         return sample
 
     def __len__(self):
