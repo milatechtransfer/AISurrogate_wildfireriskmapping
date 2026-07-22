@@ -5,18 +5,19 @@ raw curve values used directly, per the paper's contribution), evaluated with
 the same metric functions and target denormalization convention used by the
 UNet Trainer, at both patch level and region (stitched hexel) level.
 
-Trains and predicts in NORMALIZED [0,1] space (matching the U-Net's training
-convention), denormalizing only at evaluation time for metric computation.
-
-Includes phase timing and tqdm progress bars.
+Supports BP (min_max out_norm), FI, and ROS (log_standard out_norm) targets via
+--target. Trains and predicts in NORMALIZED space (matching the U-Net's
+training convention), denormalizing only at evaluation time for metric
+computation.
 
 Usage:
-    python -m src.train_baseline --config=configs/bp_spatial_only_xgb.yaml
-    python -m src.train_baseline --config=configs/bp_spatial_only_xgb.yaml \
+    python -m src.train_baseline --config=configs/bp_spatial_only_xgb.yaml --target=bp
+    python -m src.train_baseline --config=configs/fi_spatial_only_xgb.yaml --target=fi
+    python -m src.train_baseline --config=configs/ros_spatial_only_xgb.yaml --target=ros
+    python -m src.train_baseline --config=configs/bp_spatial_only_xgb.yaml --target=bp \
         --pixels_per_patch=256 --max_train_batches=5 --max_eval_batches=5  # smoke test
 
 Note: tqdm progress bars are written to stderr; milestone prints go to stdout.
-When running via SLURM, check both the .out and .err log files.
 """
 
 import argparse
@@ -37,7 +38,7 @@ from src.config import Config
 from src.datasets.dataset import get_train_val_dataloader, get_test_dataloader
 from src.datasets.utils import get_dataset_dimensions, apply_bp_nodata_zero_range
 from src.datasets.targets import get_target_specs
-from data_preparation.spatial.utils import get_range_output, read_split_hex_ids
+from data_preparation.spatial.utils import get_range_output, read_split_hex_ids, get_output_log_stats_cached
 from src.utils import AVAILABLE_METRICS, seed_everything
 from src.datasets.postprocessing.stitch_hexel import stitch_windows
 from src.datasets.postprocessing.utils import calculate_hexel_metrics_pytorch, load_target_grid_for_mask_scope, load_spatial_raster
@@ -49,6 +50,7 @@ def parse_args() -> argparse.Namespace:
         description="Train and evaluate a tabular baseline (XGBoost/RF/linear) on spatial + iROS fuel curve inputs."
     )
     parser.add_argument("--config", type=str, default="configs/bp_spatial_only_xgb.yaml", help="Path to YAML config file.")
+    parser.add_argument("--target", type=str, default="bp", choices=["bp", "fi", "ros"], help="Which target to train the baseline on.")
     parser.add_argument("--pixels_per_patch", type=int, default=4096, help="Training subsample size per patch (0 = use all valid pixels).")
     parser.add_argument("--max_train_batches", type=int, default=0, help="If >0, cap number of training batches read during tabularization (for smoke tests).")
     parser.add_argument("--max_eval_batches", type=int, default=0, help="If >0, cap number of val/test batches evaluated (for smoke tests).")
@@ -63,7 +65,8 @@ def load_config(path: str) -> Config:
     return Config(**raw)
 
 
-# ---------- Target real-scale range (used only for denormalizing PREDICTIONS at eval time) ----------
+# ---------- Target transform params (mirrors Trainer._configure_metric_target_transform,
+# generalized across min_max (BP) and log_standard (FI/ROS)) ----------
 
 def get_grid_source_params(config: Config):
     source_map = {s.name: s for s in config.data.input_sources}
@@ -72,26 +75,59 @@ def get_grid_source_params(config: Config):
     return source_map["grid"].params
 
 
-def get_bp_real_scale_range(config: Config) -> tuple[float, float]:
-    target_spec = get_target_specs("bp")[0]
-    train_hex_ids = read_split_hex_ids(os.path.join(config.data.root_dir, config.data.train_split))
-    target_max, target_min = get_range_output(
-        root_dir=config.data.raw_data_dir,
-        output_type=target_spec.output_type,
-        allowed_hex_ids=train_hex_ids,
-    )
+def get_target_transform_params(config: Config, target_name: str):
+    """
+    Returns (out_norm, target_min, target_max, target_log_mean, target_log_std)
+    needed to denormalize predictions for the given target, matching whatever
+    out_norm that target's GridParams specifies (min_max for BP, log_standard
+    for FI/ROS in this project).
+    """
+    target_spec = get_target_specs(target_name)[0]
     grid_params = get_grid_source_params(config)
-    target_max, target_min = apply_bp_nodata_zero_range(
-        target_name=target_spec.name,
-        max_value=target_max,
-        min_value=target_min,
-        bp_nodata_as_zero=grid_params.bp_nodata_as_zero,
-    )
-    return target_min, target_max
+    out_norm = grid_params.out_norm
+    train_hex_ids = read_split_hex_ids(os.path.join(config.data.root_dir, config.data.train_split))
+
+    target_min, target_max = 0.0, 1.0
+    target_log_mean = getattr(grid_params, "target_log_mean", None)
+    target_log_std = getattr(grid_params, "target_log_std", None)
+
+    if out_norm == "min_max":
+        target_max, target_min = get_range_output(
+            root_dir=config.data.raw_data_dir, output_type=target_spec.output_type, allowed_hex_ids=train_hex_ids,
+        )
+        target_max, target_min = apply_bp_nodata_zero_range(
+            target_name=target_spec.name, max_value=target_max, min_value=target_min,
+            bp_nodata_as_zero=grid_params.bp_nodata_as_zero,
+        )
+    elif out_norm == "log_standard":
+        if target_log_mean is None or target_log_std is None:
+            target_log_mean, target_log_std = get_output_log_stats_cached(
+                root_dir=config.data.root_dir, output_type=target_spec.output_type,
+                allowed_hex_ids=train_hex_ids, raw_data_dir=config.data.raw_data_dir,
+            )
+        if target_log_mean is None or target_log_std is None:
+            raise ValueError(f"target_log_mean/std unavailable for target={target_name!r} with out_norm='log_standard'.")
+    else:
+        raise ValueError(f"Unsupported out_norm={out_norm!r} for this baseline. Supported: 'min_max', 'log_standard'.")
+
+    return out_norm, target_min, target_max, target_log_mean, target_log_std
 
 
-def denormalize_min_max(y_norm: np.ndarray, target_min: float, target_max: float) -> np.ndarray:
-    return y_norm * (target_max - target_min) + target_min
+def denormalize_target(y_norm: np.ndarray, out_norm: str, target_min: float, target_max: float,
+                        target_log_mean: float | None, target_log_std: float | None) -> np.ndarray:
+    if out_norm == "min_max":
+        return y_norm * (target_max - target_min) + target_min
+    if out_norm == "log_standard":
+        return np.clip(np.expm1(y_norm * target_log_std + target_log_mean), 0.0, None)
+    raise ValueError(f"Unsupported out_norm={out_norm!r}.")
+
+
+def clip_normalized_prediction(preds_norm: np.ndarray, out_norm: str) -> np.ndarray:
+    """min_max predictions are naturally bounded [0,1] (mirrors get_predicted_hexel's
+    clip); log_standard predictions have no such natural bound, so left unclipped."""
+    if out_norm == "min_max":
+        return np.clip(preds_norm, 0.0, 1.0)
+    return preds_norm
 
 
 # ---------- Mask handling ----------
@@ -118,7 +154,7 @@ def combine_inputs(inputs_np: np.ndarray, fuel_curve_np: np.ndarray | None) -> n
 # ---------- Batch -> tabular rows ----------
 
 def tabularize_loader(loader, valid_mask_threshold, pixels_per_patch=None, rng=None, max_batches=0):
-    """Trains directly on normalized [0,1] BP targets, matching the U-Net's training space."""
+    """Trains directly on normalized target space, matching the U-Net's training convention."""
     X_parts, y_parts = [], []
     n_batches = max_batches if max_batches else len(loader)
     progress = tqdm(enumerate(loader), total=n_batches, desc="Tabularizing", leave=True)
@@ -139,7 +175,7 @@ def tabularize_loader(loader, valid_mask_threshold, pixels_per_patch=None, rng=N
 
         B, C, H, W = combined_np.shape
         x = combined_np.transpose(0, 2, 3, 1).reshape(-1, C)
-        y = targets_np.reshape(-1)  # normalized [0,1] space, no denormalization
+        y = targets_np.reshape(-1)  # normalized space, no denormalization
         m = resolve_mask(masks_np.reshape(-1), valid_mask_threshold)
 
         if pixels_per_patch:
@@ -164,7 +200,7 @@ def tabularize_loader(loader, valid_mask_threshold, pixels_per_patch=None, rng=N
     return np.concatenate(X_parts), np.concatenate(y_parts)
 
 
-# ---------- Per-patch summaries (real-scale BP units) ----------
+# ---------- Per-patch summaries (real-scale units) ----------
 
 def patch_summary(values: np.ndarray, mask: np.ndarray, top_fraction: float | None = None) -> float:
     valid = values[mask]
@@ -176,17 +212,18 @@ def patch_summary(values: np.ndarray, mask: np.ndarray, top_fraction: float | No
     return float(np.sort(valid)[-k:].mean())
 
 
-def predict_real_scale(model, x_flat: np.ndarray, target_min: float, target_max: float) -> np.ndarray:
-    """Predict in normalized space, clip to [0,1] (mirrors get_predicted_hexel's clip
-    for min_max out_norm), then denormalize to real BP units for metrics."""
-    preds_norm = np.clip(model.predict(x_flat), 0.0, 1.0)
-    return denormalize_min_max(preds_norm, target_min, target_max)
+def predict_real_scale(model, x_flat: np.ndarray, out_norm: str, target_min: float, target_max: float,
+                        target_log_mean: float | None, target_log_std: float | None) -> np.ndarray:
+    """Predict in normalized space, clip if applicable, then denormalize to real units."""
+    preds_norm = clip_normalized_prediction(model.predict(x_flat), out_norm)
+    return denormalize_target(preds_norm, out_norm, target_min, target_max, target_log_mean, target_log_std)
 
 
 # ---------- Patch-level metrics + scalar-summary hexel rank agreement ----------
 
 def evaluate_patchwise_and_hexel(
-    model, loader, target_min, target_max, valid_mask_threshold, metric_names, top_fraction: float = 0.10, max_batches: int = 0
+    model, loader, out_norm, target_min, target_max, target_log_mean, target_log_std,
+    valid_mask_threshold, metric_names, top_fraction: float = 0.10, max_batches: int = 0
 ):
     metric_fns = {k: AVAILABLE_METRICS[k] for k in metric_names}
     running = {name: 0.0 for name in metric_fns}
@@ -221,10 +258,10 @@ def evaluate_patchwise_and_hexel(
         B, C, H, W = combined_np.shape
 
         x_flat = combined_np.transpose(0, 2, 3, 1).reshape(-1, C)
-        preds_real_flat = predict_real_scale(model, x_flat, target_min, target_max)
+        preds_real_flat = predict_real_scale(model, x_flat, out_norm, target_min, target_max, target_log_mean, target_log_std)
         preds = preds_real_flat.reshape(B, H, W)[:, None, :, :]  # (B, 1, H, W)
 
-        targets_real = denormalize_min_max(targets_np, target_min, target_max)
+        targets_real = denormalize_target(targets_np, out_norm, target_min, target_max, target_log_mean, target_log_std)
         mask_resolved = resolve_mask(masks_np, valid_mask_threshold)
 
         # ---------- Patch-level metrics ----------
@@ -279,15 +316,16 @@ def evaluate_patchwise_and_hexel(
 
 # ---------- Region-level (stitched full-hexel raster) evaluation ----------
 
-def evaluate_region_level(model, loader, target_min, target_max, valid_mask_threshold, config, metric_functions, device="cpu", max_batches: int = 0):
+def evaluate_region_level(model, loader, out_norm, target_min, target_max, target_log_mean, target_log_std,
+                           valid_mask_threshold, config, metric_functions, target_name: str, device="cpu", max_batches: int = 0):
     """
-    Stitches per-patch predictions (denormalized to real-scale BP) into full hexel
-    rasters via stitch_windows, compares against the true raw BP raster (loaded via
-    load_target_grid_for_mask_scope, matching bp_nodata_as_zero handling), and
-    computes the full metric suite once per hexel via calculate_hexel_metrics_pytorch.
+    Stitches per-patch predictions (denormalized to real units) into full hexel
+    rasters via stitch_windows, compares against the true raw raster (loaded via
+    load_target_grid_for_mask_scope), and computes the full metric suite once per
+    hexel via calculate_hexel_metrics_pytorch.
     """
     hex_data = defaultdict(lambda: {"preds": [], "locations": [], "masks": []})
-    target_spec = get_target_specs("bp")[0]
+    target_spec = get_target_specs(target_name)[0]
 
     for i, batch in enumerate(loader):
         if max_batches and i >= max_batches:
@@ -312,7 +350,7 @@ def evaluate_region_level(model, loader, target_min, target_max, valid_mask_thre
         B, C, H, W = combined_np.shape
 
         x_flat = combined_np.transpose(0, 2, 3, 1).reshape(-1, C)
-        preds_real_flat = predict_real_scale(model, x_flat, target_min, target_max)
+        preds_real_flat = predict_real_scale(model, x_flat, out_norm, target_min, target_max, target_log_mean, target_log_std)
         preds_real = preds_real_flat.reshape(B, H, W)
         mask_resolved = resolve_mask(masks_np, valid_mask_threshold)[:, 0]  # (B, H, W)
 
@@ -327,7 +365,7 @@ def evaluate_region_level(model, loader, target_min, target_max, valid_mask_thre
         paths = Paths(hex_id=hid, root_dir=config.data.raw_data_dir)
 
         gt_grid_raw, profile = load_spatial_raster(
-            path=paths.output_burn_prob(),
+            path=getattr(paths, target_spec.path_method)(),
             mask_path=paths.mask_grid(hex_id=hid, mask_scope="actual"),
         )
         pred_grid = stitch_windows(data["preds"], data["locations"], data["masks"], gt_grid_raw.shape, mode="mean")
@@ -388,13 +426,14 @@ def main() -> None:
     total_channels = spatial_channels + fuel_curve_len
     print(f"Detected Data Dimensions: Spatial={spatial_channels}, FuelCurve={fuel_curve_len}, Total={total_channels}")
 
-    target_min, target_max = get_bp_real_scale_range(config)
-    print(f"======= BP real-scale range ========\nmin={target_min}, max={target_max}")
+    out_norm, target_min, target_max, target_log_mean, target_log_std = get_target_transform_params(config, args.target)
+    print(f"======= Target transform ({args.target}) ========\nout_norm={out_norm}, min={target_min}, max={target_max}, "
+          f"log_mean={target_log_mean}, log_std={target_log_std}")
 
     valid_mask_threshold = config.data.valid_mask_threshold
     pixels_per_patch = args.pixels_per_patch if args.pixels_per_patch > 0 else None
 
-    # ---------- Tabularize (normalized [0,1] targets) ----------
+    # ---------- Tabularize (normalized targets) ----------
     t0 = time.time()
     X_train, y_train = tabularize_loader(
         train_loader, valid_mask_threshold,
@@ -406,7 +445,7 @@ def main() -> None:
 
     # ---------- Fit ----------
     model = build_baseline_model(config.model)
-    print(f"[Baseline] Fitting {config.model.architecture}...")
+    print(f"[Baseline] Fitting {config.model.architecture} for target={args.target}...")
     t0 = time.time()
     model.fit(X_train, y_train)
     fit_time = time.time() - t0
@@ -415,8 +454,8 @@ def main() -> None:
     # ---------- Evaluate: val (patch-level) ----------
     t0 = time.time()
     val_metrics, val_hex_metrics = evaluate_patchwise_and_hexel(
-        model, val_loader, target_min, target_max, valid_mask_threshold, config.metrics,
-        max_batches=args.max_eval_batches,
+        model, val_loader, out_norm, target_min, target_max, target_log_mean, target_log_std,
+        valid_mask_threshold, config.metrics, max_batches=args.max_eval_batches,
     )
     val_eval_time = time.time() - t0
     print(f"======= Val Eval Time ========\n{val_eval_time:.1f}s")
@@ -431,8 +470,8 @@ def main() -> None:
     test_loader = get_test_dataloader(config=config.data, modelling_approach=config.modelling_approach, seed=seed)
     t0 = time.time()
     test_metrics, test_hex_metrics = evaluate_patchwise_and_hexel(
-        model, test_loader, target_min, target_max, valid_mask_threshold, config.metrics,
-        max_batches=args.max_eval_batches,
+        model, test_loader, out_norm, target_min, target_max, target_log_mean, target_log_std,
+        valid_mask_threshold, config.metrics, max_batches=args.max_eval_batches,
     )
     test_eval_time = time.time() - t0
     print(f"======= Test Eval Time ========\n{test_eval_time:.1f}s")
@@ -448,7 +487,8 @@ def main() -> None:
 
     t0 = time.time()
     val_region_agg, val_region_per_hexel = evaluate_region_level(
-        model, val_loader, target_min, target_max, valid_mask_threshold, config, region_metric_functions,
+        model, val_loader, out_norm, target_min, target_max, target_log_mean, target_log_std,
+        valid_mask_threshold, config, region_metric_functions, target_name=args.target,
         max_batches=args.max_eval_batches,
     )
     val_region_time = time.time() - t0
@@ -463,7 +503,8 @@ def main() -> None:
     # ---------- Evaluate: test (region-level) ----------
     t0 = time.time()
     test_region_agg, test_region_per_hexel = evaluate_region_level(
-        model, test_loader, target_min, target_max, valid_mask_threshold, config, region_metric_functions,
+        model, test_loader, out_norm, target_min, target_max, target_log_mean, target_log_std,
+        valid_mask_threshold, config, region_metric_functions, target_name=args.target,
         max_batches=args.max_eval_batches,
     )
     test_region_time = time.time() - t0
@@ -482,10 +523,12 @@ def main() -> None:
 
     # ---------- Save ----------
     os.makedirs(config.save_dir, exist_ok=True)
-    joblib.dump(model, os.path.join(config.save_dir, "baseline_model.joblib"))
-    with open(os.path.join(config.save_dir, "metrics.json"), "w") as f:
+    joblib.dump(model, os.path.join(config.save_dir, f"baseline_model_{args.target}.joblib"))
+    with open(os.path.join(config.save_dir, f"metrics_{args.target}.json"), "w") as f:
         json.dump(
             {
+                "target": args.target,
+                "out_norm": out_norm,
                 "val": val_metrics,
                 "val_hexel_rank_agreement": val_hex_metrics,
                 "test": test_metrics,
