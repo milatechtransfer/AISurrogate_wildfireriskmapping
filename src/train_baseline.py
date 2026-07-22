@@ -25,6 +25,7 @@ import json
 import os
 import time
 from collections import defaultdict
+from contextlib import contextmanager
 
 import numpy as np
 import torch
@@ -43,6 +44,11 @@ from src.utils import AVAILABLE_METRICS, seed_everything
 from src.datasets.postprocessing.stitch_hexel import stitch_windows
 from src.datasets.postprocessing.utils import calculate_hexel_metrics_pytorch, load_target_grid_for_mask_scope, load_spatial_raster
 from data_preparation.paths import Paths
+
+
+# Subset of metrics shown in the terminal region-level table (full data always
+# in metrics.json). Keeps the printed table readable regardless of target.
+DISPLAY_METRICS = ["mae", "normalized_mae", "spearman", "bias", "ccc", "auc_iou_full"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -65,6 +71,18 @@ def load_config(path: str) -> Config:
     return Config(**raw)
 
 
+# ---------- Timing ----------
+
+@contextmanager
+def timed(label: str, timings: dict):
+    """Times a block, prints '======= <label> Time ========', stores seconds in timings[label]."""
+    t0 = time.time()
+    yield
+    elapsed = time.time() - t0
+    timings[label] = elapsed
+    print(f"======= {label} Time ========\n{elapsed:.1f}s")
+
+
 # ---------- Target transform params (mirrors Trainer._configure_metric_target_transform,
 # generalized across min_max (BP) and log_standard (FI/ROS)) ----------
 
@@ -78,9 +96,7 @@ def get_grid_source_params(config: Config):
 def get_target_transform_params(config: Config, target_name: str):
     """
     Returns (out_norm, target_min, target_max, target_log_mean, target_log_std)
-    needed to denormalize predictions for the given target, matching whatever
-    out_norm that target's GridParams specifies (min_max for BP, log_standard
-    for FI/ROS in this project).
+    needed to denormalize predictions for the given target.
     """
     target_spec = get_target_specs(target_name)[0]
     grid_params = get_grid_source_params(config)
@@ -128,6 +144,13 @@ def clip_normalized_prediction(preds_norm: np.ndarray, out_norm: str) -> np.ndar
     if out_norm == "min_max":
         return np.clip(preds_norm, 0.0, 1.0)
     return preds_norm
+
+
+def predict_real_scale(model, x_flat: np.ndarray, out_norm: str, target_min: float, target_max: float,
+                        target_log_mean: float | None, target_log_std: float | None) -> np.ndarray:
+    """Predict in normalized space, clip if applicable, then denormalize to real units."""
+    preds_norm = clip_normalized_prediction(model.predict(x_flat), out_norm)
+    return denormalize_target(preds_norm, out_norm, target_min, target_max, target_log_mean, target_log_std)
 
 
 # ---------- Mask handling ----------
@@ -210,13 +233,6 @@ def patch_summary(values: np.ndarray, mask: np.ndarray, top_fraction: float | No
         return float(valid.mean())
     k = max(1, int(np.ceil(valid.size * top_fraction)))
     return float(np.sort(valid)[-k:].mean())
-
-
-def predict_real_scale(model, x_flat: np.ndarray, out_norm: str, target_min: float, target_max: float,
-                        target_log_mean: float | None, target_log_std: float | None) -> np.ndarray:
-    """Predict in normalized space, clip if applicable, then denormalize to real units."""
-    preds_norm = clip_normalized_prediction(model.predict(x_flat), out_norm)
-    return denormalize_target(preds_norm, out_norm, target_min, target_max, target_log_mean, target_log_std)
 
 
 # ---------- Patch-level metrics + scalar-summary hexel rank agreement ----------
@@ -393,6 +409,35 @@ def evaluate_region_level(model, loader, out_norm, target_min, target_max, targe
     return aggregated, per_hexel_metrics
 
 
+# ---------- Pretty printing ----------
+
+def print_region_metrics_table(aggregated: dict, per_hexel: dict, split_name: str, display_metrics: list[str] | None = None) -> None:
+    """Aligned table: hexels as rows, selected metrics as columns. Full metrics stay in metrics.json."""
+    metric_names = [m for m in (display_metrics or list(aggregated.keys())) if m in aggregated]
+    hex_ids = sorted(per_hexel.keys())
+
+    col_width = 12
+    header = f"{'hex_id':<8}" + "".join(f"{name[:col_width]:>{col_width}}" for name in metric_names)
+    print(f"\n======= {split_name} metrics (region-level) ========")
+    print(header)
+    print("-" * len(header))
+
+    for hid in hex_ids:
+        row = f"{hid:<8}" + "".join(f"{per_hexel[hid][name]:>{col_width}.4f}" for name in metric_names)
+        print(row)
+
+    print("-" * len(header))
+    agg_row = f"{'mean':<8}" + "".join(f"{aggregated[name]:>{col_width}.4f}" for name in metric_names)
+    print(agg_row)
+    print()
+
+
+def print_metrics(title: str, metrics: dict) -> None:
+    print(f"======= {title} ========")
+    for k, v in metrics.items():
+        print(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}")
+
+
 # ---------- Model dispatch ----------
 
 def build_baseline_model(model_config):
@@ -409,6 +454,31 @@ def build_baseline_model(model_config):
     raise ValueError(f"Unknown baseline architecture '{model_config.architecture}'.")
 
 
+# ---------- Per-split evaluation (patch + region), deduplicating val/test blocks ----------
+
+def run_split_evaluation(
+    model, loader, split_name: str, out_norm, target_min, target_max, target_log_mean, target_log_std,
+    valid_mask_threshold, config, region_metric_functions, target_name: str, max_eval_batches: int, timings: dict,
+):
+    with timed(f"{split_name} Eval", timings):
+        patch_metrics, hex_rank_metrics = evaluate_patchwise_and_hexel(
+            model, loader, out_norm, target_min, target_max, target_log_mean, target_log_std,
+            valid_mask_threshold, config.metrics, max_batches=max_eval_batches,
+        )
+    print_metrics(f"{split_name} metrics (patch)", patch_metrics)
+    print_metrics(f"{split_name} metrics (hexel, scalar-summary rank agreement)", hex_rank_metrics)
+
+    with timed(f"{split_name} Region Eval", timings):
+        region_agg, region_per_hexel = evaluate_region_level(
+            model, loader, out_norm, target_min, target_max, target_log_mean, target_log_std,
+            valid_mask_threshold, config, region_metric_functions, target_name=target_name,
+            max_batches=max_eval_batches,
+        )
+    print_region_metrics_table(region_agg, region_per_hexel, split_name, DISPLAY_METRICS)
+
+    return patch_metrics, hex_rank_metrics, region_agg, region_per_hexel
+
+
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
@@ -416,6 +486,8 @@ def main() -> None:
     seed = getattr(config, "seed", 42)
     seed_everything(seed=seed, deterministic=getattr(config, "deterministic", True))
     rng = np.random.default_rng(seed)
+
+    timings: dict[str, float] = {}
 
     # ---------- Data ----------
     train_loader, val_loader = get_train_val_dataloader(
@@ -433,92 +505,35 @@ def main() -> None:
     valid_mask_threshold = config.data.valid_mask_threshold
     pixels_per_patch = args.pixels_per_patch if args.pixels_per_patch > 0 else None
 
-    # ---------- Tabularize (normalized targets) ----------
-    t0 = time.time()
-    X_train, y_train = tabularize_loader(
-        train_loader, valid_mask_threshold,
-        pixels_per_patch=pixels_per_patch, rng=rng, max_batches=args.max_train_batches,
-    )
-    tabularize_time = time.time() - t0
-    print(f"======= Tabularize Time ========\n{tabularize_time:.1f}s")
+    # ---------- Tabularize ----------
+    with timed("Tabularize", timings):
+        X_train, y_train = tabularize_loader(
+            train_loader, valid_mask_threshold,
+            pixels_per_patch=pixels_per_patch, rng=rng, max_batches=args.max_train_batches,
+        )
     print(f"======= Train rows ========\n{X_train.shape[0]:,} pixels, {X_train.shape[1]} channels")
 
     # ---------- Fit ----------
     model = build_baseline_model(config.model)
     print(f"[Baseline] Fitting {config.model.architecture} for target={args.target}...")
-    t0 = time.time()
-    model.fit(X_train, y_train)
-    fit_time = time.time() - t0
-    print(f"======= Fit Time ========\n{fit_time:.1f}s")
+    with timed("Fit", timings):
+        model.fit(X_train, y_train)
 
-    # ---------- Evaluate: val (patch-level) ----------
-    t0 = time.time()
-    val_metrics, val_hex_metrics = evaluate_patchwise_and_hexel(
-        model, val_loader, out_norm, target_min, target_max, target_log_mean, target_log_std,
-        valid_mask_threshold, config.metrics, max_batches=args.max_eval_batches,
-    )
-    val_eval_time = time.time() - t0
-    print(f"======= Val Eval Time ========\n{val_eval_time:.1f}s")
-    print("======= Val metrics (patch) ========")
-    for k, v in val_metrics.items():
-        print(f"{k}: {v:.4f}")
-    print("======= Val metrics (hexel, scalar-summary rank agreement) ========")
-    for k, v in val_hex_metrics.items():
-        print(f"{k}: {v}")
-
-    # ---------- Evaluate: test (patch-level) ----------
-    test_loader = get_test_dataloader(config=config.data, modelling_approach=config.modelling_approach, seed=seed)
-    t0 = time.time()
-    test_metrics, test_hex_metrics = evaluate_patchwise_and_hexel(
-        model, test_loader, out_norm, target_min, target_max, target_log_mean, target_log_std,
-        valid_mask_threshold, config.metrics, max_batches=args.max_eval_batches,
-    )
-    test_eval_time = time.time() - t0
-    print(f"======= Test Eval Time ========\n{test_eval_time:.1f}s")
-    print("======= Test metrics (patch) ========")
-    for k, v in test_metrics.items():
-        print(f"{k}: {v:.4f}")
-    print("======= Test metrics (hexel, scalar-summary rank agreement) ========")
-    for k, v in test_hex_metrics.items():
-        print(f"{k}: {v}")
-
-    # ---------- Evaluate: val (region-level) ----------
+    # ---------- Evaluate: val + test (patch + region) ----------
     region_metric_functions = {k: AVAILABLE_METRICS[k] for k in config.metrics}
 
-    t0 = time.time()
-    val_region_agg, val_region_per_hexel = evaluate_region_level(
-        model, val_loader, out_norm, target_min, target_max, target_log_mean, target_log_std,
-        valid_mask_threshold, config, region_metric_functions, target_name=args.target,
-        max_batches=args.max_eval_batches,
+    val_metrics, val_hex_metrics, val_region_agg, val_region_per_hexel = run_split_evaluation(
+        model, val_loader, "Val", out_norm, target_min, target_max, target_log_mean, target_log_std,
+        valid_mask_threshold, config, region_metric_functions, args.target, args.max_eval_batches, timings,
     )
-    val_region_time = time.time() - t0
-    print(f"======= Val Region Eval Time ========\n{val_region_time:.1f}s")
-    print("======= Val metrics (region-level, aggregated) ========")
-    for k, v in val_region_agg.items():
-        print(f"{k}: {v:.4f}")
-    print("======= Val metrics (region-level, per-hexel) ========")
-    for hid, m in val_region_per_hexel.items():
-        print(f"hex{hid}: {m}")
 
-    # ---------- Evaluate: test (region-level) ----------
-    t0 = time.time()
-    test_region_agg, test_region_per_hexel = evaluate_region_level(
-        model, test_loader, out_norm, target_min, target_max, target_log_mean, target_log_std,
-        valid_mask_threshold, config, region_metric_functions, target_name=args.target,
-        max_batches=args.max_eval_batches,
+    test_loader = get_test_dataloader(config=config.data, modelling_approach=config.modelling_approach, seed=seed)
+    test_metrics, test_hex_metrics, test_region_agg, test_region_per_hexel = run_split_evaluation(
+        model, test_loader, "Test", out_norm, target_min, target_max, target_log_mean, target_log_std,
+        valid_mask_threshold, config, region_metric_functions, args.target, args.max_eval_batches, timings,
     )
-    test_region_time = time.time() - t0
-    print(f"======= Test Region Eval Time ========\n{test_region_time:.1f}s")
-    print("======= Test metrics (region-level, aggregated) ========")
-    for k, v in test_region_agg.items():
-        print(f"{k}: {v:.4f}")
-    print("======= Test metrics (region-level, per-hexel) ========")
-    for hid, m in test_region_per_hexel.items():
-        print(f"hex{hid}: {m}")
 
-    total_time = (
-        tabularize_time + fit_time + val_eval_time + test_eval_time + val_region_time + test_region_time
-    )
+    total_time = sum(timings.values())
     print(f"======= Total Time ========\n{total_time:.1f}s")
 
     # ---------- Save ----------
@@ -538,15 +553,7 @@ def main() -> None:
                 "test_region_aggregated": test_region_agg,
                 "test_region_per_hexel": test_region_per_hexel,
                 "feature_dims": {"spatial": spatial_channels, "fuel_curve": fuel_curve_len, "total": total_channels},
-                "timing": {
-                    "tabularize_s": tabularize_time,
-                    "fit_s": fit_time,
-                    "val_eval_s": val_eval_time,
-                    "test_eval_s": test_eval_time,
-                    "val_region_eval_s": val_region_time,
-                    "test_region_eval_s": test_region_time,
-                    "total_s": total_time,
-                },
+                "timing": {**timings, "total_s": total_time},
             },
             f,
             indent=2,
