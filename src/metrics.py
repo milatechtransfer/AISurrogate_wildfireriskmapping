@@ -186,6 +186,19 @@ def compute_bias(preds: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor 
     return ((preds - targets) * valid).sum() / denom
 
 
+def compute_normalized_bias(
+    preds: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor | None = None, eps: float = 1e-8
+) -> torch.Tensor:
+    """Computes bias normalized by the mean target value over valid pixels."""
+    preds = preds.float()
+    targets = targets.float()
+    valid = mask.to(dtype=preds.dtype) if mask is not None else torch.ones_like(preds)
+
+    error_sum = ((preds - targets) * valid).sum()
+    target_sum = (targets * valid).sum().clamp_min(eps)
+    return error_sum / target_sum
+
+
 def compute_topK_iou(
     preds: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor | None = None, percentile: float = 0.90, eps: float = 1e-8
 ) -> torch.Tensor:

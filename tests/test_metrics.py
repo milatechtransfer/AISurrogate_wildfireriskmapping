@@ -9,6 +9,7 @@ from src.metrics import (
     compute_kl_divergence,
     compute_mae,
     compute_mse,
+    compute_normalized_bias,
     compute_normalized_mae,
     compute_spearman,
     compute_ssim,
@@ -196,6 +197,43 @@ def test_bias_empty_mask_edge_case(dummy_data):
     empty_mask = torch.zeros_like(targets)
     bias = compute_bias(preds, targets, mask=empty_mask)
     assert torch.isclose(bias, torch.tensor(0.0))
+
+
+def test_normalized_bias_known_values():
+    preds = torch.tensor([[[[2.0, 1.0], [4.0, 2.0]]]])
+    targets = torch.tensor([[[[1.0, 1.0], [2.0, 2.0]]]])
+
+    result = compute_normalized_bias(preds, targets)
+
+    assert torch.isclose(result, torch.tensor(3.0 / 6.0))
+
+
+def test_normalized_bias_with_mask():
+    preds = torch.tensor([[[[2.0, 100.0], [4.0, 1.0]]]])
+    targets = torch.tensor([[[[1.0, 100.0], [2.0, 2.0]]]])
+    mask = torch.tensor([[[[1.0, 0.0], [1.0, 1.0]]]])
+
+    result = compute_normalized_bias(preds, targets, mask=mask)
+
+    assert torch.isclose(result, torch.tensor(2.0 / 5.0))
+
+
+def test_normalized_bias_preserves_error_sign():
+    targets = torch.tensor([1.0, 3.0])
+    preds = targets - 1.0
+
+    result = compute_normalized_bias(preds, targets)
+
+    assert torch.isclose(result, torch.tensor(-0.5))
+
+
+def test_normalized_bias_empty_mask_edge_case(dummy_data):
+    preds, targets = dummy_data
+    empty_mask = torch.zeros_like(targets)
+
+    result = compute_normalized_bias(preds, targets, mask=empty_mask)
+
+    assert torch.isclose(result, torch.tensor(0.0))
 
 
 def test_auc_iou_perfect_match(dummy_data):
