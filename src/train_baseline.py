@@ -35,7 +35,7 @@ from scipy.stats import spearmanr
 from tqdm import tqdm
 from xgboost import XGBRegressor
 
-from src.config import Config
+from src.config import Config, apply_run_id_overrides
 from src.datasets.dataset import get_train_val_dataloader, get_test_dataloader
 from src.datasets.utils import get_dataset_dimensions, apply_bp_nodata_zero_range
 from src.datasets.targets import get_target_specs
@@ -48,7 +48,7 @@ from data_preparation.paths import Paths
 
 # Subset of metrics shown in the terminal region-level table (full data always
 # in metrics.json). Keeps the printed table readable regardless of target.
-DISPLAY_METRICS = ["mae", "normalized_mae", "spearman", "bias", "ccc", "auc_iou_full"]
+DISPLAY_METRICS = ["mae", "normalized_mae", "spearman", "bias", "normalized_bias", "ccc", "iou_top10", "auc_iou_full"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,6 +60,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pixels_per_patch", type=int, default=4096, help="Training subsample size per patch (0 = use all valid pixels).")
     parser.add_argument("--max_train_batches", type=int, default=0, help="If >0, cap number of training batches read during tabularization (for smoke tests).")
     parser.add_argument("--max_eval_batches", type=int, default=0, help="If >0, cap number of val/test batches evaluated (for smoke tests).")
+    parser.add_argument(
+    "--run_id", type=int, default=None,
+    help="SLURM array task ID (or run index) used to derive a run-specific seed, save_dir, "
+    "and Comet experiment name for parallel multi-seed runs.",
+)
     return parser.parse_args()
 
 
@@ -416,8 +421,8 @@ def print_region_metrics_table(aggregated: dict, per_hexel: dict, split_name: st
     metric_names = [m for m in (display_metrics or list(aggregated.keys())) if m in aggregated]
     hex_ids = sorted(per_hexel.keys())
 
-    col_width = 12
-    header = f"{'hex_id':<8}" + "".join(f"{name[:col_width]:>{col_width}}" for name in metric_names)
+    col_width = 15  # widened from 12 to fit "normalized_bias" style names without truncation collisions
+    header = f"{'hex_id':<8}" + "".join(f"{name:>{col_width}}" for name in metric_names)
     print(f"\n======= {split_name} metrics (region-level) ========")
     print(header)
     print("-" * len(header))
@@ -482,6 +487,10 @@ def run_split_evaluation(
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
+
+    if args.run_id is not None:
+        run_seed = apply_run_id_overrides(config, args.run_id)
+        print(f"[run_id={args.run_id}] Overriding seed={run_seed}, save_dir={config.save_dir}")
 
     seed = getattr(config, "seed", 42)
     seed_everything(seed=seed, deterministic=getattr(config, "deterministic", True))
