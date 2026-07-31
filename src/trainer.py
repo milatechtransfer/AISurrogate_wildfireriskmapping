@@ -1,8 +1,9 @@
 import json
 import logging
 import os
+import random
 import time
-from typing import Any, cast
+from typing import Any, Literal, cast, overload
 
 import numpy as np
 import torch
@@ -14,10 +15,10 @@ from tqdm import tqdm
 from data_preparation.spatial.utils import NORM_STATS_JSON, get_output_log_stats_cached, get_range_output_cached, read_split_hex_ids
 from src.config import Config, GridParams
 from src.datasets.fuel_utils import FUEL_CURVE_ENCODINGS
-from src.datasets.targets import get_target_specs
+from src.datasets.targets import activate_target_predictions, get_target_specs
 from src.datasets.utils import apply_bp_nodata_zero_range, get_fuel_curve_normalization_stats
 from src.logger import CometLogger
-from src.losses import WeightedLoss
+from src.losses import MultiTaskLoss, WeightedLoss
 from src.models.factory import build_model, resolve_model_architecture
 from src.models.utils import get_nbr_model_parameters
 from src.schedulers import build_lr_scheduler
@@ -50,12 +51,16 @@ class Trainer:
         self.logger = None
         # Only initialize logger if not in test-only mode
         if self.config.logger.enabled:
+            previous_experiment_key = self._load_previous_experiment_key()
             self.logger = CometLogger(
                 project_name=self.config.logger.project_name,
                 workspace=self.config.logger.workspace,
                 experiment_name=self.config.logger.experiment_name,
                 experiment_tags=self.config.logger.tags,
+                previous_experiment_key=previous_experiment_key,
             )
+            if previous_experiment_key:
+                print(f"[Comet] Resuming experiment {previous_experiment_key} instead of creating a new one.")
             self.log_every_n_step = self.config.logger.log_every_n_step
             # log all the params.
             self.logger.log_params(self.config.model_dump())
@@ -69,13 +74,30 @@ class Trainer:
             raise ValueError("Number of best_ckpt_metric and best_ckpt_metric_mode must match!")
         self._best_metric_list: list[float] = []
 
+    def _load_previous_experiment_key(self) -> str | None:
+        """
+        If a checkpoint from a previous (e.g. preempted/requeued) run of this same
+        save_dir exists, return its stored Comet experiment key so the logger can
+        continue logging into that same experiment instead of starting a new one.
+        """
+        last_path = os.path.join(self.save_dir, "last.pth")
+        if not os.path.exists(last_path):
+            return None
+        try:
+            checkpoint = torch.load(last_path, map_location="cpu", weights_only=False)
+        except Exception as exc:  # noqa: BLE001 - best-effort lookup, never block startup
+            print(f"[Comet] Could not read previous checkpoint at {last_path} to resume experiment: {exc}")
+            return None
+        return checkpoint.get("comet_experiment_key")
+
     def setup(self):
         """
         Define model, loss function and optimizer.
         """
 
         self._grid_params = self._get_grid_params()
-        self._target_specs = get_target_specs(self._grid_params.target_name) if self._grid_params is not None else get_target_specs("bp")
+        target_names = [target.name for target in self._grid_params.resolved_targets()] if self._grid_params is not None else ["bp"]
+        self._target_specs = get_target_specs(target_names)
         self._target_names = [target.name for target in self._target_specs]
         if self.config.model.num_classes != len(self._target_specs):
             raise ValueError(
@@ -95,6 +117,7 @@ class Trainer:
             spatial_input_channels=self.spatial_input_channels,
             auxiliary_input_dims=self.auxiliary_input_dims,
             **self._get_fuel_curve_stats(),
+            target_names=self._target_names,
         )
 
         self.model.to(self.device)
@@ -165,15 +188,44 @@ class Trainer:
         return {"fuel_curve_mean": None, "fuel_curve_std": None}
 
     def _build_loss(self) -> torch.nn.Module:
-        loss_config = self.config.optimizer.loss
-        huber_beta = self.config.optimizer.huber_beta
+        if self.config.optimizer.target_losses:
+            configured_targets = set(self.config.optimizer.target_losses)
+            expected_targets = set(self._target_names)
+            if configured_targets != expected_targets:
+                raise ValueError(
+                    f"optimizer.target_losses must match configured targets, got {sorted(configured_targets)} "
+                    f"and expected {sorted(expected_targets)}."
+                )
+            task_losses = {}
+            task_weights = {}
+            for target_name in self._target_names:
+                target_config = self.config.optimizer.target_losses[target_name]
+                task_losses[target_name] = self._build_loss_group(
+                    target_config.loss,
+                    target_config.loss_weights,
+                    target_config.huber_beta,
+                )
+                task_weights[target_name] = target_config.task_weight
+            return MultiTaskLoss(target_names=self._target_names, losses=task_losses, task_weights=task_weights)
+
+        if self.config.optimizer.loss is None:
+            raise RuntimeError("Legacy loss configuration is missing.")
+        return self._build_loss_group(
+            self.config.optimizer.loss,
+            self.config.optimizer.loss_weights,
+            self.config.optimizer.huber_beta,
+        )
+
+    @staticmethod
+    def _build_loss_group(
+        loss_config: str | list[str],
+        weights: dict[str, float],
+        huber_beta: float,
+    ) -> torch.nn.Module:
         loss_kwargs = {"huber_beta": huber_beta}
-
-        if isinstance(loss_config, str):  # loss is a string
+        if isinstance(loss_config, str):
             return build_single_loss(loss_config, **loss_kwargs)
-
         loss_names = loss_config
-        weights = self.config.optimizer.loss_weights
         losses = {n: build_single_loss(n, **loss_kwargs) for n in loss_names}
         return WeightedLoss(losses=losses, weights=weights, normalize_weights=True)
 
@@ -186,12 +238,13 @@ class Trainer:
     def _target_out_norm(self, target_name: str) -> str:
         if self._grid_params is None:
             return "none"
-        return self._grid_params.out_norm
+        return self._grid_params.target_config(target_name).out_norm
 
     def _target_log_stats(self, target_name: str) -> tuple[float | None, float | None]:
         if self._grid_params is None:
             return None, None
-        return self._grid_params.target_log_mean, self._grid_params.target_log_std
+        target_config = self._grid_params.target_config(target_name)
+        return target_config.log_mean, target_config.log_std
 
     def _configure_metric_target_transform(self) -> None:
         self._metric_out_norms: list[str] = []
@@ -288,17 +341,58 @@ class Trainer:
         return self._inverse_model_target_for_metrics(predictions), self._inverse_model_target_for_metrics(targets)
 
     def _activate_predictions(self, predictions: torch.Tensor) -> torch.Tensor:
-        activated_channels = []
-        for idx, target in enumerate(self._target_specs):
-            channel = predictions[:, idx : idx + 1]
-            activated_channels.append(torch.sigmoid(channel) if target.probability_scale else channel)
-        return torch.cat(activated_channels, dim=1)
+        return activate_target_predictions(predictions, self._target_specs)
 
     def _metric_result_keys(self) -> list[str]:
-        return list(self.metric_functions)
+        if len(self._target_specs) == 1:
+            return list(self.metric_functions)
+        keys = [f"{target.name}/{metric_name}" for target in self._target_specs for metric_name in self.metric_functions]
+        if {"bp", "fi"} <= set(self._target_names):
+            keys.append("hazard/ccc")
+        return keys
 
     def _compute_metric_values(self, predictions: torch.Tensor, targets: torch.Tensor, masks: torch.Tensor) -> dict[str, torch.Tensor]:
-        return {name: metric_fn(predictions, targets, masks) for name, metric_fn in self.metric_functions.items()}
+        if predictions.device.type == "mps":
+            predictions = predictions.cpu()
+            targets = targets.cpu()
+            masks = masks.cpu()
+
+        if len(self._target_specs) == 1:
+            return {name: metric_fn(predictions, targets, masks) for name, metric_fn in self.metric_functions.items()}
+
+        metric_values = {}
+        for channel_idx, target in enumerate(self._target_specs):
+            channel = slice(channel_idx, channel_idx + 1)
+            for metric_name, metric_fn in self.metric_functions.items():
+                metric_values[f"{target.name}/{metric_name}"] = metric_fn(
+                    predictions[:, channel],
+                    targets[:, channel],
+                    masks[:, channel],
+                )
+
+        if {"bp", "fi"} <= set(self._target_names):
+            bp_idx = self._target_names.index("bp")
+            fi_idx = self._target_names.index("fi")
+            bp_predictions = predictions[:, bp_idx : bp_idx + 1]
+            bp_targets = targets[:, bp_idx : bp_idx + 1]
+            fi_predictions = predictions[:, fi_idx : fi_idx + 1]
+            fi_targets = targets[:, fi_idx : fi_idx + 1]
+            bp_mask = masks[:, bp_idx : bp_idx + 1].bool()
+            fi_mask = masks[:, fi_idx : fi_idx + 1].bool()
+            if self.config.evaluation.hazard_fi_cap is not None:
+                fi_cap = self.config.evaluation.hazard_fi_cap
+                fi_predictions = fi_predictions.clamp_max(fi_cap)
+                fi_targets = fi_targets.clamp_max(fi_cap)
+            no_burn = bp_targets <= 0.0
+            hazard_mask = bp_mask & (fi_mask | no_burn)
+            hazard_targets = bp_targets * torch.where(fi_mask, fi_targets, torch.zeros_like(fi_targets))
+            metric_values["hazard/ccc"] = AVAILABLE_METRICS["ccc"](
+                bp_predictions * fi_predictions,
+                hazard_targets,
+                hazard_mask,
+            )
+
+        return metric_values
 
     def _validate_and_load_metrics(self) -> None:
         """Helper to validate and load metrics to be computed."""
@@ -374,9 +468,7 @@ class Trainer:
         running_loss = 0.0
         running_batch_count = 0
         running_metrics = {name: 0.0 for name in self._metric_result_keys()}
-        running_loss_parts = None
-        if isinstance(self.loss_fn, WeightedLoss):
-            running_loss_parts = {name: 0.0 for name in self.loss_fn.losses}
+        running_loss_parts: dict[str, float] = {}
 
         training_loop = tqdm(loader, desc="Training", leave=True)
 
@@ -419,15 +511,14 @@ class Trainer:
                             step=self.global_step,
                         )
                     # accumulate epoch averages
-                    if running_loss_parts is not None:
-                        for k, v in loss_parts.items():
-                            running_loss_parts[k] += v.item() * batch_size
+                    for k, v in loss_parts.items():
+                        running_loss_parts[k] = running_loss_parts.get(k, 0.0) + v.item() * batch_size
 
             self.global_step += 1
 
         avg_loss = running_loss / max(1, running_batch_count)
         results = {"loss": avg_loss}
-        if running_loss_parts is not None:
+        if running_loss_parts:
             for k, total_v in running_loss_parts.items():
                 results[f"loss_{k}"] = total_v / max(1, running_batch_count)
 
@@ -437,20 +528,29 @@ class Trainer:
 
         return results
 
+    @overload
+    def validate(self, loader: DataLoader, return_predictions: Literal[False] = False) -> dict[str, float]: ...
+
+    @overload
+    def validate(self, loader: DataLoader, return_predictions: Literal[True]) -> tuple[dict[str, float], np.ndarray]: ...
+
+    @overload
+    def validate(self, loader: DataLoader, return_predictions: bool) -> dict[str, float] | tuple[dict[str, float], np.ndarray]: ...
+
     @torch.no_grad()
     def validate(self, loader: DataLoader, return_predictions: bool = False) -> dict[str, float] | tuple[dict[str, float], np.ndarray]:
         self.model.eval()
         running_loss = 0.0
         running_batch_count = 0
         running_metrics = {name: 0.0 for name in self._metric_result_keys()}
-        running_loss_parts = None
-        if isinstance(self.loss_fn, WeightedLoss):
-            running_loss_parts = {name: 0.0 for name in self.loss_fn.losses}
+        running_loss_parts: dict[str, float] = {}
+
+        peak_mps_driver_allocated_gb = 0.0
 
         preds_list = []
         validation_loop = tqdm(loader, desc="Evaluating", leave=True)
 
-        for batch in validation_loop:
+        for batch_idx, batch in enumerate(validation_loop):
             predictions, loss, loss_parts, targets, masks = self._step(batch)
 
             if return_predictions:
@@ -466,13 +566,32 @@ class Trainer:
                 for name, value in self._compute_metric_values(metric_predictions, metric_targets, masks).items():
                     running_metrics[name] += value.item() * batch_size
 
-                if loss_parts is not None and running_loss_parts is not None:
+                if loss_parts is not None:
                     for k, v in loss_parts.items():
-                        running_loss_parts[k] += v.item() * batch_size
+                        running_loss_parts[k] = running_loss_parts.get(k, 0.0) + v.item() * batch_size
+
+            # NOTE: MPS-only diagnostic -- captured BEFORE empty_cache() flushes it, so
+            # this reflects the real per-batch peak, not the post-flush snapshot. The
+            # earlier investigation confirmed individual batches genuinely peak near
+            # 30GB even though empty_cache() brings end-of-run allocation back down to
+            # a couple GB -- this line is what makes that visible.
+            if return_predictions and predictions.device.type == "mps" and hasattr(torch.mps, "driver_allocated_memory"):
+                batch_peak_gb = torch.mps.driver_allocated_memory() / 1024**3
+                peak_mps_driver_allocated_gb = max(peak_mps_driver_allocated_gb, batch_peak_gb)
+                if os.getenv("MPS_DIAG") == "1":
+                    print(f"[diag] batch {batch_idx + 1} peak driver_allocated: {batch_peak_gb:.3f} GB")
+
+            # NOTE: MPS-only -- the caching allocator retains freed batch memory
+            # without releasing it to the OS, so per-batch driver_allocated_memory
+            # climbs across the whole loop instead of resetting. empty_cache()
+            # after each batch prevents that accumulation. No-op cost on CPU/CUDA,
+            # so this is gated rather than applied unconditionally.
+            if predictions.device.type == "mps":
+                torch.mps.empty_cache()
 
         avg_loss = running_loss / max(1, running_batch_count)
         results = {"loss": avg_loss}
-        if running_loss_parts is not None:
+        if running_loss_parts:
             for k, total_v in running_loss_parts.items():
                 results[f"loss_{k}"] = total_v / max(1, running_batch_count)
 
@@ -480,10 +599,22 @@ class Trainer:
         for name, total_value in running_metrics.items():
             results[name] = total_value / max(1, running_batch_count)
 
+        if return_predictions and peak_mps_driver_allocated_gb > 0.0:
+            results["_peak_mps_driver_allocated_gb"] = peak_mps_driver_allocated_gb
+
         if return_predictions:
             return results, np.concatenate(preds_list, axis=0)
 
         return results
+
+    @overload
+    def test(self, loader: DataLoader, return_predictions: Literal[False] = False) -> dict[str, float]: ...
+
+    @overload
+    def test(self, loader: DataLoader, return_predictions: Literal[True]) -> tuple[dict[str, float], np.ndarray]: ...
+
+    @overload
+    def test(self, loader: DataLoader, return_predictions: bool) -> dict[str, float] | tuple[dict[str, float], np.ndarray]: ...
 
     @torch.no_grad()
     def test(self, loader: DataLoader, return_predictions: bool = False) -> dict[str, float] | tuple[dict[str, float], np.ndarray]:
@@ -501,7 +632,10 @@ class Trainer:
         if not os.path.exists(last_path):
             return 1
 
-        checkpoint = torch.load(last_path, map_location=self.device)
+        # weights_only=False: these checkpoints are produced by this same Trainer and
+        # include optimizer/scheduler/RNG state (numpy arrays, etc.) that torch's
+        # default `weights_only=True` restricted unpickler will not load.
+        checkpoint = torch.load(last_path, map_location=self.device, weights_only=False)
         saved_state = checkpoint.get("model_state", {})
         current_state = self.model.state_dict()
         compatible = saved_state.keys() == current_state.keys() and all(
@@ -518,6 +652,25 @@ class Trainer:
         if checkpoint.get("best_metric_list"):
             self._best_metric_list = list(checkpoint["best_metric_list"])
         self.global_step = int(checkpoint.get("global_step", self.global_step))
+
+        # Restore RNG states so a resumed run (e.g. after preemption) reproduces the
+        # same data order/augmentations as an uninterrupted one, per Mila's
+        # checkpointing guidelines.
+        rng_state = checkpoint.get("rng_state")
+        if rng_state is not None:
+            random.setstate(rng_state["python_random_state"])
+            np.random.set_state(rng_state["numpy_random_state"])
+            # The CPU RNG state tensor must stay on CPU even though `map_location`
+            # above may have moved other checkpoint tensors to an accelerator device.
+            torch.random.set_rng_state(rng_state["torch_random_state"].cpu())
+            if torch.cuda.is_available() and rng_state.get("torch_cuda_random_state") is not None:
+                # Like the CPU RNG state above, each per-device state tensor must stay on
+                # CPU (as a plain torch.ByteTensor) even though `map_location` may have
+                # moved it onto an accelerator device; `set_rng_state_all` rejects
+                # anything that isn't a CPU ByteTensor.
+                cuda_rng_states = [state.cpu() for state in rng_state["torch_cuda_random_state"]]
+                torch.cuda.set_rng_state_all(cuda_rng_states)
+
         last_epoch = int(checkpoint.get("epoch", 0))
         print(f"[Resume] Resuming from {last_path}: completed epoch {last_epoch}, continuing at epoch {last_epoch + 1}.")
         return last_epoch + 1
@@ -613,6 +766,17 @@ class Trainer:
             "global_step": self.global_step,
             "best_metric_list": self._best_metric_list,
             "scheduler_state": lr_scheduler.state_dict() if lr_scheduler is not None else None,
+            # RNG states so a resumed run (e.g. after SLURM preemption) can reproduce
+            # the same data order/augmentations as an uninterrupted one.
+            "rng_state": {
+                "python_random_state": random.getstate(),
+                "numpy_random_state": np.random.get_state(),
+                "torch_random_state": torch.random.get_rng_state(),
+                "torch_cuda_random_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            },
+            # So a resumed run continues logging into the same Comet experiment
+            # instead of starting a new one on each SLURM requeue.
+            "comet_experiment_key": self.logger.experiment_key if self.logger else None,
         }
         # Write atomically so a preemption mid-save cannot leave a corrupt checkpoint.
         tmp_path = f"{path}.tmp"
@@ -625,7 +789,9 @@ class Trainer:
             path = os.path.join(self.save_dir, filename)
 
         map_location = map_location or self.device
-        checkpoint = torch.load(path, map_location=map_location)
+        # weights_only=False: trusted, self-produced checkpoints that also carry
+        # optimizer/scheduler/RNG state beyond plain tensors.
+        checkpoint = torch.load(path, map_location=map_location, weights_only=False)
 
         self.model.load_state_dict(checkpoint["model_state"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state"])

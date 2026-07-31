@@ -2,7 +2,9 @@
 
 The hazard pipeline starts after model inference and hexel reconstruction:
 
-1. Pair reconstructed BP and FI hexels and validate that their hex IDs align.
+1. Reconstruct hexels from a single multi-output model (which yields all of
+   its configured targets, e.g. ``bp``/``fi``/``ros``, per hex_id) and pair
+   the ``bp``/``fi`` targets for each hex.
 2. Compute predicted and ground-truth raw hazard as ``BP * min(FI, fi_cap)``.
 3. Scale raw hazard with the resolved denominator and ``scale_to`` value.
 4. Bin scaled hazard into hazard classes.
@@ -47,34 +49,46 @@ class HazardHexelResult:
     buffer_support_mask: np.ndarray | None = None
 
 
-def pair_stitched_hexels(
-    bp_hexels: Iterable[StitchedHexel],
-    fi_hexels: Iterable[StitchedHexel],
-) -> Iterator[tuple[StitchedHexel, StitchedHexel]]:
-    """Yield aligned (bp, fi) hexels, validating identical hex-id sequences."""
-    bp_iter = iter(bp_hexels)
-    fi_iter = iter(fi_hexels)
-    index = 0
-    while True:
-        try:
-            bp_hexel = next(bp_iter)
-            bp_done = False
-        except StopIteration:
-            bp_done = True
-        try:
-            fi_hexel = next(fi_iter)
-            fi_done = False
-        except StopIteration:
-            fi_done = True
+def _pop_bp_fi_pair(
+    bucket: dict[str, StitchedHexel],
+    hex_id: str,
+    bp_target: str,
+    fi_target: str,
+) -> tuple[StitchedHexel, StitchedHexel]:
+    missing = [name for name in (bp_target, fi_target) if name not in bucket]
+    if missing:
+        raise ValueError(f"hex {hex_id!r} is missing required target(s) {missing} from the multi-output model.")
+    return bucket[bp_target], bucket[fi_target]
 
-        if bp_done and fi_done:
-            return
-        index += 1
-        if bp_done or fi_done:
-            raise ValueError(f"BP/FI hexel counts differ before pair {index}")
-        if bp_hexel.hex_id != fi_hexel.hex_id:
-            raise ValueError(f"BP/FI hexel sequence mismatch: {bp_hexel.hex_id} vs {fi_hexel.hex_id}")
-        yield bp_hexel, fi_hexel
+
+def pair_stitched_hexels(
+    hexels: Iterable[StitchedHexel],
+    *,
+    bp_target: str = "bp",
+    fi_target: str = "fi",
+) -> Iterator[tuple[StitchedHexel, StitchedHexel]]:
+    """Yield aligned (bp, fi) hexels from a single multi-output model's reconstruction stream.
+
+    ``hexels`` is the stream produced by ``reconstruct_denormalized_hexels`` for a
+    multi-output model config; it yields every configured target (e.g.
+    ``bp``/``fi``/``ros``) for each hex_id consecutively. Targets other than
+    ``bp_target``/``fi_target`` (e.g. ``ros``) are ignored. Raises if a hex is
+    missing either required target, or if a target repeats before the hex changes.
+    """
+    current_hex_id: str | None = None
+    bucket: dict[str, StitchedHexel] = {}
+    for hexel in hexels:
+        if current_hex_id is not None and hexel.hex_id != current_hex_id:
+            yield _pop_bp_fi_pair(bucket, current_hex_id, bp_target, fi_target)
+            bucket = {}
+        current_hex_id = hexel.hex_id
+        if hexel.target.name in (bp_target, fi_target):
+            if hexel.target.name in bucket:
+                raise ValueError(f"Duplicate {hexel.target.name!r} target encountered for hex {hexel.hex_id!r}.")
+            bucket[hexel.target.name] = hexel
+
+    if current_hex_id is not None:
+        yield _pop_bp_fi_pair(bucket, current_hex_id, bp_target, fi_target)
 
 
 def compute_hazard_hexel(

@@ -172,7 +172,7 @@ def load_endpoint_response(
         raise ValueError("nonfuel_ids and static_nonfuel_ids are mutually exclusive.")
 
     baseline, scenario_values = load_baseline_scenario_pair(prediction_dirs, hex_id, endpoint=endpoint, scenario=scenario)
-    baseline_path = prediction_raster_path(prediction_dirs[("baseline", endpoint)], hex_id)
+    baseline_path = prediction_raster_path(prediction_dirs[("baseline", endpoint)], hex_id, target_name=endpoint)
     extent = read_prediction_extent(baseline_path)
     with rasterio.open(baseline_path) as src:
         reference_profile = src.profile.copy()

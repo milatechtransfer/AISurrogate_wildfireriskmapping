@@ -22,10 +22,10 @@ from src.evaluate_hazard import (
     row_normalized_confusion_percentages,
 )
 
-BP_CONFIG = Path("configs/bp_common_input_pipeline.yaml")
-HAZARD_BP_CONFIG = Path("configs/archived/bp_common_input_pipeline_checkpoint.yaml")
-HAZARD_FI_CONFIG = Path("configs/archived/fi_common_input_pipeline_checkpoint.yaml")
-HAZARD_EVAL_CONFIG = Path("configs/hazard_eval_common_input_pipeline.yaml")
+BP_CONFIG = Path("configs/bp_spatial_weather.yaml")
+MULTI_OUTPUT_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
+HAZARD_MODEL_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
+HAZARD_EVAL_CONFIG = Path("configs/hazard_eval_spatial_weather.yaml")
 
 
 def _profile(height=2, width=2):
@@ -72,8 +72,7 @@ def _hazard_config(**overrides):
     base = dict(
         root_dir="placeholder/root",
         raw_data_dir="placeholder/raw",
-        bp=HazardModelEntry(config_path=str(BP_CONFIG)),
-        fi=HazardModelEntry(config_path="configs/fi_common_input_pipeline.yaml"),
+        model=HazardModelEntry(config_path=str(MULTI_OUTPUT_CONFIG)),
     )
     base.update(overrides)
     return HazardEvalConfig(**base)
@@ -163,11 +162,16 @@ class TestLoadHazardConfig:
     def test_loads_real_yaml(self):
         config = load_hazard_config(str(HAZARD_EVAL_CONFIG))
         assert isinstance(config, HazardEvalConfig)
-        assert config.bp.config_path == str(HAZARD_BP_CONFIG)
-        assert config.fi.config_path == str(HAZARD_FI_CONFIG)
+        assert config.model.config_path == str(HAZARD_MODEL_CONFIG)
 
 
 class TestPrepareModelConfigForHazard:
+    def _multi_output_config(self) -> Config:
+        import yaml
+
+        with MULTI_OUTPUT_CONFIG.open() as handle:
+            return Config(**yaml.safe_load(handle))
+
     def _bp_config(self) -> Config:
         import yaml
 
@@ -175,15 +179,15 @@ class TestPrepareModelConfigForHazard:
             return Config(**yaml.safe_load(handle))
 
     def test_overrides_paths_checkpoint_and_logger(self):
-        model_config = self._bp_config()
+        model_config = self._multi_output_config()
         hazard_config = _hazard_config(
             root_dir="/staged/root",
             raw_data_dir="/persistent/raw",
             test_split="custom_test.csv",
             valid_mask_threshold=0.5,
-            bp=HazardModelEntry(config_path=str(BP_CONFIG), checkpoint_filename="epoch_10.pth"),
+            model=HazardModelEntry(config_path=str(MULTI_OUTPUT_CONFIG), checkpoint_filename="epoch_10.pth"),
         )
-        prepared = prepare_model_config_for_hazard(model_config, hazard_config, hazard_config.bp, "bp")
+        prepared = prepare_model_config_for_hazard(model_config, hazard_config, hazard_config.model)
 
         assert prepared.data.root_dir == "/staged/root"
         assert prepared.data.raw_data_dir == "/persistent/raw"
@@ -192,11 +196,11 @@ class TestPrepareModelConfigForHazard:
         assert prepared.evaluation.checkpoint_filename == "epoch_10.pth"
         assert prepared.logger.enabled is False
 
-    def test_rejects_wrong_target(self):
+    def test_rejects_model_missing_required_targets(self):
         model_config = self._bp_config()
         hazard_config = _hazard_config()
-        with pytest.raises(ValueError, match="Expected a 'fi' model"):
-            prepare_model_config_for_hazard(model_config, hazard_config, hazard_config.fi, "fi")
+        with pytest.raises(ValueError, match="multi-output model predicting"):
+            prepare_model_config_for_hazard(model_config, hazard_config, hazard_config.model)
 
 
 class TestReadReferenceDenominator:

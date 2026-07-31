@@ -89,8 +89,48 @@ def prediction_dirs_from_index(experiment_dir: Path) -> dict[tuple[str, str], Pa
     return {(str(row.scenario), str(row.endpoint)): Path(str(row.prediction_dir)) for row in index.itertuples(index=False)}
 
 
-def prediction_raster_path(prediction_dir: Path, hex_id: str) -> Path:
-    return prediction_dir / "predicted_hexels" / f"hexel_{int(hex_id):02d}_predicted.tif"
+def prediction_raster_path(prediction_dir: Path, hex_id: str, target_name: str | None = None) -> Path:
+    """Path to a stitched prediction raster inside a scenario/endpoint prediction directory.
+
+    Single-output models write one unsuffixed raster per hexel
+    (``hexel_XX_predicted.tif``). A multi-output model (e.g. one checkpoint jointly
+    predicting ``bp``/``fi``/``ros``) writes one target-suffixed raster per target
+    into the same directory (``hexel_XX_<target_name>_predicted.tif``). When
+    ``target_name`` is given, the suffixed path is preferred and falls back to the
+    legacy unsuffixed path if it doesn't exist, so both setups resolve correctly
+    without knowing in advance which kind of model produced a given endpoint's
+    predictions.
+    """
+    predicted_dir = prediction_dir / "predicted_hexels"
+    if target_name:
+        suffixed_path = predicted_dir / f"hexel_{int(hex_id):02d}_{target_name}_predicted.tif"
+        if suffixed_path.exists():
+            return suffixed_path
+    return predicted_dir / f"hexel_{int(hex_id):02d}_predicted.tif"
+
+
+def find_local_prediction_dir(experiment_dir: Path, scenario: str, hex_id: str, endpoint: str) -> Path:
+    """Locate a scenario/endpoint prediction directory by scanning the local `predictions/` tree.
+
+    Materialized runs store predictions under `predictions/<scenario>/<subdir>/predicted_hexels/`,
+    where `<subdir>` is usually the endpoint name but may instead be a shared subdir when several
+    endpoints are deduplicated onto the same multi-output checkpoint run (e.g. `bp`, `fi`, and
+    `ros` all resolving to a `predictions/<scenario>/bp/` directory). Rather than trusting
+    `scenario_prediction_index.csv` (which stores the original, possibly remote/cluster, absolute
+    paths), this scans the locally materialized `predictions/<scenario>/` subdirectories for the
+    one that actually contains this endpoint's stitched raster.
+    """
+    scenario_dir = experiment_dir / "predictions" / scenario
+    if not scenario_dir.is_dir():
+        raise FileNotFoundError(f"No predictions directory for scenario={scenario!r} under {experiment_dir}.")
+    for candidate in sorted(scenario_dir.iterdir()):
+        if not candidate.is_dir():
+            continue
+        if prediction_raster_path(candidate, hex_id, target_name=endpoint).exists():
+            return candidate
+    raise FileNotFoundError(
+        f"Could not find a {endpoint!r} prediction raster for scenario={scenario!r}, hex_id={hex_id!r} under {scenario_dir}."
+    )
 
 
 def read_prediction(path: Path) -> np.ma.MaskedArray:
@@ -111,7 +151,7 @@ def prediction_reference_profile(
     baseline_dir = prediction_dirs.get(("baseline", baseline_endpoint))
     if baseline_dir is None:
         raise KeyError(f"Missing baseline {baseline_endpoint.upper()} prediction directory; cannot define reference grid.")
-    with rasterio.open(prediction_raster_path(baseline_dir, hex_id)) as src:
+    with rasterio.open(prediction_raster_path(baseline_dir, hex_id, target_name=baseline_endpoint)) as src:
         return src.profile.copy()
 
 
@@ -130,8 +170,8 @@ def load_baseline_scenario_pair(
         raise KeyError(f"Missing baseline {endpoint.upper()} prediction directory.")
     if scenario_dir is None:
         raise KeyError(f"Missing {endpoint.upper()} prediction directory for scenario={scenario!r}.")
-    baseline = read_prediction(prediction_raster_path(baseline_dir, hex_id))
-    scenario_values = read_prediction(prediction_raster_path(scenario_dir, hex_id))
+    baseline = read_prediction(prediction_raster_path(baseline_dir, hex_id, target_name=endpoint))
+    scenario_values = read_prediction(prediction_raster_path(scenario_dir, hex_id, target_name=endpoint))
     if scenario_values.shape != baseline.shape:
         raise ValueError(f"Scenario {endpoint.upper()} shape {scenario_values.shape} does not match baseline grid {baseline.shape}.")
     return baseline, scenario_values
@@ -155,7 +195,7 @@ def prediction_footprint(
     prediction_dir = prediction_dirs.get((scenario, endpoint))
     if prediction_dir is None:
         raise KeyError(f"Missing {scenario} {endpoint.upper()} prediction directory; cannot define prediction footprint.")
-    return ~np.ma.getmaskarray(read_prediction(prediction_raster_path(prediction_dir, hex_id)))
+    return ~np.ma.getmaskarray(read_prediction(prediction_raster_path(prediction_dir, hex_id, target_name=endpoint)))
 
 
 def finite_values(data: np.ma.MaskedArray | np.ndarray) -> np.ndarray:

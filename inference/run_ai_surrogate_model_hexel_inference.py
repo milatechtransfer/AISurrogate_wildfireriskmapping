@@ -6,6 +6,7 @@ Orchestrates data preparation, dataset building, and prediction.
 import argparse
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,10 +20,11 @@ from data_preparation.hexel_loader import load_spatial_features_per_hexel
 from data_preparation.paths import MASK_SCOPE_CHOICES, Paths, normalize_mask_scope, prepared_mask_scope
 from data_preparation.process_hexels_into_grids import get_split_hexel_window
 from data_preparation.process_tabular_data import build_weather_table, process_fire_size_distribution_table
-from data_preparation.spatial.utils import get_output_log_stats_cached, get_range_output_cached
+from data_preparation.spatial.utils import get_output_log_stats_cached, get_range_output_cached, read_split_hex_ids
 from data_preparation.utils import find_hex_ids
 from inference.predictor import BurnRiskPredictor
 from src.datasets.dataset import MultiSourceDataset
+from src.datasets.postprocessing.hazard import compute_raw_hazard
 from src.datasets.postprocessing.utils import (
     get_mask_scope_save_dir,
     get_predicted_hexel,
@@ -33,8 +35,8 @@ from src.datasets.postprocessing.utils import (
     validate_patch_metadata_mask_scope,
 )
 from src.datasets.postprocessing.visualize_predictions import visualize_target_grids
-from src.datasets.targets import TargetSpec, get_target_spec
-from src.datasets.utils import get_data_source_class, get_data_source_param_class, get_dataset_dimensions
+from src.datasets.targets import TargetSpec, get_target_spec, get_target_specs
+from src.datasets.utils import apply_bp_nodata_zero_range, get_data_source_class, get_data_source_param_class, get_dataset_dimensions
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +48,15 @@ logging.basicConfig(
     force=True,
 )
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TargetNormalization:
+    out_norm: str
+    min_value: float | None = None
+    max_value: float | None = None
+    log_mean: float | None = None
+    log_std: float | None = None
 
 
 def prepare_hexel_data(
@@ -168,7 +179,17 @@ def create_dataset(processed_data_dir: Path, hex_id: str, config_dict: dict) -> 
         source_name = source["name"]
         source_class = get_data_source_class(source_name)
         source_param_class = get_data_source_param_class(source_name)
-        sources[source_name] = source_class(root_dir=processed_data_dir, params=source_param_class(**source["params"]))
+        source_kwargs: dict[str, Any] = {
+            "root_dir": processed_data_dir,
+            "params": source_param_class(**source["params"]),
+        }
+        if source_name == "grid":
+            source_kwargs.update(
+                root_dir=config_dict.get("root_dir", processed_data_dir),
+                raw_data_dir=config_dict.get("raw_data_dir"),
+                train_split_csv_name=config_dict.get("train_split"),
+            )
+        sources[source_name] = source_class(**source_kwargs)
 
     return MultiSourceDataset(
         csv_name=csv_name,
@@ -179,13 +200,22 @@ def create_dataset(processed_data_dir: Path, hex_id: str, config_dict: dict) -> 
     )
 
 
-def get_target_spec_from_data_config(data_config: dict) -> TargetSpec:
-    """Read target metadata from checkpoint data config, defaulting to BP for older checkpoints."""
+def get_target_specs_from_data_config(data_config: dict) -> list[TargetSpec]:
+    """Read ordered target metadata from checkpoint data config, defaulting to BP."""
     for source in data_config.get("input_sources", []):
         if source.get("name") == "grid":
-            target_name = source.get("params", {}).get("target_name", "bp")
-            return get_target_spec(target_name)
-    return get_target_spec("bp")
+            params = source.get("params", {})
+            if params.get("targets"):
+                return get_target_specs([target["name"] for target in params["targets"]])
+            return get_target_specs(params.get("target_name", "bp"))
+    return get_target_specs("bp")
+
+
+def get_target_spec_from_data_config(data_config: dict) -> TargetSpec:
+    targets = get_target_specs_from_data_config(data_config)
+    if len(targets) != 1:
+        raise ValueError(f"Expected one inference target, got {[target.name for target in targets]}.")
+    return targets[0]
 
 
 def get_grid_params_from_data_config(data_config: dict) -> dict[str, Any]:
@@ -193,6 +223,71 @@ def get_grid_params_from_data_config(data_config: dict) -> dict[str, Any]:
         if source.get("name") == "grid":
             return source.get("params", {})
     return {}
+
+
+def get_target_params_from_grid_config(grid_params: dict[str, Any], target: TargetSpec) -> dict[str, Any]:
+    target_configs = grid_params.get("targets")
+    if target_configs:
+        for target_config in target_configs:
+            if get_target_spec(target_config["name"]).name == target.name:
+                return target_config
+        raise KeyError(f"Missing target config for {target.name!r}.")
+    return {
+        "name": target.name,
+        "out_norm": grid_params.get("out_norm", "min_max"),
+        "log_mean": grid_params.get("target_log_mean"),
+        "log_std": grid_params.get("target_log_std"),
+    }
+
+
+def resolve_target_normalization(
+    data_config: dict[str, Any],
+    target: TargetSpec,
+    target_params: dict[str, Any],
+    *,
+    bp_nodata_as_zero: bool,
+) -> TargetNormalization:
+    root_dir = str(data_config["root_dir"])
+    raw_data_dir = str(data_config.get("raw_data_dir") or root_dir)
+    train_hex_ids = None
+    train_split = data_config.get("train_split")
+    if train_split:
+        train_split_path = Path(root_dir) / str(train_split)
+        if train_split_path.is_file():
+            train_hex_ids = read_split_hex_ids(str(train_split_path))
+
+    out_norm = str(target_params["out_norm"])
+    min_value = None
+    max_value = None
+    log_mean = target_params.get("log_mean")
+    log_std = target_params.get("log_std")
+    if out_norm == "min_max":
+        max_value, min_value = get_range_output_cached(
+            root_dir=root_dir,
+            output_type=target.output_type,
+            allowed_hex_ids=train_hex_ids,
+            raw_data_dir=raw_data_dir,
+        )
+        max_value, min_value = apply_bp_nodata_zero_range(
+            target_name=target.name,
+            max_value=max_value,
+            min_value=min_value,
+            bp_nodata_as_zero=bp_nodata_as_zero,
+        )
+    elif out_norm == "log_standard" and (log_mean is None or log_std is None):
+        log_mean, log_std = get_output_log_stats_cached(
+            root_dir=root_dir,
+            output_type=target.output_type,
+            allowed_hex_ids=train_hex_ids,
+            raw_data_dir=raw_data_dir,
+        )
+    return TargetNormalization(
+        out_norm=out_norm,
+        min_value=min_value,
+        max_value=max_value,
+        log_mean=log_mean,
+        log_std=log_std,
+    )
 
 
 def run_single_hexel_pipeline(
@@ -206,7 +301,7 @@ def run_single_hexel_pipeline(
     mask_scope: str = "actual",
     weather_norm_params_path: Path | None = None,
     fire_size_norm_params_path: Path | None = None,
-) -> tuple[np.ndarray, Any]:
+) -> tuple[np.ndarray | dict[str, np.ndarray], Any]:
     """
     Orchestrate the end-to-end (data preparation + inference + post-processing) for one specific hexel.
 
@@ -237,7 +332,7 @@ def run_single_hexel_pipeline(
     scope = normalize_mask_scope(mask_scope)
     data_scope = prepared_mask_scope(scope)
     artifact_save_dir = Path(get_mask_scope_save_dir(str(save_dir), scope))
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     data_config = checkpoint["config"]["data"]  # We use this to build dataset class
     data_prep_config = checkpoint["config"]["data_prep"]  # We use this to prepare data
 
@@ -251,8 +346,6 @@ def run_single_hexel_pipeline(
             win_w=data_prep_config["win_w"],
             overlap_ratio=data_prep_config["overlap_ratio"],
             modelling_approach=data_prep_config["modelling_approach"],
-            output_type=data_prep_config["output_type"],
-            weather_sampling=data_prep_config["weather_sampling"],
             mask_scope=data_scope,
             weather_norm_params_path=weather_norm_params_path,
             fire_size_norm_params_path=fire_size_norm_params_path,
@@ -304,69 +397,116 @@ def run_single_hexel_pipeline(
 
     # Step 7: Post-process predictions back to denormalized hexel
     logger.info("Step 7: Post-processing prediction patches into denormalized hexel...")
-    target = get_target_spec_from_data_config(data_config)
+    targets = get_target_specs_from_data_config(data_config)
     grid_params = get_grid_params_from_data_config(data_config)
-    max_target_val, min_target_val = get_range_output_cached(
-        root_dir=str(processed_data_dir), output_type=target.output_type, raw_data_dir=str(data_dir)
-    )
-    target_channel_index = get_target_channel_index(
-        data_dir=str(processed_data_dir),
-        modelling_approach=str(data_prep_config["modelling_approach"]),
-        target=target,
-    )
     prediction_mask_channel_indices = get_prediction_mask_channel_indices(
         data_dir=str(processed_data_dir),
         modelling_approach=str(data_prep_config["modelling_approach"]),
         grid_params=grid_params,
         prediction_support_policy=checkpoint["config"].get("evaluation", {}).get("prediction_support_policy", "input"),
     )
-    out_norm = grid_params.get("out_norm", "min_max")
-    target_log_mean = grid_params.get("target_log_mean")
-    target_log_std = grid_params.get("target_log_std")
-    if out_norm == "log_standard" and (target_log_mean is None or target_log_std is None):
-        target_log_mean, target_log_std = get_output_log_stats_cached(str(data_config["root_dir"]), target.output_type)
-    reconstructed_hexel_denorm, gt_elevation_grid_profile = get_predicted_hexel(
-        base_dir=str(processed_data_dir),
-        raw_data_dir=str(data_dir),
-        test_df=dataset.metadata,
-        predictions=predictions,
-        min_target_val=min_target_val,
-        max_target_val=max_target_val,
-        hex_id=hex_id,
-        out_norm=out_norm,
-        target_log_mean=target_log_mean,
-        target_log_std=target_log_std,
-        target_channel_index=target_channel_index,
-        prediction_mask_channel_indices=prediction_mask_channel_indices,
-        mask_scope=scope,
-    )
-
-    # Step 8: Save reconstructed hexel and visualization
     all_paths = Paths(hex_id=hex_id, root_dir=data_dir)
-    gt_grid, reconstructed_hexel_denorm = load_target_grid_for_mask_scope(
-        paths=all_paths,
-        target=target,
-        pred_grid=reconstructed_hexel_denorm,
-        profile=gt_elevation_grid_profile,
-        mask_scope=scope,
-        hex_id=hex_id,
-    )
-    save_predicted_hexels(
-        predicted_hexel=reconstructed_hexel_denorm,
-        hexel_profile=gt_elevation_grid_profile,
-        hex_id=hex_id,
-        save_dir=str(artifact_save_dir),
-    )
-    visualize_target_grids(
-        gt_grid=gt_grid,
-        pred_grid=reconstructed_hexel_denorm,
-        hex_id=hex_id,
-        save_dir=str(artifact_save_dir),
-        target_label=target.label,
-    )
+    reconstructed_targets: dict[str, np.ndarray] = {}
+    ground_truth_targets: dict[str, np.ndarray] = {}
+    gt_elevation_grid_profile = None
+    multi_target = len(targets) > 1
+    bp_nodata_as_zero = checkpoint["config"].get("evaluation", {}).get("bp_nodata_as_zero", True)
+    if predictions.shape[1] != len(targets):
+        raise ValueError(f"Prediction channels {predictions.shape[1]} do not match targets {[target.name for target in targets]}.")
+
+    for target_index, target in enumerate(targets):
+        target_params = get_target_params_from_grid_config(grid_params, target)
+        normalization = resolve_target_normalization(
+            data_config,
+            target,
+            target_params,
+            bp_nodata_as_zero=bp_nodata_as_zero,
+        )
+
+        target_channel_index = get_target_channel_index(
+            data_dir=str(processed_data_dir),
+            modelling_approach=str(data_prep_config["modelling_approach"]),
+            target=target,
+        )
+        reconstructed_target, target_profile = get_predicted_hexel(
+            base_dir=str(processed_data_dir),
+            raw_data_dir=str(data_dir),
+            test_df=dataset.metadata,
+            predictions=predictions[:, target_index],
+            min_target_val=normalization.min_value,
+            max_target_val=normalization.max_value,
+            hex_id=hex_id,
+            out_norm=normalization.out_norm,
+            target_log_mean=normalization.log_mean,
+            target_log_std=normalization.log_std,
+            target_channel_index=target_channel_index,
+            prediction_mask_channel_indices=prediction_mask_channel_indices,
+            mask_scope=scope,
+        )
+        gt_grid, reconstructed_target = load_target_grid_for_mask_scope(
+            paths=all_paths,
+            target=target,
+            pred_grid=reconstructed_target,
+            profile=target_profile,
+            mask_scope=scope,
+            hex_id=hex_id,
+            bp_nodata_as_zero=bp_nodata_as_zero,
+        )
+        artifact_target_name = target.name if multi_target else None
+        save_predicted_hexels(
+            predicted_hexel=reconstructed_target,
+            hexel_profile=target_profile,
+            hex_id=hex_id,
+            save_dir=str(artifact_save_dir),
+            target_name=artifact_target_name,
+        )
+        visualize_target_grids(
+            gt_grid=gt_grid,
+            pred_grid=reconstructed_target,
+            hex_id=hex_id,
+            save_dir=str(artifact_save_dir),
+            target_label=target.label,
+            target_name=artifact_target_name,
+        )
+        reconstructed_targets[target.name] = reconstructed_target
+        ground_truth_targets[target.name] = gt_grid
+        gt_elevation_grid_profile = target_profile
+
+    if gt_elevation_grid_profile is None:
+        raise RuntimeError("No target outputs were reconstructed.")
+    if {"bp", "fi"} <= set(reconstructed_targets):
+        fi_cap = checkpoint["config"].get("evaluation", {}).get("hazard_fi_cap", 10000.0)
+        reconstructed_targets["hazard"] = compute_raw_hazard(
+            reconstructed_targets["bp"],
+            reconstructed_targets["fi"],
+            fi_cap=fi_cap,
+        )
+        ground_truth_targets["hazard"] = compute_raw_hazard(
+            ground_truth_targets["bp"],
+            ground_truth_targets["fi"],
+            fi_cap=fi_cap,
+        )
+        save_predicted_hexels(
+            predicted_hexel=reconstructed_targets["hazard"],
+            hexel_profile=gt_elevation_grid_profile,
+            hex_id=hex_id,
+            save_dir=str(artifact_save_dir),
+            target_name="hazard",
+        )
+        visualize_target_grids(
+            gt_grid=ground_truth_targets["hazard"],
+            pred_grid=reconstructed_targets["hazard"],
+            hex_id=hex_id,
+            save_dir=str(artifact_save_dir),
+            target_label="Raw Hazard",
+            target_name="hazard",
+        )
+
     logger.info(f"Step 8: Saved reconstructed hexel and visualization for hexel {hex_id} in {artifact_save_dir}")
 
-    return reconstructed_hexel_denorm, gt_elevation_grid_profile
+    if not multi_target:
+        return reconstructed_targets[targets[0].name], gt_elevation_grid_profile
+    return reconstructed_targets, gt_elevation_grid_profile
 
 
 def main():

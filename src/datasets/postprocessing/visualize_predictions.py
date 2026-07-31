@@ -139,8 +139,12 @@ def visualize_target_grids(
     filename_suffix: str = "",
     actual_support_mask: np.ndarray | None = None,
     buffer_support_mask: np.ndarray | None = None,
-    prediction_support_label: str = "input support",
+    prediction_support_label: str = "finite targets",
     show_prediction_support_outline: bool = True,
+    show_suptitle: bool = False,
+    show_caption: bool = False,
+    diff_title: str = "Difference",
+    gt_title: str = "Ground Truth (finite targets)",
 ):
     """
     Visualizes Ground Truth, Prediction, and Difference (GT - Prediction), side-by-side.
@@ -183,7 +187,8 @@ def visualize_target_grids(
 
     # Create figure
     fig, axes = plt.subplots(1, 3, figsize=(16, 6), constrained_layout=True)
-    fig.suptitle(f"{target_label} Prediction — Hex {hex_id}", fontsize=16)
+    if show_suptitle:
+        fig.suptitle(f"{target_label} Prediction — Hex {hex_id}", fontsize=16)
 
     # --- Prediction ---
     _draw_support_background(axes[0], pred_mask)
@@ -213,7 +218,7 @@ def visualize_target_grids(
         vmin=shared_vmin,
         vmax=shared_vmax,
     )
-    axes[1].set_title("Ground Truth (finite targets)")
+    axes[1].set_title(gt_title)
     if show_prediction_support_outline:
         _add_mask_outline(axes[1], pred_mask, color="black", linewidth=0.5)
     if buffer_support_mask is not None:
@@ -231,7 +236,7 @@ def visualize_target_grids(
         origin="upper",
         norm=diff_norm,
     )
-    axes[2].set_title("Difference (target overlap)")
+    axes[2].set_title(diff_title)
     if show_prediction_support_outline:
         _add_mask_outline(axes[2], pred_mask, color="black", linewidth=0.5)
     if buffer_support_mask is not None:
@@ -260,15 +265,16 @@ def visualize_target_grids(
         extend="both" if diff_percentile is not None and diff_percentile < 100.0 else "neither",
     )
     cbar_diff.set_label("Difference")
-    caption_parts = []
-    if buffer_support_mask is not None:
-        caption_parts.append("black outline = buffer boundary")
-    elif show_prediction_support_outline:
-        caption_parts.append(f"Black outline = prediction {prediction_support_label}")
-    if actual_support_mask is not None:
-        caption_parts.append("red outline = actual hex boundary")
-    caption_parts.append(f"light gray = prediction {prediction_support_label} without finite target/difference value")
-    fig.text(0.5, 0.01, "; ".join(caption_parts) + ".", ha="center", fontsize=9)
+    if show_caption:
+        caption_parts = []
+        if buffer_support_mask is not None:
+            caption_parts.append("black outline = buffer boundary")
+        elif show_prediction_support_outline:
+            caption_parts.append(f"Black outline = prediction {prediction_support_label}")
+        if actual_support_mask is not None:
+            caption_parts.append("red outline = actual hex boundary")
+        caption_parts.append(f"light gray = prediction {prediction_support_label} without finite target/difference value")
+        fig.text(0.5, -0.03, "; ".join(caption_parts) + ".", ha="center", fontsize=9)
     plt.savefig(out_path, dpi=300, bbox_inches="tight")
     print(f"Figure saved to: {out_path}")
     if experiment_logger:

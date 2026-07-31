@@ -6,8 +6,8 @@
 #SBATCH --ntasks=1
 #SBATCH --time=3:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=6Gb
-#SBATCH --gres=gpu:a100:1
+#SBATCH --mem=16Gb
+#SBATCH --gres=gpu:1
 
 set -euo pipefail
 
@@ -15,4 +15,4 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
 source .venv/bin/activate
 
-python -m src.evaluate_counterfactual --config configs/counterfactual_fuel.yaml --overwrite
+python -m src.evaluate_counterfactual --config configs/counterfactual_fuel_multi_output.yaml --overwrite

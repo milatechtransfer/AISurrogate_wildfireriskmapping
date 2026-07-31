@@ -18,7 +18,7 @@ from data_preparation.spatial.utils import (
 from src.config import GridParams
 from src.datasets.fuel_utils import FUEL_CURVE_ENCODINGS, build_fuel_curve_lookup, normalize_hex_id
 from src.datasets.sources.base import DataSource
-from src.datasets.targets import get_target_specs
+from src.datasets.targets import TargetName, get_target_specs
 from src.datasets.utils import (
     apply_bp_nodata_zero_range,
     fill_nan_channel_mean_numpy,
@@ -91,11 +91,11 @@ class GridSource(DataSource):
                         norm_stats_path,
                     )
 
-        self.targets = get_target_specs(params.target_name)
+        target_configs = params.resolved_targets()
+        self.targets = get_target_specs([target.name for target in target_configs])
+        self.target_configs = {target.name: target for target in target_configs}
         self.feature_names_list = params.feature_names_list
-        self.out_norm = params.out_norm
-        self.target_log_mean = params.target_log_mean
-        self.target_log_std = params.target_log_std
+        self.target_log_stats = {target.name: (target.log_mean, target.log_std) for target in target_configs}
         self.fuel_feats_encoding = params.fuel_feats_encoding
         self.normalize_fuel_feats_ordinal = params.normalize_fuel_feats_ordinal
         self.terrain_derivatives = params.terrain_derivatives
@@ -145,8 +145,7 @@ class GridSource(DataSource):
             for target in self.targets:
                 if self._target_out_norm(target.name) != "log_standard":
                     continue
-                mean = self.target_log_mean
-                std = self.target_log_std
+                mean, std = self._target_log_stats(target.name)
                 if mean is None or std is None:
                     mean, std = get_output_log_stats_cached(
                         self.root_dir,
@@ -154,8 +153,7 @@ class GridSource(DataSource):
                         allowed_hex_ids=self._train_hex_ids,
                         raw_data_dir=self.raw_data_dir,
                     )
-                    self.target_log_mean = mean
-                    self.target_log_std = std
+                    self.target_log_stats[target.name] = (mean, std)
 
         # 2. Update indices
         with open(os.path.join(self.root_dir, f"feature_channel_map_{self.modelling_approach}.json")) as f:
@@ -341,11 +339,11 @@ class GridSource(DataSource):
         self.fuel_curve_mean = np.array([log_vecs.mean()], dtype=np.float32)
         self.fuel_curve_std = np.array([log_vecs.std()], dtype=np.float32)
 
-    def _target_out_norm(self, target_name: str) -> str:
-        return self.out_norm
+    def _target_out_norm(self, target_name: TargetName) -> str:
+        return self.target_configs[target_name].out_norm
 
-    def _target_log_stats(self, target_name: str) -> tuple[float | None, float | None]:
-        return self.target_log_mean, self.target_log_std
+    def _target_log_stats(self, target_name: TargetName) -> tuple[float | None, float | None]:
+        return self.target_log_stats[target_name]
 
     @staticmethod
     def _finite_difference(values: torch.Tensor, dim: int, spacing: float) -> torch.Tensor:

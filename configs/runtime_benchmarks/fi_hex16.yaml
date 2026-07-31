@@ -1,0 +1,155 @@
+# FI model on the common input pipeline.
+# Common input pipeline (shared by BP/FI/ROS):
+#   - dataset: data_samples_v2 (aggregated 2-channel ignition: human + lightning)
+#   - grid: fuel (one-hot) + elevation + terrain derivatives (slope, aspect_sin, aspect_cos)
+#   - spatialized weather + fire-size with per-source missing masks
+#   - wind as Cartesian components only (wind_x, wind_y); WindSpeed dropped (redundant with the norm)
+save_dir: "experiments/fi_common_input_pipeline_fuel_iROS"
+
+modelling_approach: "1"
+
+seed: 42
+deterministic: true
+
+model:
+  num_classes: 1
+  input_branches: ["spatial"]
+  use_coordconv: false
+
+optimizer:
+  name: "AdamW"
+  lr: 7.0e-4
+  loss: ["huber", "raw_pearson"]
+  huber_beta: 1.0
+  loss_weights:
+    huber: 0.7
+    raw_pearson: 0.3
+
+lr_scheduler:
+  name: "cosine_warmup"
+  warmup_epochs: 5
+
+training:
+  max_epochs: 25
+  log_every_n_epoch: 1
+
+evaluation:
+  best_ckpt_metrics: ["ccc"]
+  best_ckpt_metrics_mode: ["max"]
+  checkpoint_filename: "best.pth"
+  robust_plot_percentile: 99.0
+
+data:
+  root_dir: "/network/projects/amlrt_internships/nrcan_05_wildfires/burnp3plus_data/data_samples_v3"
+  raw_data_dir: "/network/projects/amlrt_internships/nrcan_05_wildfires/burnp3plus_data"
+
+  train_split: "train_indices.csv"
+  val_split: "val_indices.csv"
+  test_split: "meta_hex_16.csv"
+
+  batch_size: 64
+  num_workers: 2
+  valid_mask_threshold: 0.01
+
+  input_sources:
+    - name: "grid"
+      params:
+        feature_names_list: ["ignition_grid_human", "ignition_grid_lightning", "fuel_grid", "elevation_grid"]
+        target_name: "fi"
+        out_norm: "log_standard"
+        fuel_feats_encoding: "iROS"
+        normalize_fuel_feats_ordinal: false # set to true if using ordinal
+        transforms_list: []
+        augmentation_prob: 0.0
+        terrain_derivatives: ["slope", "aspect_sin", "aspect_cos"]
+
+    - name: "spatialized_weather"
+      params:
+        csv_name: "weather_table_processed.csv"
+        feature_names_list:
+          - "Temperature"
+          - "RelativeHumidity"
+          - "Precipitation"
+          - "FineFuelMoistureCode"
+          - "DuffMoistureCode"
+          - "DroughtCode"
+          - "InitialSpreadIndex"
+          - "BuildupIndex"
+          - "FireWeatherIndex"
+          - "wind_x"
+          - "wind_y"
+        fire_weather_zone_id_col: "WeatherZone"
+        fire_weather_zone_selection_approach: "mode"
+        aggregation: "mean"
+        zone_channel_key: "firezones_grid"
+        missing_value_strategy: "global_mean"
+        include_missing_firezone_mask: false
+        shuffle_lut: false
+        shuffle_seed: 42
+        transforms_list: []
+        augmentation_prob: 0.0
+
+    - name: "spatialized_fire_size"
+      params:
+        csv_name: "df_fire_fru_processed.csv"
+        feature_names_list: ["NORM_LOG_SIZE_HA"]
+        fire_weather_zone_id_col: "GRIDCODE"
+        fire_weather_zone_selection_approach: "mode"
+        aggregation: "mean"
+        zone_channel_key: "firezones_grid"
+        missing_value_strategy: "global_mean"
+        include_missing_firezone_mask: false
+        shuffle_lut: false
+        shuffle_seed: 42
+        transforms_list: []
+        augmentation_prob: 0.0
+
+logger:
+  enabled: true
+  project_name: "nrcan05-wildfireriskmapping"
+  workspace: "mila-amlrt"
+  experiment_name: "fi_common_input_pipeline_fuel_iROS"
+  tags:
+    - "full_data"
+    - "modelling_approach=1"
+    - "target=fi"
+    - "coordconv=patch_local"
+    - "data_samples_v3"
+    - "ignition=aggregated_human_lightning"
+    - "raw_fuel_iROS"
+    - "best_ckpt=ccc"
+    - "loss=huber_raw_pearson"
+    - "target_norm=log_standard"
+    - "tabular_fusion=spatialized"
+    - "spatialized_sources=weather_fire_size"
+    - "missing_masks=fire_size"
+    - "terrain_derivatives=slope_aspect"
+    - "wind=vector_components"
+  log_every_n_step: 10
+
+metrics:
+  - "mse"
+  - "mae"
+  - "normalized_mae"
+  - "mae_top01"
+  - "mae_top02"
+  - "mae_top05"
+  - "mae_top10"
+  - "spearman"
+  - "bias"
+  - "ccc"
+  - "iou_top005"
+  - "iou_top01"
+  - "iou_top02"
+  - "iou_top05"
+  - "iou_top10"
+  - "auc_iou_top10"
+  - "auc_iou_full"
+
+data_prep:
+  modelling_approach: 1
+  win_h: 256
+  win_w: 256
+  overlap_ratio: 0.2
+  ignition_weighting: "distribution" # ("max", "distribution")
+  fuel_representation: "raw" # ("raw", "group")

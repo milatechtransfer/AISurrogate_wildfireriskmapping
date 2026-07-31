@@ -1,8 +1,9 @@
-"""Hazard evaluation CLI for paired BP/FI checkpoints.
+"""Hazard evaluation CLI for a single multi-output BP/FI checkpoint.
 
 This entrypoint reuses the standard model inference stack and shared hexel
 reconstruction, then applies the hazard-specific denominator, raster, and
-class-metric logic.
+class-metric logic. The model is expected to jointly predict both ``bp`` and
+``fi`` (and optionally other targets, e.g. ``ros``) from one checkpoint.
 
 python -m src.evaluate_hazard --config configs/hazard_eval_common_input_pipeline.yaml
 """
@@ -52,7 +53,7 @@ CONFUSION_MATRIX_PNG_FILENAME = "hazard_confusion_matrix.png"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate combined BP x FI hazard product.")
+    parser = argparse.ArgumentParser(description="Evaluate combined BP x FI hazard product from a single multi-output model.")
     parser.add_argument(
         "--config",
         type=str,
@@ -127,11 +128,12 @@ def prepare_model_config_for_hazard(
     model_config: Config,
     hazard_config: HazardEvalConfig,
     entry: HazardModelEntry,
-    expected_target: str,
+    required_targets: Collection[str] = ("bp", "fi"),
 ) -> Config:
     """Override a model config's data/checkpoint/logger settings for hazard eval.
 
-    Validates the grid target name matches ``expected_target`` (``bp``/``fi``).
+    Validates that the model's grid source jointly predicts every target in
+    ``required_targets`` (by default ``bp`` and ``fi``) from a single checkpoint.
     """
     model_config.data.root_dir = hazard_config.root_dir
     model_config.data.raw_data_dir = hazard_config.raw_data_dir
@@ -142,12 +144,14 @@ def prepare_model_config_for_hazard(
 
     grid_params = get_config_grid_params(model_config)
     if grid_params is None:
-        raise ValueError("Model config has no grid input source; cannot validate hazard target.")
-    actual_target = get_target_spec(grid_params.target_name).name
-    if actual_target != expected_target:
+        raise ValueError("Model config has no grid input source; cannot validate hazard targets.")
+    actual_targets = {target.name for target in grid_params.resolved_targets()}
+    expected_targets = {get_target_spec(name).name for name in required_targets}
+    missing_targets = expected_targets - actual_targets
+    if missing_targets:
         raise ValueError(
-            f"Expected a {expected_target!r} model, but grid target_name resolves to {actual_target!r} "
-            f"(config target_name={grid_params.target_name!r})."
+            f"Hazard eval requires a multi-output model predicting {sorted(expected_targets)}, "
+            f"but the configured targets are {sorted(actual_targets)} (missing {sorted(missing_targets)})."
         )
     return model_config
 
@@ -191,9 +195,7 @@ def read_reference_denominator(path: str) -> float:
         else:
             raise KeyError(f"Reference denominator file {path!r} is missing a 'scale_denominator' or 'denominator' key.")
     elif isinstance(payload, bool) or not isinstance(payload, (int, float)):
-        raise ValueError(
-            f"Reference denominator file {path!r} must contain a number or an object with " "'scale_denominator'/'denominator'."
-        )
+        raise ValueError(f"Reference denominator file {path!r} must contain a number or an object with 'scale_denominator'/'denominator'.")
     else:
         value = payload
 
@@ -261,7 +263,7 @@ def resolve_hazard_denominator(
     hazard_config: HazardEvalConfig,
     pairs: Iterable[tuple[StitchedHexel, StitchedHexel]] | None = None,
     *,
-    bp_model_config: Config | None = None,
+    model_config: Config | None = None,
     save_dir: str | None = None,
 ) -> tuple[float, dict[str, Any]]:
     """Resolve a single scale denominator and return it with metadata.
@@ -288,9 +290,9 @@ def resolve_hazard_denominator(
                 json.dump({"scale_denominator": denominator, "scale_denominator_source": meta["source"]}, handle, indent=2)
             meta["denominator_json"] = json_path
     elif hazard_config.scale_denominator_source == "train_ground_truth":
-        if bp_model_config is None:
-            raise ValueError("bp_model_config is required for scale_denominator_source='train_ground_truth'.")
-        train_split_path = os.path.join(bp_model_config.data.root_dir, bp_model_config.data.train_split)
+        if model_config is None:
+            raise ValueError("model_config is required for scale_denominator_source='train_ground_truth'.")
+        train_split_path = os.path.join(model_config.data.root_dir, model_config.data.train_split)
         denominator = raw_ground_truth_denominator(hazard_config.raw_data_dir, hazard_config.fi_cap, read_split_hex_ids(train_split_path))
         meta["train_split"] = train_split_path
     elif hazard_config.scale_denominator_source == "eval_ground_truth":
@@ -451,40 +453,28 @@ def main() -> None:
 
     os.makedirs(hazard_config.save_dir, exist_ok=True)
 
-    bp_model_config = prepare_model_config_for_hazard(load_config(hazard_config.bp.config_path), hazard_config, hazard_config.bp, "bp")
-    fi_model_config = prepare_model_config_for_hazard(load_config(hazard_config.fi.config_path), hazard_config, hazard_config.fi, "fi")
+    model_config = prepare_model_config_for_hazard(load_config(hazard_config.model.config_path), hazard_config, hazard_config.model)
 
-    seed = getattr(bp_model_config, "seed", 42)
-    deterministic = getattr(bp_model_config, "deterministic", True)
+    seed = getattr(model_config, "seed", 42)
+    deterministic = getattr(model_config, "deterministic", True)
     seed_everything(seed=seed, deterministic=deterministic)
 
-    print("\n[Hazard] Running BP test inference...")
-    bp_predictions, bp_out_norm = run_test_inference(bp_model_config, seed)
-    print("[Hazard] Running FI test inference...")
-    fi_predictions, fi_out_norm = run_test_inference(fi_model_config, seed)
+    print("\n[Hazard] Running multi-output BP/FI test inference...")
+    predictions, out_norm = run_test_inference(model_config, seed)
 
-    if hazard_config.bp.save_predictions and not args.no_save_predictions:
-        np.save(os.path.join(hazard_config.save_dir, "bp_test_predictions.npy"), bp_predictions)
-    if hazard_config.fi.save_predictions and not args.no_save_predictions:
-        np.save(os.path.join(hazard_config.save_dir, "fi_test_predictions.npy"), fi_predictions)
+    if hazard_config.model.save_predictions and not args.no_save_predictions:
+        np.save(os.path.join(hazard_config.save_dir, "test_predictions.npy"), predictions)
 
     def make_pairs() -> Iterable[tuple[StitchedHexel, StitchedHexel]]:
-        """Return a fresh streamed BP/FI reconstruction pass."""
-        bp_hexels = reconstruct_denormalized_hexels(
-            test_predictions=bp_predictions,
-            config=bp_model_config,
-            out_norm=bp_out_norm,
+        """Return a fresh streamed BP/FI reconstruction pass from the single multi-output model."""
+        hexels = reconstruct_denormalized_hexels(
+            test_predictions=predictions,
+            config=model_config,
+            out_norm=out_norm,
             stitch_mode=hazard_config.stitch_mode,
             mask_scope=hazard_config.mask_scope,
         )
-        fi_hexels = reconstruct_denormalized_hexels(
-            test_predictions=fi_predictions,
-            config=fi_model_config,
-            out_norm=fi_out_norm,
-            stitch_mode=hazard_config.stitch_mode,
-            mask_scope=hazard_config.mask_scope,
-        )
-        return pair_stitched_hexels(bp_hexels, fi_hexels)
+        return pair_stitched_hexels(hexels)
 
     # Denominator passes consume the streamed reconstructions. Rebuilding them
     # is slower than caching full rasters, but keeps buffer-scale runs within memory.
@@ -494,7 +484,7 @@ def main() -> None:
     denominator, denominator_metadata = resolve_hazard_denominator(
         hazard_config,
         denominator_pairs,
-        bp_model_config=bp_model_config,
+        model_config=model_config,
         save_dir=hazard_config.save_dir,
     )
     print(f"[Hazard] Resolved scale denominator={denominator} (source={denominator_metadata['source']})")

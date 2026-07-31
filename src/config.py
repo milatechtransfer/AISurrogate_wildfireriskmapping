@@ -10,6 +10,9 @@ from src.datasets.postprocessing.hazard import (
     DEFAULT_SCALE_TO,
     validate_bin_thresholds,
 )
+from src.datasets.targets import TargetName, get_target_spec
+
+TargetNorm = Literal["min_max", "log", "log_standard", "none", "total_iters", "season_cause_iters"]
 
 
 class LoggerConfig(BaseModel):
@@ -24,6 +27,7 @@ class LoggerConfig(BaseModel):
 class ModelConfig(BaseModel):
     architecture: str = "auto"
     num_classes: int = 1
+    output_head: Literal["shared", "bp_behavior"] = "shared"
     hidden_features: list[int] = [64, 128, 256, 512]
 
     # Controls if we use MultiSourceUNet or BaselineUNet
@@ -48,12 +52,30 @@ class ModelConfig(BaseModel):
     params: dict[str, Any] | None = None
 
 
+class TargetLossConfig(BaseModel):
+    loss: str | list[str]
+    loss_weights: dict[str, float] = {}
+    task_weight: float = Field(default=1.0, gt=0.0)
+    huber_beta: float = Field(default=1.0, gt=0.0)
+
+
 class OptimizerConfig(BaseModel):
     name: str = "AdamW"
     lr: float = 1e-3
-    loss: str | list[str]
+    loss: str | list[str] | None = None
     loss_weights: dict[str, float] = {}
     huber_beta: float = Field(default=1.0, gt=0.0)
+    target_losses: dict[TargetName, TargetLossConfig] = {}
+
+    @model_validator(mode="after")
+    def validate_loss_configuration(self) -> "OptimizerConfig":
+        if self.target_losses:
+            if self.loss is not None or self.loss_weights:
+                raise ValueError("Use either legacy loss/loss_weights or target_losses, not both.")
+            return self
+        if self.loss is None:
+            raise ValueError("loss is required when target_losses is not configured.")
+        return self
 
 
 class SchedulerConfig(BaseModel):
@@ -79,6 +101,25 @@ class EvaluationConfig(BaseModel):
     robust_plot_percentile: float | None = Field(default=None, gt=0.0, le=100.0)
     bp_nodata_as_zero: bool = True
     prediction_support_policy: str = "input"
+    hazard_fi_cap: float | None = Field(default=DEFAULT_FI_CAP, gt=0.0)
+
+
+class TargetConfig(BaseModel):
+    name: TargetName
+    out_norm: TargetNorm
+    log_mean: float | None = None
+    log_std: float | None = Field(default=None, gt=0.0)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value: Any) -> TargetName:
+        return get_target_spec(str(value)).name
+
+    @model_validator(mode="after")
+    def validate_log_stats(self) -> "TargetConfig":
+        if (self.log_mean is None) != (self.log_std is None):
+            raise ValueError("log_mean and log_std must either both be set or both be omitted.")
+        return self
 
 
 class GridParams(BaseModel):
@@ -87,7 +128,7 @@ class GridParams(BaseModel):
     feature_names_list: list[str]
     target_name: str = "bp"
     # TODO: move out_norm outside of grid source config since it's for GT
-    out_norm: str = "min_max"
+    out_norm: TargetNorm = "min_max"
     target_log_mean: float | None = None
     target_log_std: float | None = None
     fuel_feats_encoding: str = "one_hot"
@@ -97,6 +138,57 @@ class GridParams(BaseModel):
     terrain_derivatives: list[str] = Field(default_factory=list)
     terrain_cell_size_m: float = Field(default=100.0, gt=0.0)
     bp_nodata_as_zero: bool = True
+    targets: list[TargetConfig] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def prevent_mixed_target_configuration(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or data.get("targets") is None:
+            return data
+        conflicting_legacy_fields = {
+            field_name
+            for field_name, default_value in {
+                "target_name": "bp",
+                "out_norm": "min_max",
+                "target_log_mean": None,
+                "target_log_std": None,
+            }.items()
+            if field_name in data and data[field_name] != default_value
+        }
+        if conflicting_legacy_fields:
+            raise ValueError(f"Use either targets or non-default legacy target fields, not both: {sorted(conflicting_legacy_fields)}")
+        return data
+
+    @model_validator(mode="after")
+    def validate_targets(self) -> "GridParams":
+        if self.targets is None:
+            get_target_spec(self.target_name)
+            return self
+        if not self.targets:
+            raise ValueError("targets must contain at least one target.")
+        target_names = [target.name for target in self.targets]
+        if len(target_names) != len(set(target_names)):
+            raise ValueError(f"targets contains duplicate names: {target_names}")
+        return self
+
+    def resolved_targets(self) -> list[TargetConfig]:
+        if self.targets is not None:
+            return list(self.targets)
+        return [
+            TargetConfig(
+                name=get_target_spec(self.target_name).name,
+                out_norm=self.out_norm,
+                log_mean=self.target_log_mean,
+                log_std=self.target_log_std,
+            )
+        ]
+
+    def target_config(self, target_name: str) -> TargetConfig:
+        normalized_name = get_target_spec(target_name).name
+        for target in self.resolved_targets():
+            if target.name == normalized_name:
+                return target
+        raise KeyError(f"Target {normalized_name!r} is not configured.")
 
 
 class TabularParams(BaseModel):
@@ -203,10 +295,45 @@ class Config(BaseModel):
     metrics: list[str] = ["mse", "mae", "spearman", "ssim"]
     data_prep: DataPrepConfig = Field(default_factory=DataPrepConfig)
 
+    @model_validator(mode="after")
+    def validate_target_alignment(self) -> "Config":
+        grid_params = next(
+            (source.params for source in self.data.input_sources if source.name == "grid" and isinstance(source.params, GridParams)),
+            None,
+        )
+        if grid_params is None:
+            return self
+
+        target_names = [target.name for target in grid_params.resolved_targets()]
+        if self.model.num_classes != len(target_names):
+            raise ValueError(f"model.num_classes={self.model.num_classes} must match configured targets {target_names}.")
+        configured_loss_targets = set(self.optimizer.target_losses)
+        if len(target_names) > 1 and not configured_loss_targets:
+            raise ValueError("optimizer.target_losses is required when multiple targets are configured.")
+        if configured_loss_targets and configured_loss_targets != set(target_names):
+            raise ValueError(
+                f"optimizer.target_losses must match configured targets, got {sorted(configured_loss_targets)} "
+                f"and expected {sorted(target_names)}."
+            )
+        if len(target_names) > 1:
+            valid_checkpoint_metrics = {"loss"}
+            valid_checkpoint_metrics.update(f"{target_name}/{metric_name}" for target_name in target_names for metric_name in self.metrics)
+            for target_name, loss_config in self.optimizer.target_losses.items():
+                valid_checkpoint_metrics.add(f"loss_{target_name}/total")
+                if isinstance(loss_config.loss, list):
+                    valid_checkpoint_metrics.update(f"loss_{target_name}/{loss_name}" for loss_name in loss_config.loss)
+            if {"bp", "fi"} <= set(target_names):
+                valid_checkpoint_metrics.add("hazard/ccc")
+            invalid_checkpoint_metrics = set(self.evaluation.best_ckpt_metrics) - valid_checkpoint_metrics
+            if invalid_checkpoint_metrics:
+                raise ValueError(
+                    f"Multi-target best_ckpt_metrics must use namespaced metric keys. Invalid values: {sorted(invalid_checkpoint_metrics)}."
+                )
+        return self
+
 
 #: Fixed pool of seeds used to derive a run-specific seed from `run_id`.
-#: NOTE: duplicated from multi_run (ea24b57). Remove when multi_run merges.
-SEEDS: list[int] = [42, 1337, 2024, 3407, 12345]
+SEEDS: list[int] = [42, 1337, 2024]
 
 
 def apply_run_id_overrides(config: "Config", run_id: int) -> int:
@@ -237,7 +364,7 @@ DenominatorSource = Literal[
 
 
 class HazardModelEntry(BaseModel):
-    """A single trained model (BP or FI) contributing predictions to hazard evaluation."""
+    """A single trained multi-output model contributing BP/FI predictions to hazard evaluation."""
 
     config_path: str
     checkpoint_filename: str = "best.pth"
@@ -245,7 +372,7 @@ class HazardModelEntry(BaseModel):
 
 
 class HazardEvalConfig(BaseModel):
-    """Config for hazard evaluation combining BP and FI model checkpoints."""
+    """Config for hazard evaluation using a single multi-output BP/FI model checkpoint."""
 
     save_dir: str = "experiments/hazard_eval"
 
@@ -256,8 +383,7 @@ class HazardEvalConfig(BaseModel):
     mask_scope: Literal["actual", "buffer", "buffer_only"] = "actual"
     stitch_mode: Literal["mean", "max"] = "mean"
 
-    bp: HazardModelEntry
-    fi: HazardModelEntry
+    model: HazardModelEntry
 
     fi_cap: float | None = Field(default=DEFAULT_FI_CAP, gt=0.0)
     scale_to: float = Field(default=DEFAULT_SCALE_TO, gt=0.0)

@@ -1,0 +1,165 @@
+# Joint BP/FI/ROS emulator on the shared spatial input pipeline.
+# The UNet backbone and decoder are shared. A BP head predicts probability
+# logits, while one two-channel behavior head predicts conditional FI and ROS.
+save_dir: "experiments/multi_output_spatial_weather"
+
+modelling_approach: "1"
+
+seed: 42
+deterministic: true
+
+model:
+  num_classes: 3
+  output_head: "bp_behavior"
+  input_branches: ["spatial"]
+  use_coordconv: false
+
+optimizer:
+  name: "AdamW"
+  lr: 7.0e-4
+  target_losses:
+    bp:
+      loss: ["kl", "ccc", "hex_mean_pairwise_rank", "hex_top10_pairwise_rank"]
+      loss_weights:
+        kl: 0.45
+        ccc: 0.45
+        hex_mean_pairwise_rank: 0.05
+        hex_top10_pairwise_rank: 0.05
+      task_weight: 0.50
+    fi:
+      loss: ["huber", "raw_pearson"]
+      loss_weights:
+        huber: 0.70
+        raw_pearson: 0.30
+      task_weight: 0.25
+    ros:
+      loss: ["huber", "raw_pearson"]
+      loss_weights:
+        huber: 0.70
+        raw_pearson: 0.30
+      task_weight: 0.25
+
+lr_scheduler:
+  name: "cosine_warmup"
+  warmup_epochs: 5
+
+training:
+  max_epochs: 25
+  log_every_n_epoch: 1
+
+evaluation:
+  best_ckpt_metrics: ["bp/ccc", "fi/ccc", "ros/ccc"]
+  best_ckpt_metrics_mode: ["max", "max", "max"]
+  checkpoint_filename: "best.pth"
+  bp_nodata_as_zero: true
+  prediction_support_policy: "input"
+  hazard_fi_cap: 10000.0
+
+data:
+  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4"
+  raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+
+  train_split: "train_indices.csv"
+  val_split: "val_indices.csv"
+  test_split: "test_indices.csv"
+
+  batch_size: 64
+  num_workers: 2
+  valid_mask_threshold: 0.01
+  include_patch_metadata: true
+
+  input_sources:
+    - name: "grid"
+      params:
+        feature_names_list: ["ignition_grid_human", "ignition_grid_lightning", "fuel_grid", "elevation_grid"]
+        targets:
+          - name: "bp"
+            out_norm: "min_max"
+          - name: "fi"
+            out_norm: "log_standard"
+          - name: "ros"
+            out_norm: "log_standard"
+        fuel_feats_encoding: "iROS"
+        normalize_fuel_feats_ordinal: false
+        transforms_list: []
+        augmentation_prob: 0.0
+        terrain_derivatives: ["slope", "aspect_sin", "aspect_cos"]
+        bp_nodata_as_zero: true
+
+    - name: "spatialized_weather"
+      params:
+        csv_name: "weather_table_processed.csv"
+        feature_names_list:
+          - "Temperature"
+          - "RelativeHumidity"
+          - "Precipitation"
+          - "FineFuelMoistureCode"
+          - "DuffMoistureCode"
+          - "DroughtCode"
+          - "InitialSpreadIndex"
+          - "BuildupIndex"
+          - "FireWeatherIndex"
+          - "wind_x"
+          - "wind_y"
+        fire_weather_zone_id_col: "WeatherZone"
+        fire_weather_zone_selection_approach: "mode"
+        hex_id_col: "hex_id"
+        aggregation: "mean"
+        zone_channel_key: "firezones_grid"
+        missing_value_strategy: "global_mean"
+        include_missing_firezone_mask: false
+        shuffle_lut: false
+        shuffle_seed: 42
+        transforms_list: []
+        augmentation_prob: 0.0
+
+logger:
+  enabled: true
+  project_name: "nrcan05-wildfireriskmapping"
+  workspace: "mila-amlrt"
+  experiment_name: "multi_output_spatial_weather"
+  tags:
+    - "full_data"
+    - "modelling_approach=1"
+    - "targets=bp_fi_ros"
+    - "output_head=bp_behavior"
+    - "data_samples_v4"
+    - "ignition=aggregated_human_lightning"
+    - "raw_fuel_iROS"
+    - "best_ckpt=bp_ccc_fi_ccc_ros_ccc"
+    - "task_weights=0.50_0.25_0.25"
+    - "bp_nodata_as_zero=true"
+    - "prediction_support_policy=input"
+    - "tabular_fusion=spatialized"
+    - "spatialized_sources=weather"
+    - "terrain_derivatives=slope_aspect"
+    - "wind=vector_components"
+  log_every_n_step: 10
+
+metrics:
+  - "mse"
+  - "mae"
+  - "normalized_mae"
+  - "mae_top01"
+  - "mae_top02"
+  - "mae_top05"
+  - "mae_top10"
+  - "spearman"
+  - "bias"
+  - "normalized_bias"
+  - "ccc"
+  - "iou_top005"
+  - "iou_top01"
+  - "iou_top02"
+  - "iou_top05"
+  - "iou_top10"
+  - "auc_iou_top10"
+  - "auc_iou_full"
+
+data_prep:
+  modelling_approach: 1
+  win_h: 256
+  win_w: 256
+  overlap_ratio: 0.2
+  ignition_weighting: "distribution"
+  fuel_representation: "raw"
