@@ -35,7 +35,7 @@ print(Path(config["data"]["root_dir"]).resolve())
 PY
 )
 
-    STAGE_PARENT="${SLURM_TMPDIR}/nrcan_wildfireriskmapping_data"
+    STAGE_PARENT="${SLURM_TMPDIR}/wildfireriskmapping_data"
     STAGED_DATA_ROOT_DIR="${STAGE_PARENT}/$(basename "$ORIGINAL_DATA_ROOT_DIR")_${SLURM_JOB_ID:-$$}"
     mkdir -p "$STAGE_PARENT"
     trap 'rm -rf "$STAGED_DATA_ROOT_DIR"' EXIT

@@ -22,9 +22,9 @@ fi
 echo "Starting Worker $TASK_ID / $NUM_TASKS"
 
 # ── Paths (override via env vars to run under a different account/environment) ──
-# Mila scratch convention: /network/scratch/<user-initial>/<user>.
-SCRATCH_BASE=${SCRATCH_BASE:-/network/scratch/${USER:0:1}/${USER}/nrcan_wildfireriskmapping/data_samples}
-ROOT_DIR=${ROOT_DIR:-/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/}
+# Scratch convention: <scratch_root>/<user-initial>/<user>.
+SCRATCH_BASE=${SCRATCH_BASE:-/path/to/scratch/${USER:0:1}/${USER}/wildfireriskmapping/data_samples}
+ROOT_DIR=${ROOT_DIR:-/path/to/raw_data/}
 SAVE_DIR=${SAVE_DIR:-${SCRATCH_BASE}/data_samples_v2_full_support_dist_ignition}
 SRC_DIR=${SRC_DIR:-${SCRATCH_BASE}/data_samples_v2_full_support}
 

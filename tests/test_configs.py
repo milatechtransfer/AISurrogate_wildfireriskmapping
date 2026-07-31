@@ -60,8 +60,8 @@ def test_common_input_pipeline_configs_share_unified_input_pipeline():
         # Spatial-only model
         assert config.model.input_branches == ["spatial"]
 
-        # Dataset is the leakage-fixed, aggregated-ignition data_samples_v4.
-        assert config.data.root_dir.endswith("data_samples_v4")
+        # Dataset is the leakage-fixed, aggregated-ignition data samples.
+        assert config.data.root_dir.endswith("data_samples")
 
         # Grid: aggregated 2-channel ignition + terrain derivatives.
         assert isinstance(sources["grid"], GridParams)
@@ -253,7 +253,7 @@ def test_hazard_eval_config_parses_and_references_model_config():
     config = _load_hazard_eval_config(HAZARD_EVAL_CONFIG)
 
     assert config.model.config_path == str(HAZARD_MODEL_CONFIG)
-    assert config.root_dir.endswith("data_samples_v4")
+    assert config.root_dir.endswith("data_samples")
     assert config.test_split == "test_indices.csv"
     assert config.mask_scope == "actual"
     assert config.stitch_mode == "mean"

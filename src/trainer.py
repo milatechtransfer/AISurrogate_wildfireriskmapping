@@ -654,7 +654,7 @@ class Trainer:
         self.global_step = int(checkpoint.get("global_step", self.global_step))
 
         # Restore RNG states so a resumed run (e.g. after preemption) reproduces the
-        # same data order/augmentations as an uninterrupted one, per Mila's
+        # same data order/augmentations as an uninterrupted one, per standard
         # checkpointing guidelines.
         rng_state = checkpoint.get("rng_state")
         if rng_state is not None:

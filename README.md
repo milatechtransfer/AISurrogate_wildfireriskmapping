@@ -1,15 +1,13 @@
-## Canada-Wide WildFire Risk Mapping
+## Accelerating Wildfire Hazard Mapping Across Canada with an AI Surrogate Modelling Framework
+[Under-review]
+
+![alt text](image.png)
 
 ### Installation & Setup
 
 Install `uv`: https://docs.astral.sh/uv/getting-started/installation.
 
-Clone the repository:
-```bash
-   git clone https://github.com/milatechtransfer/nrcan_wildfireriskmapping.git
-   cd nrcan_wildfireriskmapping
-```
-Then, create/update the environment from the lockfile:
+Clone the repository, Then, create/update the environment from the lockfile:
 ```bash
    uv sync
 ```
@@ -34,10 +32,15 @@ To set up the logging with Comet, add your API key via:
 ```bash
 export COMET_API_KEY=<YOUR_KEY>
 ```
+as well as set the project name and workspace name in your config file:` configs/XYZ.yaml`
 
 ### Data preparation
 
 For all the data preparation steps, refer to [the following section](data_preparation/README.md).
+
+### Trained model checkpoints:
+
+Under `model_checkpoints/` We release the best model checkpoints for the multi-output models (spatial, and spatial + weather (best model)). The later checkpoint under `model_checkpoints/multi_output_spatial_weather/best.pth` is the one used for all analysis throughout the paper, corresponding to `configs/multi_output_spatial_weather.yaml`
 
 ### Training
 
@@ -80,13 +83,6 @@ On the cluster, use the SLURM wrapper:
 
 ```bash
 sbatch run_files/eval_hazard.sh configs/hazard_eval_spatial_weather.yaml
-```
-
-Extra CLI arguments can be passed through `EVAL_ARGS`. For example, to run a buffer-only evaluation from a different data root and keep outputs separate:
-
-```bash
-EVAL_ARGS="--mask_scope buffer_only --root_dir /network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v2_buffer_test --save_dir experiments/hazard_eval_common_input_pipeline_buffer_only --skip_plots" \
-  sbatch run_files/eval_hazard.sh configs/hazard_eval_common_input_pipeline.yaml
 ```
 
 The denominator policy controls how scaled and binned hazard are normalized:

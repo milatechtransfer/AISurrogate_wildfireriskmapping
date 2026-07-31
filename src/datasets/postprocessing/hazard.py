@@ -1,4 +1,4 @@
-"""Array-level NRCan-style hazard math.
+"""Array-level wildfire hazard math.
 
 The functions here avoid file paths and model config objects so the same rules
 can be reused by config validation, tests, and evaluation pipelines.
@@ -79,7 +79,7 @@ def bin_scaled_hazard(
     thresholds: Sequence[float] | None = None,
     invalid_class: int = 0,
 ) -> np.ndarray:
-    """Bin a scaled hazard grid into 1-based NRCan hazard classes.
+    """Bin a scaled hazard grid into 1-based hazard classes.
 
     Values equal to a threshold move into the higher class; non-finite pixels
     are assigned ``invalid_class``.

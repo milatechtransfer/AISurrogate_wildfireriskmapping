@@ -1,6 +1,6 @@
 #!/bin/bash
 ##SBATCH --mail-type=all
-##SBATCH --mail-user=name@mila.quebec
+##SBATCH --mail-user=<your_email>@<your_domain>
 #SBATCH --job-name=unet_full_data
 #SBATCH --output=logs/job_%x_%j.out
 #SBATCH --error=logs/job_%x_%j.err
@@ -69,7 +69,7 @@ print(Path(config["data"]["root_dir"]).resolve())
 PY
 )
 
-    STAGE_PARENT="${SLURM_TMPDIR}/nrcan_wildfireriskmapping_data"
+    STAGE_PARENT="${SLURM_TMPDIR}/wildfireriskmapping_data"
     STAGED_DATA_ROOT_DIR="${STAGE_PARENT}/$(basename "$ORIGINAL_DATA_ROOT_DIR")"
     mkdir -p "$STAGE_PARENT"
 

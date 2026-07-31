@@ -23,8 +23,8 @@ echo "Starting Worker $TASK_ID / $NUM_TASKS"
 
 # If save_dir is kept as None, the grids will be saved to 'data_samples_modelling_approach_<VERSION_NUMBER_HERE>/' directory in the `root_dir/`
 python -m data_preparation.process_hexels_into_grids \
-    --root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/" \
-    --save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4" \
+    --root_dir="/path/to/raw_data/" \
+    --save_dir="/path/to/raw_data/data_samples" \
     --modelling_approach=1 \
     --win_h=256 \
     --win_w=256 \

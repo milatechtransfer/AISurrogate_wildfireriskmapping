@@ -1,4 +1,4 @@
-raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+raw_data_dir: "raw_data"
 save_dir: "experiments/counterfactual_mean_weather_multi_output_hex16"
 hex_ids: ["16"]
 nonfuel_ids: [100, 101, 102, 105, 106, 110]

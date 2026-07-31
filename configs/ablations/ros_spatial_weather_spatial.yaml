@@ -46,8 +46,8 @@ evaluation:
   robust_plot_percentile: 99.0
 
 data:
-  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4"
-  raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+  root_dir: "raw_data/data_samples"
+  raw_data_dir: "raw_data"
 
   train_split: "train_indices.csv"
   val_split: "val_indices.csv"
@@ -98,8 +98,8 @@ data:
 
 logger:
   enabled: true
-  project_name: "nrcan05-wildfireriskmapping"
-  workspace: "mila-amlrt"
+  project_name: "wildfire_hazard_mapping"
+  workspace: ""
   experiment_name: "ros_spatial_weather_spatial"
   tags:
     - "full_data"

@@ -1,4 +1,4 @@
-"""Binned/ordinal metrics for NRCan hazard class maps (pure NumPy, no I/O)."""
+"""Binned/ordinal metrics for hazard class maps (pure NumPy, no I/O)."""
 
 from __future__ import annotations
 

@@ -179,7 +179,7 @@ def main(
     # ---------- Dataloader / normalization-range setup ----------
     # NOTE: this is where GridSource scans raw training-hexel rasters under
     # raw_data_dir to compute min_max normalization ranges -- on a network
-    # filesystem (e.g. Mila's /network/projects/...) with the real ~44-hexel
+    # filesystem (e.g. a shared /network/projects/... mount) with the real ~44-hexel
     # training set, this step alone can take on the order of a minute, and
     # was previously invisible (folded silently into "Total Evaluation Time"
     # with no separate line to attribute it to). With the normalization

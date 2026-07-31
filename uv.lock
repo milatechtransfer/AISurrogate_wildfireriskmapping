@@ -805,72 +805,6 @@ wheels = [
 ]
 
 [[package]]
-name = "nrcan-wildfireriskmapping"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "comet-ml" },
-    { name = "geopandas" },
-    { name = "matplotlib" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "pydantic" },
-    { name = "pytest" },
-    { name = "pyyaml" },
-    { name = "rasterio" },
-    { name = "scikit-learn" },
-    { name = "torch" },
-    { name = "torchmetrics" },
-    { name = "torchvision" },
-    { name = "tqdm" },
-    { name = "xgboost" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pre-commit" },
-    { name = "ruff" },
-    { name = "types-pyyaml" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "comet-ml", specifier = ">=3.55.0" },
-    { name = "geopandas", specifier = ">=1.1.1" },
-    { name = "matplotlib", specifier = ">=3.10.7" },
-    { name = "numpy", specifier = ">=2.3.5" },
-    { name = "pandas", specifier = ">=2.3.3" },
-    { name = "pydantic", specifier = ">=2.12.5" },
-    { name = "pytest", specifier = ">=9.0.1" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.1.1" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "rasterio", specifier = ">=1.4.3" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.5" },
-    { name = "scikit-learn", specifier = ">=1.7.2" },
-    { name = "torch", specifier = ">=2.9.1" },
-    { name = "torchmetrics", specifier = ">=1.8.2" },
-    { name = "torchvision", specifier = ">=0.24.1" },
-    { name = "tqdm", specifier = ">=4.67.1" },
-    { name = "xgboost", specifier = ">=3.3.0" },
-]
-provides-extras = ["dev"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.19.0" },
-    { name = "pre-commit", specifier = ">=4.5.0" },
-    { name = "ruff", specifier = ">=0.14.5" },
-    { name = "types-pyyaml", specifier = ">=6.0.12.20250915" },
-]
-
-[[package]]
 name = "numpy"
 version = "2.3.5"
 source = { registry = "https://pypi.org/simple" }
@@ -2169,6 +2103,72 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/20/28/e6f1a6f655d620846bd9df527390ecc26b3805a0c5989048c210e22c5ca9/virtualenv-20.35.4.tar.gz", hash = "sha256:643d3914d73d3eeb0c552cbb12d7e82adf0e504dbf86a3182f8771a153a1971c", size = 6028799, upload-time = "2025-10-29T06:57:40.511Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/79/0c/c05523fa3181fdf0c9c52a6ba91a23fbf3246cc095f26f6516f9c60e6771/virtualenv-20.35.4-py3-none-any.whl", hash = "sha256:c21c9cede36c9753eeade68ba7d523529f228a403463376cf821eaae2b650f1b", size = 6005095, upload-time = "2025-10-29T06:57:37.598Z" },
+]
+
+[[package]]
+name = "wildfireriskmapping"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "comet-ml" },
+    { name = "geopandas" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pydantic" },
+    { name = "pytest" },
+    { name = "pyyaml" },
+    { name = "rasterio" },
+    { name = "scikit-learn" },
+    { name = "torch" },
+    { name = "torchmetrics" },
+    { name = "torchvision" },
+    { name = "tqdm" },
+    { name = "xgboost" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "ruff" },
+    { name = "types-pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "comet-ml", specifier = ">=3.55.0" },
+    { name = "geopandas", specifier = ">=1.1.1" },
+    { name = "matplotlib", specifier = ">=3.10.7" },
+    { name = "numpy", specifier = ">=2.3.5" },
+    { name = "pandas", specifier = ">=2.3.3" },
+    { name = "pydantic", specifier = ">=2.12.5" },
+    { name = "pytest", specifier = ">=9.0.1" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.1.1" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "rasterio", specifier = ">=1.4.3" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.5" },
+    { name = "scikit-learn", specifier = ">=1.7.2" },
+    { name = "torch", specifier = ">=2.9.1" },
+    { name = "torchmetrics", specifier = ">=1.8.2" },
+    { name = "torchvision", specifier = ">=0.24.1" },
+    { name = "tqdm", specifier = ">=4.67.1" },
+    { name = "xgboost", specifier = ">=3.3.0" },
+]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.19.0" },
+    { name = "pre-commit", specifier = ">=4.5.0" },
+    { name = "ruff", specifier = ">=0.14.5" },
+    { name = "types-pyyaml", specifier = ">=6.0.12.20250915" },
 ]
 
 [[package]]

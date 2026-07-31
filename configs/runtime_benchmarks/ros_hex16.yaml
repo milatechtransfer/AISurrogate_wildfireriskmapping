@@ -40,8 +40,8 @@ evaluation:
   robust_plot_percentile: 99.0
 
 data:
-  root_dir: "/network/projects/amlrt_internships/nrcan_05_wildfires/burnp3plus_data/data_samples_v3"
-  raw_data_dir: "/network/projects/amlrt_internships/nrcan_05_wildfires/burnp3plus_data"
+  root_dir: "raw_data/data_samples"
+  raw_data_dir: "raw_data"
 
   train_split: "train_indices.csv"
   val_split: "val_indices.csv"
@@ -106,8 +106,8 @@ data:
 
 logger:
   enabled: true
-  project_name: "nrcan05-wildfireriskmapping"
-  workspace: "mila-amlrt"
+  project_name: "wildfire_hazard_mapping"
+  workspace: ""
   experiment_name: "ros_common_input_pipeline_fuel_iROS"
   tags:
     - "full_data"

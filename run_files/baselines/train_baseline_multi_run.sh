@@ -1,6 +1,6 @@
 #!/bin/bash
 ##SBATCH --mail-type=all
-##SBATCH --mail-user=name@mila.quebec
+##SBATCH --mail-user=<your_email>@<your_domain>
 #SBATCH --job-name=baseline_xgb_multirun
 #SBATCH --output=logs/job_%x_%A_%a.out
 #SBATCH --error=logs/job_%x_%A_%a.err

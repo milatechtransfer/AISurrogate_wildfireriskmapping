@@ -6,8 +6,8 @@
 save_dir: "experiments/hazard_eval_multi_output_spatial_weather"
 
 # Shared data root/raw/test split match the multi-output common input pipeline config.
-root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4"
-raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+root_dir: "raw_data/data_samples"
+raw_data_dir: "raw_data"
 test_split: "test_indices.csv"
 valid_mask_threshold: 0.01
 mask_scope: "actual" # actual | buffer | buffer_only

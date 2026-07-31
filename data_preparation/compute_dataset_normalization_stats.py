@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
         "--raw_data_dir",
         type=str,
         required=True,
-        help="Directory holding the per-hex output rasters (e.g. canada_bp3+_2026_MILA).",
+        help="Directory holding the per-hex output rasters (e.g. canada_national_data).",
     )
     parser.add_argument(
         "--root_dir",

@@ -37,8 +37,8 @@ evaluation:
   bp_nodata_as_zero: true
   prediction_support_policy: "input"
 data:
-  root_dir: "/network/projects/amlrt_internships/nrcan_05_wildfires/burnp3plus_data/data_samples_v3"
-  raw_data_dir: "/network/projects/amlrt_internships/nrcan_05_wildfires/burnp3plus_data"
+  root_dir: "raw_data/data_samples"
+  raw_data_dir: "raw_data"
   train_split: "train_indices.csv"
   val_split: "val_indices.csv"
   test_split: "test_indices.csv"
@@ -60,8 +60,8 @@ data:
         bp_nodata_as_zero: true  # no-op for target=ros; kept for schema consistency
 logger:
   enabled: true
-  project_name: "nrcan05-wildfireriskmapping"
-  workspace: "mila-amlrt"
+  project_name: "wildfire_hazard_mapping"
+  workspace: ""
   experiment_name: "ros_mean_baseline"
   tags:
     - "full_data"
