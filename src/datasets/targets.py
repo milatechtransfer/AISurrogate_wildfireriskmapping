@@ -1,5 +1,8 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
+
+import torch
 
 TargetName = Literal["bp", "fi", "ros"]
 
@@ -66,3 +69,24 @@ def get_target_specs(target_names: str | list[str]) -> list[TargetSpec]:
     if not target_names:
         raise ValueError("At least one target name is required.")
     return [get_target_spec(target_name) for target_name in target_names]
+
+
+def activate_target_predictions(predictions: torch.Tensor, target_specs: Sequence[TargetSpec]) -> torch.Tensor:
+    if predictions.ndim < 2 or predictions.shape[1] != len(target_specs):
+        raise ValueError(f"Expected predictions with {len(target_specs)} target channels, got shape {tuple(predictions.shape)}.")
+    return torch.cat(
+        [
+            torch.sigmoid(predictions[:, idx : idx + 1]) if target.probability_scale else predictions[:, idx : idx + 1]
+            for idx, target in enumerate(target_specs)
+        ],
+        dim=1,
+    )
+
+
+def split_target_predictions(
+    predictions: torch.Tensor,
+    target_specs: Sequence[TargetSpec],
+) -> dict[TargetName, torch.Tensor]:
+    if predictions.ndim < 2 or predictions.shape[1] != len(target_specs):
+        raise ValueError(f"Expected predictions with {len(target_specs)} target channels, got shape {tuple(predictions.shape)}.")
+    return {target.name: predictions[:, idx : idx + 1] for idx, target in enumerate(target_specs)}

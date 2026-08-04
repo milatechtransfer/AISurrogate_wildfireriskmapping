@@ -16,7 +16,7 @@ def stitch_windows(
     Returns:
         np.array: The reconstructed image (Shape: original_shape, (H,W))
     """
-    dtype = np.float64
+    dtype = np.float32
 
     if mode == "mean":
         # --- AVERAGE MODE ---

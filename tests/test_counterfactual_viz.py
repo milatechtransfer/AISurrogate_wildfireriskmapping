@@ -10,10 +10,32 @@ from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz impo
     downsample_for_display,
     finite_values,
     pixel_fraction_for_share,
+    prediction_raster_path,
     restrict_to_support,
     symmetric_percentile_limit,
     values_and_valid,
 )
+
+
+def test_prediction_raster_path_prefers_target_suffixed_file_when_present(tmp_path) -> None:
+    predicted_dir = tmp_path / "predicted_hexels"
+    predicted_dir.mkdir()
+    (predicted_dir / "hexel_01_bp_predicted.tif").touch()
+    (predicted_dir / "hexel_01_fi_predicted.tif").touch()
+
+    assert prediction_raster_path(tmp_path, "1", target_name="bp") == predicted_dir / "hexel_01_bp_predicted.tif"
+    assert prediction_raster_path(tmp_path, "1", target_name="fi") == predicted_dir / "hexel_01_fi_predicted.tif"
+
+
+def test_prediction_raster_path_falls_back_to_unsuffixed_file(tmp_path) -> None:
+    predicted_dir = tmp_path / "predicted_hexels"
+    predicted_dir.mkdir()
+    (predicted_dir / "hexel_01_predicted.tif").touch()
+
+    # A single-output model's directory has no target-suffixed file, so requesting a
+    # target name still resolves to the legacy unsuffixed raster.
+    assert prediction_raster_path(tmp_path, "1", target_name="bp") == predicted_dir / "hexel_01_predicted.tif"
+    assert prediction_raster_path(tmp_path, "1") == predicted_dir / "hexel_01_predicted.tif"
 
 
 def test_build_endpoint_response_handles_support_added_and_removed() -> None:

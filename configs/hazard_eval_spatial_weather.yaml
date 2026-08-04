@@ -1,0 +1,31 @@
+# Hazard evaluation (BP x FI) from a single multi-output checkpoint over the
+# common-input-pipeline data. Loads one model (trained to jointly predict bp
+# and fi) from its training config + checkpoint, then combines its predictions
+# into a scaled hazard product. No hazard math is defined here; this config
+# only declares inputs, computation settings, and artifact toggles.
+save_dir: "experiments/hazard_eval_multi_output_spatial_weather"
+
+# Shared data root/raw/test split match the multi-output common input pipeline config.
+root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4"
+raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+test_split: "test_indices.csv"
+valid_mask_threshold: 0.01
+mask_scope: "actual" # actual | buffer | buffer_only
+stitch_mode: "mean" # mean | max
+
+model:
+  config_path: "configs/multi_output_spatial_weather.yaml"
+  checkpoint_filename: "best.pth"
+  save_predictions: false
+
+# Hazard computation
+fi_cap: 10000.0 # null => uncapped
+scale_to: 100.0
+bin_thresholds: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0]
+scale_denominator: null # explicit numeric denominator; null => derive from source
+scale_denominator_source: "prediction" # reference_file | all_raw_ground_truth | train_ground_truth | eval_ground_truth | prediction
+reference_denominator_path: null # required when source is reference_file and no numeric denominator is set
+self_normalized_prediction: false
+
+# Artifacts
+save_hazard_map: true

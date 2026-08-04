@@ -14,7 +14,7 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
 source .venv/bin/activate
 
-config="configs/counterfactual_mean_weather.yaml"
+config="configs/counterfactual_mean_weather_multi_output.yaml"
 hex_id="16"
 scenarios=(
     "bc_mean_weather_transplant"

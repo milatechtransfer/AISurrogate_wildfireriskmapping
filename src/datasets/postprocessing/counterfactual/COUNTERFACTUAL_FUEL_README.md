@@ -83,6 +83,17 @@ scenarios:
 - `endpoints`: one entry per trained model to evaluate; `config_path` points at that
   model's own training/evaluation config (used to resolve its checkpoint, data root, and
   test split).
+  - **Single multi-output model**: if one checkpoint jointly predicts `bp`/`fi`/`ros`
+    instead of training three separate single-target models, list `bp`, `fi`, and `ros`
+    endpoints all pointing at that **same** `config_path` (see
+    `configs/counterfactual_fuel_multi_output.yaml`). `evaluate_counterfactual.py`
+    detects that the endpoints resolve to the same config + data root and runs inference
+    only once per scenario, reusing the resulting prediction directory for every alias
+    endpoint. Predicted rasters for a multi-output model are written with a
+    target-name suffix (`hexel_XX_bp_predicted.tif`, `hexel_XX_fi_predicted.tif`, ...)
+    into that shared directory, and the plotting scripts below resolve the correct
+    raster automatically from the `--endpoint` name — no other config or CLI changes are
+    needed.
 - `scenarios`: exactly one scenario named `baseline` with `kind: "baseline"`, plus any
   number of `fuel` scenarios. Each
   `fuel` scenario's `params` are passed to `apply_fuel_edit` (`counterfactual_fuel.py`),

@@ -26,7 +26,7 @@ def _topk_threshold(values: torch.Tensor, percentile: float) -> torch.Tensor:
 def _topk_thresholds(values: torch.Tensor, percentiles: torch.Tensor) -> torch.Tensor:
     """Vectorized top-k thresholds for many percentiles using a single sort (no torch.quantile size limit)."""
     flat = values.reshape(-1).float()
-    perc = percentiles.reshape(-1).to(flat.device, dtype=torch.float64).clamp(0.0, 1.0)
+    perc = percentiles.reshape(-1).to(flat.device, dtype=torch.float32).clamp(0.0, 1.0)
     if flat.numel() == 0:
         return flat.new_full((perc.numel(),), float("nan"))
     sorted_desc, _ = torch.sort(flat, descending=True)
@@ -91,12 +91,17 @@ def _rank_data_average_ties(data: torch.Tensor) -> torch.Tensor:
     flat = data.reshape(-1)
     n = flat.numel()
     order = flat.argsort()
-    ranks = torch.empty(n, dtype=torch.float64, device=flat.device)
-    ranks[order] = torch.arange(1, n + 1, dtype=torch.float64, device=flat.device)
+    ranks = torch.empty(n, dtype=torch.int64, device=flat.device)
+    ranks[order] = torch.arange(1, n + 1, dtype=torch.int64, device=flat.device)
     _, inverse, counts = torch.unique(flat, sorted=True, return_inverse=True, return_counts=True)
-    rank_sums = torch.zeros(counts.numel(), dtype=torch.float64, device=flat.device)
+    rank_sums = torch.zeros(counts.numel(), dtype=torch.int64, device=flat.device)
     rank_sums.scatter_add_(0, inverse, ranks)
-    mean_ranks = rank_sums / counts.to(dtype=torch.float64)
+    # NOTE: MPS lacks float64 support, so rank sums (which reach 1e10+ on
+    # full hexels, well past float32's 2**24 exact-integer limit) are cast
+    # to float32 there and float64 everywhere else. Keeps MPS runnable
+    # without perturbing spearman on CPU/CUDA.
+    acc_dtype = torch.float32 if flat.device.type == "mps" else torch.float64
+    mean_ranks = rank_sums.to(dtype=acc_dtype) / counts.to(dtype=acc_dtype)
     return mean_ranks[inverse]
 
 

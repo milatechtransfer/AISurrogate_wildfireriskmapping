@@ -17,6 +17,7 @@ from src.config import (
     GridParams,
     SpatializedTabularParams,
     TabularParams,
+    TargetConfig,
 )
 from src.datasets.dataset import MultiSourceDataset, build_dataset, get_test_dataloader, get_train_val_dataloader
 from src.datasets.sources import GridSource, SpatializedTabularSource, TabularSource
@@ -250,6 +251,94 @@ def test_grid_source_bp_nodata_as_zero_extends_bp_mask(temp_data_dir, monkeypatc
 
     assert mask[0, 0, 1]
     assert target[0, 0, 1].item() == pytest.approx(0.0)
+
+
+def test_grid_source_no_burn_support_is_bp_only(temp_data_dir, monkeypatch):
+    tmpdir, *_ = temp_data_dir
+    monkeypatch.setattr("src.datasets.sources.grids.get_range_elevation_cached", lambda *_args, **_kwargs: (1.0, 0.0))
+
+    sample_path = os.path.join(tmpdir, "sample_0.npy")
+    arr = np.load(sample_path)
+    arr[0, 1, 4:7] = np.nan
+    np.save(sample_path, arr)
+
+    support = {}
+    for target_name in ("bp", "fi", "ros"):
+        params = GridParams(
+            feature_names_list=["ignition_grid", "fuel_grid", "elevation_grid"],
+            target_name=target_name,
+            out_norm="none",
+            fuel_feats_encoding="ordinal",
+            bp_nodata_as_zero=True,
+        )
+        source = GridSource(root_dir=tmpdir, params=params, modelling_approach="1")
+        _, target, mask = source.get_sample({"file_path": sample_path})
+        support[target_name] = (target[0, 0, 1].item(), bool(mask[0, 0, 1]))
+
+    assert support == {
+        "bp": (0.0, True),
+        "fi": (0.0, False),
+        "ros": (0.0, False),
+    }
+
+
+def test_grid_source_loads_ordered_multi_target_channels_and_masks(temp_data_dir, monkeypatch):
+    tmpdir, *_ = temp_data_dir
+    monkeypatch.setattr("src.datasets.sources.grids.get_range_elevation_cached", lambda *_args, **_kwargs: (1.0, 0.0))
+
+    sample_path = os.path.join(tmpdir, "sample_0.npy")
+    arr = np.load(sample_path)
+    arr[0, 1, 4:7] = np.nan
+    np.save(sample_path, arr)
+
+    params = GridParams(
+        feature_names_list=["ignition_grid", "fuel_grid", "elevation_grid"],
+        targets=[
+            TargetConfig(name="bp", out_norm="none"),
+            TargetConfig(name="fi", out_norm="none"),
+            TargetConfig(name="ros", out_norm="none"),
+        ],
+        fuel_feats_encoding="ordinal",
+        bp_nodata_as_zero=True,
+    )
+    source = GridSource(root_dir=tmpdir, params=params, modelling_approach="1")
+
+    _, targets, masks = source.get_sample({"file_path": sample_path})
+
+    assert targets.shape == (3, 32, 32)
+    assert masks.shape == targets.shape
+    assert targets[:, 0, 0].tolist() == pytest.approx([0.25, 0.50, 0.75])
+    assert targets[:, 0, 1].tolist() == pytest.approx([0.0, 0.0, 0.0])
+    assert masks[:, 0, 1].tolist() == [True, False, False]
+
+
+def test_grid_source_keeps_separate_multi_target_normalization_stats(temp_data_dir, monkeypatch):
+    tmpdir, *_ = temp_data_dir
+    monkeypatch.setattr("src.datasets.sources.grids.get_range_elevation_cached", lambda *_args, **_kwargs: (1.0, 0.0))
+    monkeypatch.setattr("src.datasets.sources.grids.get_range_output_cached", lambda *_args, **_kwargs: (1.0, 0.0))
+    log_stats = {
+        "fire_intensity": (2.0, 0.5),
+        "fire_ros": (1.0, 0.25),
+    }
+    monkeypatch.setattr(
+        "src.datasets.sources.grids.get_output_log_stats_cached",
+        lambda _root, output_type, **_kwargs: log_stats[output_type],
+    )
+
+    params = GridParams(
+        feature_names_list=["ignition_grid", "fuel_grid", "elevation_grid"],
+        targets=[
+            TargetConfig(name="bp", out_norm="min_max"),
+            TargetConfig(name="fi", out_norm="log_standard"),
+            TargetConfig(name="ros", out_norm="log_standard"),
+        ],
+        fuel_feats_encoding="ordinal",
+    )
+    source = GridSource(root_dir=tmpdir, params=params, modelling_approach="1")
+
+    assert source._target_log_stats("bp") == (None, None)
+    assert source._target_log_stats("fi") == (2.0, 0.5)
+    assert source._target_log_stats("ros") == (1.0, 0.25)
 
 
 def test_grid_source_bp_nodata_as_zero_sets_minmax_range_to_zero(temp_data_dir, monkeypatch):

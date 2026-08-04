@@ -26,6 +26,7 @@ def build_model(
     auxiliary_input_dims: dict[str, int] | None = None,
     fuel_curve_mean: torch.Tensor | None = None,
     fuel_curve_std: torch.Tensor | None = None,
+    target_names: list[str] | None = None,
 ) -> nn.Module:
     if spatial_input_channels is None:
         raise ValueError("spatial_input_channels must be detected before building the model.")
@@ -56,6 +57,8 @@ def build_model(
             fuel_curve_embed_dim=fuel_curve_embed_dim,
             fuel_curve_mean=fuel_curve_mean,
             fuel_curve_std=fuel_curve_std,
+            output_head=model_config.output_head,
+            target_names=target_names,
         )
 
     if architecture in MULTI_SOURCE_UNET_NAMES:
@@ -76,6 +79,8 @@ def build_model(
             use_coordconv=model_config.use_coordconv,
             fuel_curve_mean=fuel_curve_mean,
             fuel_curve_std=fuel_curve_std,
+            output_head=model_config.output_head,
+            target_names=target_names,
         )
 
     supported = sorted(BASELINE_UNET_NAMES | MULTI_SOURCE_UNET_NAMES | {"auto"})

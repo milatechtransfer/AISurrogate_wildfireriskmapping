@@ -5,7 +5,7 @@
 #SBATCH --partition=unkillable
 #SBATCH --ntasks=1
 #SBATCH --time=3:00:00
-#SBATCH --mem-per-cpu=8Gb
+#SBATCH --mem=16Gb
 #SBATCH --cpus-per-task=3
 #SBATCH --gres=gpu:a100:1
 

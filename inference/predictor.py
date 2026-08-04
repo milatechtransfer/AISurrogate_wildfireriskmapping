@@ -10,7 +10,13 @@ from typing import Any
 import torch
 
 from src.config import ModelConfig
-from src.datasets.targets import get_target_spec
+from src.datasets.targets import (
+    TargetName,
+    TargetSpec,
+    activate_target_predictions,
+    get_target_specs,
+    split_target_predictions,
+)
 from src.models.factory import build_model
 
 logger = logging.getLogger(__name__)
@@ -54,17 +60,19 @@ class BurnRiskPredictor:
         self.model = model
         self.device = device
         self.config = config
-        self._use_sigmoid_predictions = self._should_use_sigmoid_predictions()
+        self.target_specs = self._get_target_specs()
         self.model.eval()
 
-    def _should_use_sigmoid_predictions(self) -> bool:
+    def _get_target_specs(self) -> list[TargetSpec]:
         if self.config is None:
-            return True
+            return get_target_specs("bp")
         for source in self.config.get("data", {}).get("input_sources", []):
             if source.get("name") == "grid":
-                target_name = source.get("params", {}).get("target_name", "bp")
-                return get_target_spec(target_name).probability_scale
-        return True
+                params = source.get("params", {})
+                if params.get("targets"):
+                    return get_target_specs([target["name"] for target in params["targets"]])
+                return get_target_specs(params.get("target_name", "bp"))
+        return get_target_specs("bp")
 
     @classmethod
     def from_checkpoint(
@@ -94,12 +102,14 @@ class BurnRiskPredictor:
 
         config = checkpoint["config"]
         model_config = config["model"]
+        target_specs = cls._target_specs_from_config(config)
 
         # Build model architecture
         model = cls._build_model(
             model_config=model_config,
             spatial_channels=spatial_channels,
             auxiliary_input_dims=auxiliary_input_dims or {},
+            target_names=[target.name for target in target_specs],
         )
 
         # Load weights
@@ -111,16 +121,28 @@ class BurnRiskPredictor:
         return cls(model=model, device=device, config=config)
 
     @staticmethod
+    def _target_specs_from_config(config: dict[str, Any]) -> list[TargetSpec]:
+        for source in config.get("data", {}).get("input_sources", []):
+            if source.get("name") == "grid":
+                params = source.get("params", {})
+                if params.get("targets"):
+                    return get_target_specs([target["name"] for target in params["targets"]])
+                return get_target_specs(params.get("target_name", "bp"))
+        return get_target_specs("bp")
+
+    @staticmethod
     def _build_model(
         model_config: dict,
         spatial_channels: int,
         auxiliary_input_dims: dict[str, int],
+        target_names: list[str] | None = None,
     ) -> torch.nn.Module:
         """Instantiate the model architecture based on config."""
         return build_model(
             model_config=ModelConfig(**model_config),
             spatial_input_channels=spatial_channels,
             auxiliary_input_dims=auxiliary_input_dims,
+            target_names=target_names,
         )
 
     @torch.no_grad()
@@ -147,11 +169,19 @@ class BurnRiskPredictor:
 
         predictions = self.model(spatial_inputs, auxiliary_inputs if auxiliary_inputs else None)
 
-        if self._use_sigmoid_predictions:
-            predictions = torch.sigmoid(predictions)
+        predictions = activate_target_predictions(predictions, self.target_specs)
 
         # Move predictions to CPU before returning
         return predictions.cpu()
+
+    @torch.no_grad()
+    def predict_named_batch(
+        self,
+        spatial_inputs: torch.Tensor,
+        auxiliary_inputs: dict[str, torch.Tensor] | None = None,
+    ) -> dict[TargetName, torch.Tensor]:
+        predictions = self.predict_batch(spatial_inputs, auxiliary_inputs)
+        return split_target_predictions(predictions, self.target_specs)
 
     def __call__(
         self,

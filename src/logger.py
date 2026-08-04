@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from comet_ml import Experiment
+from comet_ml import ExistingExperiment, Experiment
 
 
 class CometLogger:
@@ -12,17 +12,15 @@ class CometLogger:
         experiment_name: str,
         experiment_tags: list[str] | None = None,
         api_key: str | None = None,
+        previous_experiment_key: str | None = None,
     ):
         # get the api key from os vars.
         self.api_key = api_key or os.getenv("COMET_API_KEY")
         if not self.api_key:
             raise ValueError("COMET_API_KEY env. variable not set or no API key provided.")
 
-        # init. experiment
-        self.experiment = Experiment(
+        experiment_kwargs = dict(
             api_key=self.api_key,
-            project_name=project_name,
-            workspace=workspace,
             log_code=False,
             log_graph=False,
             auto_param_logging=False,
@@ -42,10 +40,25 @@ class CometLogger:
             log_git_patch=False,
         )
 
-        self.experiment.set_name(experiment_name)
+        if previous_experiment_key:
+            # Resuming a preempted/requeued SLURM job: continue logging into the same
+            # Comet experiment instead of creating a new one.
+            self.experiment = ExistingExperiment(
+                previous_experiment=previous_experiment_key,
+                **experiment_kwargs,
+            )
+        else:
+            self.experiment = Experiment(
+                project_name=project_name,
+                workspace=workspace,
+                **experiment_kwargs,
+            )
+            self.experiment.set_name(experiment_name)
 
         if experiment_tags:
             self.experiment.add_tags(experiment_tags)
+
+        self.experiment_key: str = self.experiment.get_key()
 
     def log_metrics(self, metrics: dict, step: int | None = None, epoch: int | None = None):
         if epoch is not None:

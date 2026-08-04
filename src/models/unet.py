@@ -13,6 +13,7 @@ from src.models.encoders import (
     WindFeatureEncoderSpatial,
     append_coord_channels,
 )
+from src.models.heads import BurnProbabilityBehaviorHead
 from src.models.utils import double_conv_block
 
 
@@ -34,6 +35,8 @@ class UNetBase(nn.Module, ABC):
         self.encoder: nn.Module
         self.bottleneck: nn.Module
         self.decoder: nn.Module
+        self.out_conv: nn.Conv2d | None
+        self.multi_output_head: nn.Module | None
 
     @abstractmethod
     def build_encoder(self) -> nn.Module | nn.ModuleDict:
@@ -59,6 +62,28 @@ class UNetBase(nn.Module, ABC):
         self.bottleneck = self.build_bottleneck()
         self.decoder = self.build_decoder()
 
+    def _build_output_layers(self, feature_channels: int, output_head: str, target_names: list[str] | None) -> None:
+        if output_head == "shared":
+            self.out_conv = nn.Conv2d(feature_channels, self.num_classes, kernel_size=1)
+            self.multi_output_head = None
+            return
+        if output_head == "bp_behavior":
+            if target_names is None:
+                raise ValueError("target_names are required for output_head='bp_behavior'.")
+            if self.num_classes != len(target_names):
+                raise ValueError(f"num_classes={self.num_classes} must match configured targets {target_names}.")
+            self.out_conv = None
+            self.multi_output_head = BurnProbabilityBehaviorHead(feature_channels, target_names)
+            return
+        raise ValueError(f"Unsupported output_head={output_head!r}.")
+
+    def _project_output(self, features: torch.Tensor) -> torch.Tensor:
+        if self.multi_output_head is not None:
+            return self.multi_output_head(features)
+        if self.out_conv is None:
+            raise RuntimeError("UNet output layers are not configured.")
+        return self.out_conv(features)
+
     @abstractmethod
     def forward(self, x: torch.Tensor, x_auxiliary: dict[str, torch.Tensor] | None = None) -> torch.Tensor:
         raise NotImplementedError
@@ -79,6 +104,8 @@ class BaselineUNet(UNetBase):
         fuel_curve_embed_dim: int = 4,
         fuel_curve_mean: torch.Tensor | None = None,
         fuel_curve_std: torch.Tensor | None = None,
+        output_head: str = "shared",
+        target_names: list[str] | None = None,
     ):
         super().__init__()
         if hidden_features is None:
@@ -113,8 +140,7 @@ class BaselineUNet(UNetBase):
         else:
             self.fuel_curve_encoder = None
         self._build_components()
-        # output layer
-        self.out_conv = nn.Conv2d(self.hidden_features[0], self.num_classes, kernel_size=1)
+        self._build_output_layers(self.hidden_features[0], output_head, target_names)
 
     def build_encoder(self) -> nn.Module:
         encoder = BaselineEncoder(
@@ -147,8 +173,7 @@ class BaselineUNet(UNetBase):
             x = append_coord_channels(x)
         x = self.bottleneck(x)
         x = self.decoder(x, skip_connections)
-        x = self.out_conv(x)
-        return x
+        return self._project_output(x)
 
 
 class MultiSourceUNet(UNetBase):
@@ -168,6 +193,8 @@ class MultiSourceUNet(UNetBase):
         use_coordconv: bool = False,
         fuel_curve_mean: torch.Tensor | None = None,
         fuel_curve_std: torch.Tensor | None = None,
+        output_head: str = "shared",
+        target_names: list[str] | None = None,
     ):
         super().__init__()
 
@@ -204,7 +231,7 @@ class MultiSourceUNet(UNetBase):
         self._effective_spatial_in = self.input_channels + self.fuel_curve_embed_dim
 
         self._build_components()
-        self.out_conv = nn.Conv2d(self.hidden_features[0], self.num_classes, kernel_size=1)
+        self._build_output_layers(self.hidden_features[0], output_head, target_names)
 
     def build_encoder(self) -> nn.Module:
         encoders = nn.ModuleDict()
@@ -333,4 +360,4 @@ class MultiSourceUNet(UNetBase):
 
         # Decoder and head.
         x = self.decoder(x, skip_connections)
-        return self.out_conv(x)
+        return self._project_output(x)

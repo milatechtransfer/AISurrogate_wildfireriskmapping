@@ -4,16 +4,27 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from src.config import Config, GridParams, HazardEvalConfig, HazardModelEntry, SpatializedTabularParams
+from src.config import (
+    SEEDS,
+    Config,
+    GridParams,
+    HazardEvalConfig,
+    HazardModelEntry,
+    OptimizerConfig,
+    SpatializedTabularParams,
+    TargetConfig,
+    TargetLossConfig,
+    apply_run_id_overrides,
+)
 from src.datasets.postprocessing.hazard import DEFAULT_FI_CAP, DEFAULT_SCALE_TO
 from src.utils import AVAILABLE_METRICS, build_single_loss
 
-BP_CONFIG = Path("configs/bp_common_input_pipeline.yaml")
-FI_CONFIG = Path("configs/fi_common_input_pipeline.yaml")
-ROS_CONFIG = Path("configs/ros_common_input_pipeline.yaml")
-HAZARD_EVAL_CONFIG = Path("configs/hazard_eval_common_input_pipeline.yaml")
-HAZARD_BP_CONFIG = Path("configs/archived/bp_common_input_pipeline_checkpoint.yaml")
-HAZARD_FI_CONFIG = Path("configs/archived/fi_common_input_pipeline_checkpoint.yaml")
+BP_CONFIG = Path("configs/bp_spatial_weather.yaml")
+FI_CONFIG = Path("configs/fi_spatial_weather.yaml")
+ROS_CONFIG = Path("configs/ros_spatial_weather.yaml")
+MULTI_OUTPUT_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
+HAZARD_EVAL_CONFIG = Path("configs/hazard_eval_spatial_weather.yaml")
+HAZARD_MODEL_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
 COMMON_INPUT_PIPELINE_CONFIGS = [BP_CONFIG, FI_CONFIG, ROS_CONFIG]
 
 WEATHER_FEATURES = {
@@ -57,12 +68,10 @@ def test_common_input_pipeline_configs_share_unified_input_pipeline():
         assert sources["grid"].feature_names_list[:2] == ["ignition_grid_human", "ignition_grid_lightning"]
         assert sources["grid"].terrain_derivatives == ["slope", "aspect_sin", "aspect_cos"]
 
-        # Spatialized weather + fire-size. The weather LUT covers every firezone, so its
+        # Spatialized weather. The weather LUT covers every firezone, so its
         # missing-firezone mask is dropped; the fire-size table lacks some zones, so it is kept.
         assert isinstance(sources["spatialized_weather"], SpatializedTabularParams)
-        assert isinstance(sources["spatialized_fire_size"], SpatializedTabularParams)
         assert sources["spatialized_weather"].include_missing_firezone_mask is False
-        assert sources["spatialized_fire_size"].include_missing_firezone_mask is False
 
         # Wind is expressed as Cartesian components only; WindSpeed is dropped.
         weather_features = set(sources["spatialized_weather"].feature_names_list)
@@ -110,12 +119,141 @@ def test_fi_ros_common_input_pipeline_use_log_standard_regression_recipe():
         assert config.evaluation.robust_plot_percentile == 99.0
 
 
-def test_hazard_eval_config_parses_and_references_bp_fi_configs():
+def test_legacy_target_config_resolves_to_one_target():
+    grid = GridParams(
+        feature_names_list=["ignition_grid"],
+        target_name="fire_intensity",
+        out_norm="log_standard",
+        target_log_mean=2.0,
+        target_log_std=0.5,
+    )
+
+    assert grid.resolved_targets() == [
+        TargetConfig(name="fi", out_norm="log_standard", log_mean=2.0, log_std=0.5),
+    ]
+    assert grid.target_config("fi").name == "fi"
+
+
+def test_multi_target_config_keeps_order_and_per_target_normalization():
+    grid = GridParams(
+        feature_names_list=["ignition_grid"],
+        targets=[
+            TargetConfig(name="bp", out_norm="min_max"),
+            TargetConfig(name="fi", out_norm="log_standard"),
+            TargetConfig(name="ros", out_norm="log_standard"),
+        ],
+    )
+
+    assert [target.name for target in grid.resolved_targets()] == ["bp", "fi", "ros"]
+    assert grid.target_config("bp").out_norm == "min_max"
+    assert grid.target_config("fi").out_norm == "log_standard"
+
+
+def test_grid_params_rejects_mixed_or_duplicate_target_config():
+    with pytest.raises(ValidationError, match="non-default legacy target fields"):
+        GridParams(
+            feature_names_list=["ignition_grid"],
+            target_name="fi",
+            targets=[TargetConfig(name="bp", out_norm="min_max")],
+        )
+
+    with pytest.raises(ValidationError, match="duplicate"):
+        GridParams(
+            feature_names_list=["ignition_grid"],
+            targets=[
+                TargetConfig(name="bp", out_norm="min_max"),
+                TargetConfig(name="burn_probability", out_norm="min_max"),
+            ],
+        )
+
+
+def test_optimizer_supports_legacy_or_per_target_losses():
+    legacy = OptimizerConfig(loss="mse")
+    assert legacy.loss == "mse"
+    assert legacy.target_losses == {}
+
+    multi_target = OptimizerConfig(
+        target_losses={
+            "bp": TargetLossConfig(loss=["kl", "ccc"], loss_weights={"kl": 0.5, "ccc": 0.5}, task_weight=0.5),
+            "fi": TargetLossConfig(loss=["huber", "raw_pearson"], task_weight=0.25),
+            "ros": TargetLossConfig(loss=["huber", "raw_pearson"], task_weight=0.25),
+        }
+    )
+    assert multi_target.loss is None
+    assert multi_target.target_losses["bp"].task_weight == 0.5
+
+    with pytest.raises(ValidationError, match="either legacy loss"):
+        OptimizerConfig(loss="mse", target_losses={"bp": TargetLossConfig(loss="kl")})
+
+
+def test_multi_output_common_input_pipeline_config():
+    config = _load_config(MULTI_OUTPUT_CONFIG)
+    grid = {source.name: source.params for source in config.data.input_sources}["grid"]
+
+    assert config.model.num_classes == 3
+    assert config.model.output_head == "bp_behavior"
+    assert [target.name for target in grid.resolved_targets()] == ["bp", "fi", "ros"]
+    assert [target.out_norm for target in grid.resolved_targets()] == ["min_max", "log_standard", "log_standard"]
+    assert set(config.optimizer.target_losses) == {"bp", "fi", "ros"}
+    assert sum(target.task_weight for target in config.optimizer.target_losses.values()) == pytest.approx(1.0)
+    assert config.data.include_patch_metadata is True
+
+
+def test_multi_output_config_round_trips_through_checkpoint_dump():
+    config = _load_config(MULTI_OUTPUT_CONFIG)
+    dumped_config = config.model_dump()
+    dumped_grid_params = next(source["params"] for source in dumped_config["data"]["input_sources"] if source["name"] == "grid")
+
+    restored_grid = GridParams(**dumped_grid_params)
+
+    assert [target.name for target in restored_grid.resolved_targets()] == ["bp", "fi", "ros"]
+
+
+@pytest.mark.parametrize("config_path", [BP_CONFIG, FI_CONFIG, ROS_CONFIG])
+def test_legacy_config_round_trips_through_checkpoint_dump(config_path):
+    config = _load_config(config_path)
+
+    restored_config = Config(**config.model_dump())
+
+    assert restored_config == config
+
+
+def test_multi_output_config_requires_target_specific_losses():
+    with MULTI_OUTPUT_CONFIG.open() as f:
+        raw_config = yaml.safe_load(f)
+    raw_config["optimizer"] = {"name": "AdamW", "lr": 7.0e-4, "loss": "kl"}
+
+    with pytest.raises(ValidationError, match="target_losses is required"):
+        Config(**raw_config)
+
+
+def test_multi_output_config_rejects_unnamespaced_checkpoint_metric():
+    with MULTI_OUTPUT_CONFIG.open() as f:
+        raw_config = yaml.safe_load(f)
+    raw_config["evaluation"]["best_ckpt_metrics"] = ["spearman"]
+
+    with pytest.raises(ValidationError, match="namespaced metric keys"):
+        Config(**raw_config)
+
+
+def test_multi_output_config_rejects_scalar_loss_component_checkpoint_metric():
+    with MULTI_OUTPUT_CONFIG.open() as f:
+        raw_config = yaml.safe_load(f)
+    raw_config["optimizer"]["target_losses"]["bp"] = {
+        "loss": "kl",
+        "task_weight": 0.5,
+    }
+    raw_config["evaluation"]["best_ckpt_metrics"] = ["loss_bp/kl"]
+
+    with pytest.raises(ValidationError, match="namespaced metric keys"):
+        Config(**raw_config)
+
+
+def test_hazard_eval_config_parses_and_references_model_config():
     config = _load_hazard_eval_config(HAZARD_EVAL_CONFIG)
 
-    assert config.bp.config_path == str(HAZARD_BP_CONFIG)
-    assert config.fi.config_path == str(HAZARD_FI_CONFIG)
-    assert config.root_dir.endswith("data_samples_v2")
+    assert config.model.config_path == str(HAZARD_MODEL_CONFIG)
+    assert config.root_dir.endswith("data_samples_v4")
     assert config.test_split == "test_indices.csv"
     assert config.mask_scope == "actual"
     assert config.stitch_mode == "mean"
@@ -125,8 +263,7 @@ def test_hazard_eval_config_defaults():
     config = HazardEvalConfig(
         root_dir="root",
         raw_data_dir="raw",
-        bp=HazardModelEntry(config_path="bp.yaml"),
-        fi=HazardModelEntry(config_path="fi.yaml"),
+        model=HazardModelEntry(config_path="model.yaml"),
     )
 
     assert len(config.bin_thresholds) == 12
@@ -141,8 +278,7 @@ def test_hazard_eval_config_rejects_non_positive_fi_cap():
         HazardEvalConfig(
             root_dir="root",
             raw_data_dir="raw",
-            bp={"config_path": "bp.yaml"},
-            fi={"config_path": "fi.yaml"},
+            model={"config_path": "model.yaml"},
             fi_cap=0.0,
         )
 
@@ -152,8 +288,7 @@ def test_hazard_eval_config_rejects_non_positive_scale_denominator():
         HazardEvalConfig(
             root_dir="root",
             raw_data_dir="raw",
-            bp={"config_path": "bp.yaml"},
-            fi={"config_path": "fi.yaml"},
+            model={"config_path": "model.yaml"},
             scale_denominator=-1.0,
         )
 
@@ -163,8 +298,7 @@ def test_hazard_eval_config_rejects_non_increasing_bin_thresholds():
         HazardEvalConfig(
             root_dir="root",
             raw_data_dir="raw",
-            bp={"config_path": "bp.yaml"},
-            fi={"config_path": "fi.yaml"},
+            model={"config_path": "model.yaml"},
             bin_thresholds=[0.1, 0.1, 0.2],
         )
 
@@ -174,8 +308,7 @@ def test_hazard_eval_config_rejects_non_finite_bin_thresholds():
         HazardEvalConfig(
             root_dir="root",
             raw_data_dir="raw",
-            bp={"config_path": "bp.yaml"},
-            fi={"config_path": "fi.yaml"},
+            model={"config_path": "model.yaml"},
             bin_thresholds=[0.1, float("nan"), 0.2],
         )
 
@@ -184,8 +317,7 @@ def test_hazard_eval_config_reference_file_requires_denominator_or_path():
     kwargs = {
         "root_dir": "root",
         "raw_data_dir": "raw",
-        "bp": {"config_path": "bp.yaml"},
-        "fi": {"config_path": "fi.yaml"},
+        "model": {"config_path": "model.yaml"},
         "scale_denominator_source": "reference_file",
     }
 
@@ -200,8 +332,7 @@ def test_hazard_eval_config_parses_uncapped_fi_cap():
     config = HazardEvalConfig(
         root_dir="root",
         raw_data_dir="raw",
-        bp={"config_path": "bp.yaml"},
-        fi={"config_path": "fi.yaml"},
+        model={"config_path": "model.yaml"},
         fi_cap=None,
     )
 
@@ -212,11 +343,40 @@ def test_hazard_eval_config_reference_file_with_path_parses():
     config = HazardEvalConfig(
         root_dir="root",
         raw_data_dir="raw",
-        bp={"config_path": "bp.yaml"},
-        fi={"config_path": "fi.yaml"},
+        model={"config_path": "model.yaml"},
         scale_denominator_source="reference_file",
         reference_denominator_path="denominator.tif",
     )
 
     assert config.scale_denominator_source == "reference_file"
     assert config.reference_denominator_path == "denominator.tif"
+
+
+def test_apply_run_id_overrides_derives_seed_save_dir_and_experiment_name():
+    config = _load_config(BP_CONFIG)
+    config.save_dir = "experiments/my_run"
+    config.logger.experiment_name = "my_experiment"
+
+    run_seed = apply_run_id_overrides(config, run_id=2)
+
+    assert run_seed == SEEDS[2]
+    assert config.seed == SEEDS[2]
+    assert config.save_dir == f"experiments/my_run/seed_{SEEDS[2]}"
+    assert config.logger.experiment_name == f"my_experiment_seed{SEEDS[2]}"
+
+
+def test_apply_run_id_overrides_skips_empty_experiment_name():
+    config = _load_config(BP_CONFIG)
+    config.logger.experiment_name = ""
+
+    apply_run_id_overrides(config, run_id=0)
+
+    assert config.logger.experiment_name == ""
+
+
+@pytest.mark.parametrize("run_id", [-1, len(SEEDS)])
+def test_apply_run_id_overrides_rejects_out_of_range_run_id(run_id):
+    config = _load_config(BP_CONFIG)
+
+    with pytest.raises(ValueError, match="run_id must be between"):
+        apply_run_id_overrides(config, run_id=run_id)
