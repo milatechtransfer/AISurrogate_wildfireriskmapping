@@ -126,3 +126,20 @@ You can also specify a fixed range of values for map generations via the `--vmin
 Finally, to generate a map of residuals (preds - targets) on the cluster:
 
 ```python -m src.datasets.postprocessing.full_map.generate_full_hexel_diff_map --target-dir /network/projects/amlrt/nrcan_wildfires/full_data/yan_bp3/ --target-pattern hex*/outputs/*_iter_bp.tif --pred-dir experiments/unet_full_data_spatial_weather_new_config/predicted_hexels/ --pred-pattern "*_predicted.tif" --output "experiments/full_canada_map_diffs.png"```
+
+### Baselines
+
+Tabular and reference baselines (XGBoost, mean-value) share the entrypoint `src/train_tabular_baseline.py`, with configs in `configs/baselines/` and run scripts in `run_files/baselines/`.
+
+```bash
+sbatch run_files/baselines/mean_baseline.sh configs/baselines/bp_mean_baseline.yaml
+sbatch run_files/baselines/train_baseline.sh configs/baselines/bp_spatial_only_xgb.yaml
+```
+
+For multi-seed XGBoost runs (array job, seeds 0-2 by default):
+
+```bash
+sbatch run_files/baselines/train_baseline_multi_run.sh configs/baselines/bp_spatial_only_xgb.yaml
+```
+
+Swap `bp_` for `fi_`/`ros_` to target fire intensity or rate of spread. Mean-value baseline is deterministic and only needs a single seed.

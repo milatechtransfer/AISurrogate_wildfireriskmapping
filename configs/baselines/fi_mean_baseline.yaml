@@ -1,0 +1,108 @@
+# configs/fi_mean_baseline.yaml
+# Mean-training-value baseline (constant prediction = mean of training-pixel
+# FI values in normalized space) for comparison against fi_spatial_only_xgb
+# and fi_common_input_pipeline (U-Net). Config structure kept consistent with
+# the U-Net configs even though optimizer/lr_scheduler/training blocks are
+# unused by train_baseline.py -- present for schema/logging consistency and
+# easy diffing.
+save_dir: "experiments/fi_mean_baseline"
+modelling_approach: "1"
+seed: 42
+deterministic: true
+model:
+  architecture: "mean_baseline"
+  num_classes: 1
+  input_branches: ["spatial"]
+  use_coordconv: false
+  params: {}
+# NOTE: optimizer/lr_scheduler/training are not consumed by train_baseline.py.
+# Kept here only to match the U-Net config schema for easier side-by-side diffing.
+optimizer:
+  name: "AdamW"
+  lr: 7.0e-4
+  loss: ["kl", "ccc", "hex_mean_pairwise_rank", "hex_top10_pairwise_rank"]
+  loss_weights:
+    kl: 0.45
+    ccc: 0.45
+    hex_mean_pairwise_rank: 0.05
+    hex_top10_pairwise_rank: 0.05
+lr_scheduler:
+  name: "cosine_warmup"
+  warmup_epochs: 5
+training:
+  max_epochs: 25
+  log_every_n_epoch: 1
+evaluation:
+  best_ckpt_metrics: ["ccc"]
+  best_ckpt_metrics_mode: ["max"]
+  checkpoint_filename: "best.pth"
+  bp_nodata_as_zero: true  # no-op for target=fi; kept for schema consistency
+  prediction_support_policy: "input"
+data:
+  root_dir: "/network/projects/amlrt_internships/nrcan_05_wildfires/burnp3plus_data/data_samples_v3"
+  raw_data_dir: "/network/projects/amlrt_internships/nrcan_05_wildfires/burnp3plus_data"
+  train_split: "train_indices.csv"
+  val_split: "val_indices.csv"
+  test_split: "test_indices.csv"
+  batch_size: 64
+  num_workers: 2
+  valid_mask_threshold: 0.01
+  include_patch_metadata: true   # required: train_baseline.py's region-level eval reads patch_metadata["row"/"col"/"hex_id"]
+  input_sources:
+    - name: "grid"
+      params:
+        feature_names_list: ["ignition_grid_human", "ignition_grid_lightning", "fuel_grid", "elevation_grid"]
+        target_name: "fi"
+        out_norm: "log_standard"
+        fuel_feats_encoding: "iROS"
+        normalize_fuel_feats_ordinal: false
+        transforms_list: []
+        augmentation_prob: 0.0
+        terrain_derivatives: ["slope", "aspect_sin", "aspect_cos"]
+        bp_nodata_as_zero: true
+logger:
+  enabled: false
+  project_name: "nrcan05-wildfireriskmapping"
+  workspace: "mila-amlrt"
+  experiment_name: "fi_mean_baseline"
+  tags:
+    - "full_data"
+    - "modelling_approach=1"
+    - "target=fi"
+    - "coordconv=none"
+    - "data_samples_v3"
+    - "ignition=aggregated_human_lightning"
+    - "raw_fuel_iROS"
+    - "best_ckpt=ccc"
+    - "out_norm=log_standard"
+    - "prediction_support_policy=input"
+    - "input_sources=grid_only"
+    - "terrain_derivatives=slope_aspect"
+    - "model=mean_baseline"
+  log_every_n_step: 10
+metrics:
+  - "mse"
+  - "mae"
+  - "normalized_mae"
+  - "normalized_bias"
+  - "mae_top01"
+  - "mae_top02"
+  - "mae_top05"
+  - "mae_top10"
+  - "spearman"
+  - "bias"
+  - "ccc"
+  - "iou_top005"
+  - "iou_top01"
+  - "iou_top02"
+  - "iou_top05"
+  - "iou_top10"
+  - "auc_iou_top10"
+  - "auc_iou_full"
+data_prep:
+  modelling_approach: 1
+  win_h: 256
+  win_w: 256
+  overlap_ratio: 0.2
+  ignition_weighting: "distribution"
+  fuel_representation: "raw"
