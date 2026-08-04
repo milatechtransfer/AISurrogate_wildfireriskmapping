@@ -355,29 +355,6 @@ def apply_run_id_overrides(config: "Config", run_id: int) -> int:
     return run_seed
 
 
-#: Fixed pool of seeds used to derive a run-specific seed from `run_id`.
-#: NOTE: duplicated from multi_run (ea24b57). Remove when multi_run merges.
-SEEDS: list[int] = [42, 1337, 2024, 3407, 12345]
-
-
-def apply_run_id_overrides(config: "Config", run_id: int) -> int:
-    """
-    Look up a run-specific seed for `run_id` (e.g. SLURM_ARRAY_TASK_ID) in `SEEDS`,
-    nest `save_dir` under a per-seed subdirectory, and append the seed to the Comet
-    experiment name so parallel multi-run jobs don't collide. Mutates `config` in place
-    and returns the derived seed.
-    """
-    if not 0 <= run_id < len(SEEDS):
-        raise ValueError(f"run_id must be between 0 and {len(SEEDS) - 1}, but received {run_id}")
-
-    run_seed = SEEDS[run_id]
-    config.seed = run_seed
-    config.save_dir = str(Path(config.save_dir) / f"seed_{run_seed}")
-    if config.logger.experiment_name:
-        config.logger.experiment_name = f"{config.logger.experiment_name}_seed{run_seed}"
-    return run_seed
-
-
 DenominatorSource = Literal[
     "reference_file",
     "all_raw_ground_truth",
