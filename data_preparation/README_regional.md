@@ -33,7 +33,7 @@ For fire size data, you should download "df_fire_fru.csv" from drive project fol
 
 To build the tabular files, run the following:
 
-First copy `fire_size_norm_params.json` and `weather_norm_params.json` from save_dir of the national data to root_dir, then run:
+First copy `fire_size_norm_params.json` and `weather_norm_params.json` from save_dir of the national data to new save_dir, then run:
 
 ```bash
 python -m data_preparation.process_tabular_data \
