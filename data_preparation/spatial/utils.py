@@ -583,6 +583,7 @@ def write_dataset_norm_stats(
     output_path: str | Path,
     types: Collection[str],
     allowed_hex_ids: Collection[int],
+    scenario_name: str = None,
 ) -> dict[str, dict[str, float]]:
     """Compute train-only normalization stats for each requested type and persist to JSON.
 
@@ -625,11 +626,11 @@ def write_dataset_norm_stats(
                 entry = {"min": min_val, "max": max_val}
 
             elif type_name in _MIN_MAX_OUTPUT_TYPES:
-                max_val, min_val = get_range_output(str(raw_data_dir), type_name, allowed_hex_ids)
+                max_val, min_val = get_range_output(str(raw_data_dir), type_name, allowed_hex_ids, scenario_name=scenario_name)
                 entry = {"min": min_val, "max": max_val}
 
             elif type_name in _LOG_STAT_TYPES:
-                mean, std = get_output_log_stats(str(raw_data_dir), type_name, allowed_hex_ids)
+                mean, std = get_output_log_stats(str(raw_data_dir), type_name, allowed_hex_ids, scenario_name=scenario_name)
                 entry = {"log_mean": mean, "log_std": std}
 
             elif type_name.startswith(_FUEL_CURVE_PREFIX):
