@@ -10,7 +10,7 @@
 #SBATCH --mem=64Gb
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
-#SBATCH --array=0-2                # Launches 3 parallel runs (0,1,2); override at submit time, e.g. `sbatch --array=0-4 ...` for 5 runs.
+#SBATCH --array=0-2 # One run per entry in SEEDS (src/config.py); run_id must be < len(SEEDS).
 #SBATCH --requeue
 #SBATCH --signal=B:TERM@300
 

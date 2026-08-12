@@ -60,19 +60,8 @@ class BurnRiskPredictor:
         self.model = model
         self.device = device
         self.config = config
-        self.target_specs = self._get_target_specs()
+        self.target_specs = self._target_specs_from_config(config)
         self.model.eval()
-
-    def _get_target_specs(self) -> list[TargetSpec]:
-        if self.config is None:
-            return get_target_specs("bp")
-        for source in self.config.get("data", {}).get("input_sources", []):
-            if source.get("name") == "grid":
-                params = source.get("params", {})
-                if params.get("targets"):
-                    return get_target_specs([target["name"] for target in params["targets"]])
-                return get_target_specs(params.get("target_name", "bp"))
-        return get_target_specs("bp")
 
     @classmethod
     def from_checkpoint(
@@ -121,8 +110,8 @@ class BurnRiskPredictor:
         return cls(model=model, device=device, config=config)
 
     @staticmethod
-    def _target_specs_from_config(config: dict[str, Any]) -> list[TargetSpec]:
-        for source in config.get("data", {}).get("input_sources", []):
+    def _target_specs_from_config(config: dict[str, Any] | None) -> list[TargetSpec]:
+        for source in (config or {}).get("data", {}).get("input_sources", []):
             if source.get("name") == "grid":
                 params = source.get("params", {})
                 if params.get("targets"):

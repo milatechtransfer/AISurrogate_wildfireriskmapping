@@ -233,7 +233,7 @@ def main(
     preds_start_time = time.time()
     test_metrics, test_predictions = trainer.test(test_loader, return_predictions=True)
     preds_time = time.time() - preds_start_time
-    peak_mps_driver_gb = test_metrics.pop("_peak_mps_driver_allocated_gb", None)
+    peak_mps_driver_gb = trainer.last_peak_mps_driver_allocated_gb
 
     if args.visualize_predictions and isinstance(test_predictions, np.ndarray):
         # get the channel mapping dict if it exists

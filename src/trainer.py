@@ -142,6 +142,11 @@ class Trainer:
 
         self.global_step = 0
 
+        # MPS-only memory diagnostic populated by validate()/test(); not a loss/metric,
+        # so it is kept out of the results dict and exposed separately to avoid leaking
+        # into metrics CSVs/Comet logging.
+        self.last_peak_mps_driver_allocated_gb: float | None = None
+
         # Validate and load metrics from config.
         self._validate_and_load_metrics()
 
@@ -340,9 +345,6 @@ class Trainer:
     def _prepare_metric_tensors(self, predictions: torch.Tensor, targets: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         return self._inverse_model_target_for_metrics(predictions), self._inverse_model_target_for_metrics(targets)
 
-    def _activate_predictions(self, predictions: torch.Tensor) -> torch.Tensor:
-        return activate_target_predictions(predictions, self._target_specs)
-
     def _metric_result_keys(self) -> list[str]:
         if len(self._target_specs) == 1:
             return list(self.metric_functions)
@@ -436,7 +438,7 @@ class Trainer:
             total_loss = cast(torch.Tensor, loss_out)
             loss_parts = None
 
-        metric_predictions = self._activate_predictions(predictions)
+        metric_predictions = activate_target_predictions(predictions, self._target_specs)
         return metric_predictions, total_loss, loss_parts, targets, masks
 
     @staticmethod
@@ -546,6 +548,7 @@ class Trainer:
         running_loss_parts: dict[str, float] = {}
 
         peak_mps_driver_allocated_gb = 0.0
+        self.last_peak_mps_driver_allocated_gb = None
 
         preds_list = []
         validation_loop = tqdm(loader, desc="Evaluating", leave=True)
@@ -600,7 +603,7 @@ class Trainer:
             results[name] = total_value / max(1, running_batch_count)
 
         if return_predictions and peak_mps_driver_allocated_gb > 0.0:
-            results["_peak_mps_driver_allocated_gb"] = peak_mps_driver_allocated_gb
+            self.last_peak_mps_driver_allocated_gb = peak_mps_driver_allocated_gb
 
         if return_predictions:
             return results, np.concatenate(preds_list, axis=0)
