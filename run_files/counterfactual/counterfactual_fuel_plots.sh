@@ -14,12 +14,10 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
 source .venv/bin/activate
 
-config="configs/counterfactual_fuel_multi_output.yaml"
+config="configs/counterfactual/counterfactual_fuel_multi_output.yaml"
 hex_id="16"
 scenarios=(
-    "remove_barriers_adjacent_modal"
-    "remove_barriers_fixed_c2"
-    "insert_random_nonfuel_10pct"
+    "c2_to_mixedwood_fixed"
 )
 endpoints=("bp" "fi" "ros")
 

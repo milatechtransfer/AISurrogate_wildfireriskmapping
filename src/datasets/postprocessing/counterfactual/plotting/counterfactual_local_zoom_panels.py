@@ -148,7 +148,7 @@ def select_neighborhood_windows(
     valid_mask: np.ndarray,
     delta_hazard: np.ndarray,
     delta_fi: np.ndarray,
-    response_direction: int,
+    response_direction: int | None,
     n_windows: int = 3,
     crop_size: int = 700,
     stride: int = 140,
@@ -159,12 +159,16 @@ def select_neighborhood_windows(
     max_iou: float = 0.15,
     exclude_border_pixels: int = 100,
 ) -> list[NeighborhoodWindow]:
-    """Select windows containing evaluated edits and direction-aligned response."""
+    """Select windows containing evaluated edits and a strong hazard response.
+
+    Support-changing edits use their expected response direction. Fuel substitutions
+    that preserve burnable support use the absolute hazard response instead.
+    """
 
     if edit_mask.shape != valid_mask.shape or edit_mask.shape != delta_hazard.shape or edit_mask.shape != delta_fi.shape:
         raise ValueError("edit_mask, valid_mask, delta_hazard, and delta_fi must have the same shape.")
-    if response_direction not in {-1, 1}:
-        raise ValueError("response_direction must be -1 or 1.")
+    if response_direction not in {-1, 1, None}:
+        raise ValueError("response_direction must be -1, 1, or None.")
     if n_windows < 1:
         raise ValueError("n_windows must be positive.")
     if crop_size < 1:
@@ -215,12 +219,12 @@ def select_neighborhood_windows(
                 continue
             delta_hazard_mean = window_sum(hazard_sum_integral, row_min, row_max, col_min, col_max) / hazard_count
             delta_fi_mean = window_sum(fi_sum_integral, row_min, row_max, col_min, col_max) / fi_count
-            aligned_hazard_response = response_direction * delta_hazard_mean
-            if aligned_hazard_response <= 0.0:
+            hazard_response_strength = abs(delta_hazard_mean) if response_direction is None else response_direction * delta_hazard_mean
+            if hazard_response_strength <= 0.0:
                 continue
 
             density_preference = max(0.1, 1.0 - abs(edit_density - 0.08) / 0.08)
-            score = float(aligned_hazard_response * np.sqrt(edit_pixels) * density_preference)
+            score = float(hazard_response_strength * np.sqrt(edit_pixels) * density_preference)
             window_id += 1
             candidates.append(
                 NeighborhoodWindow(
@@ -507,7 +511,7 @@ def _response_direction(
     edit_mask: np.ndarray,
     baseline_support: np.ndarray,
     scenario_support: np.ndarray,
-) -> int:
+) -> int | None:
     added_support = edit_mask & ~baseline_support & scenario_support
     removed_support = edit_mask & baseline_support & ~scenario_support
     if added_support.any() and removed_support.any():
@@ -516,7 +520,7 @@ def _response_direction(
         return 1
     if removed_support.any():
         return -1
-    raise ValueError("Local zoom requires a fuel edit that changes burnable support.")
+    return None
 
 
 def _mean_on_crop(data: np.ndarray | np.ma.MaskedArray, window: _SliceWindow) -> float:
