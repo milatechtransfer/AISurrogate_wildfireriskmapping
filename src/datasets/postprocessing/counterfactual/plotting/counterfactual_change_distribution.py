@@ -86,7 +86,7 @@ def prediction_response_change(
     if baseline_dir is None or scenario_dir is None:
         raise KeyError(f"Missing baseline/scenario predictions for endpoint={endpoint!r}, scenario={scenario!r}.")
 
-    baseline_path = prediction_raster_path(baseline_dir, hex_id)
+    baseline_path = prediction_raster_path(baseline_dir, hex_id, target_name=endpoint)
     baseline, scenario_values = load_baseline_scenario_pair(
         prediction_dirs,
         hex_id,

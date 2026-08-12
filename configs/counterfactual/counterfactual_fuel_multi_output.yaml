@@ -1,0 +1,32 @@
+raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+save_dir: "experiments/counterfactual_fuel_multi_output_hex16"
+hex_ids: ["16"]
+
+# Single multi-output checkpoint jointly predicting bp/fi(/ros) instead of three
+# separate single-target models. All three endpoint names still point at the exact
+# same config_path, so `evaluate_counterfactual.py` runs inference for this checkpoint
+# only once per scenario and the existing per-target plotting scripts (`--endpoint bp`,
+# `--endpoint fi`, `--endpoint ros`) keep working unchanged, reading each target's
+# raster from its suffixed filename (`hexel_XX_<target>_predicted.tif`) inside the
+# shared prediction directory.
+endpoints:
+  bp:
+    config_path: "configs/multi_output_spatial_weather.yaml"
+  fi:
+    config_path: "configs/multi_output_spatial_weather.yaml"
+  ros:
+    config_path: "configs/multi_output_spatial_weather.yaml"
+
+scenarios:
+  - name: "baseline"
+    kind: "baseline"
+    description: "Unmodified prepared fuel inputs."
+
+  - name: "c2_to_mixedwood_fixed"
+    kind: "fuel"
+    description: "Replace every C-2 boreal spruce pixel with a fixed Boreal Mixedwood (M-1/M-2) fuel type."
+    params:
+      mode: "burnable_to_burnable_fixed"
+      nonfuel_ids: [100, 101, 102, 105, 106, 110]
+      source_fuel_ids: [2]
+      replacement_fuel_id: 620

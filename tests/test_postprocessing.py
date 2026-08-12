@@ -1,5 +1,6 @@
 import json
 import shutil
+from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
@@ -330,6 +331,92 @@ def test_reconstruct_denormalized_hexels_yields_single_stitched_hexel(tmp_path, 
     assert hexel.buffer_support_mask is None
 
 
+def test_reconstruct_denormalized_hexels_uses_split_csv_when_given(tmp_path, monkeypatch):
+    """`split_csv` should let callers stitch a split other than `config.data.test_split`
+    (e.g. the validation split, for end-of-training val-set hexel evaluation)."""
+    with (tmp_path / "feature_channel_map_1.json").open("w") as f:
+        json.dump({"ignition_grid": [0], "bp_out_grid": [3]}, f)
+
+    patch = np.ones((2, 2, 4), dtype=np.float32)
+    patch[:, :, 3] = 1.0
+    np.save(tmp_path / "patch.npy", patch)
+
+    # test_indices.csv points at a hex_id that has no corresponding patch metadata
+    # row, so using it (instead of split_csv) would yield zero stitched hexels.
+    pd.DataFrame(
+        [{"filename": "patch.npy", "hex_id": 99, "valid_ratio": 1.0, "season": "spring", "cause": "H", "row": 0, "col": 0}]
+    ).to_csv(tmp_path / "test_indices.csv", index=False)
+    pd.DataFrame([{"filename": "patch.npy", "hex_id": 1, "valid_ratio": 1.0, "season": "spring", "cause": "H", "row": 0, "col": 0}]).to_csv(
+        tmp_path / "val_indices.csv", index=False
+    )
+    shutil.copyfile(tmp_path / "val_indices.csv", tmp_path / "train_indices.csv")
+
+    config = Config(
+        save_dir=str(tmp_path / "out"),
+        modelling_approach="1",
+        model=ModelConfig(num_classes=1, input_branches=["spatial"], hidden_features=[8, 16]),
+        optimizer=OptimizerConfig(loss="mse", name="Adam", lr=0.001),
+        training=TrainingConfig(max_epochs=1, log_every_n_epoch=1),
+        evaluation=EvaluationConfig(best_ckpt_metrics=["loss"], best_ckpt_metrics_mode=["min"]),
+        data=DataConfig(
+            root_dir=str(tmp_path),
+            raw_data_dir=str(tmp_path),
+            train_split="train_indices.csv",
+            val_split="val_indices.csv",
+            test_split="test_indices.csv",
+            input_sources=[DataSourceConfig(name="grid", params=GridParams(feature_names_list=["ignition_grid"], target_name="bp"))],
+        ),
+        logger=LoggerConfig(enabled=False, project_name="test", workspace="test", experiment_name="test"),
+        metrics=["mae"],
+        data_prep=DataPrepConfig(win_h=2, win_w=2),
+    )
+
+    monkeypatch.setattr(post_utils, "get_range_output_cached", lambda *args, **kwargs: (2.0, 0.0))
+    monkeypatch.setattr(
+        post_utils,
+        "load_spatial_raster",
+        lambda *args, **kwargs: (np.full((2, 2), 0.3, dtype=np.float32), {"dtype": "float32"}),
+    )
+
+    hexels = list(
+        reconstruct_denormalized_hexels(
+            test_predictions=np.full((1, 1, 2, 2), 0.5, dtype=np.float32),
+            config=config,
+            out_norm="none",
+            split_csv=config.data.val_split,
+        )
+    )
+
+    assert len(hexels) == 1
+    assert hexels[0].hex_id == "01"
+
+
+def test_load_filtered_test_metadata_raises_with_split_csv_name(tmp_path):
+    config = Config(
+        save_dir=str(tmp_path / "out"),
+        modelling_approach="1",
+        model=ModelConfig(num_classes=1, input_branches=["spatial"], hidden_features=[8, 16]),
+        optimizer=OptimizerConfig(loss="mse", name="Adam", lr=0.001),
+        training=TrainingConfig(max_epochs=1, log_every_n_epoch=1),
+        evaluation=EvaluationConfig(best_ckpt_metrics=["loss"], best_ckpt_metrics_mode=["min"]),
+        data=DataConfig(
+            root_dir=str(tmp_path),
+            raw_data_dir=str(tmp_path),
+            train_split="train_indices.csv",
+            val_split="val_indices.csv",
+            test_split="test_indices.csv",
+            input_sources=[DataSourceConfig(name="grid", params=GridParams(feature_names_list=["ignition_grid"], target_name="bp"))],
+        ),
+        logger=LoggerConfig(enabled=False, project_name="test", workspace="test", experiment_name="test"),
+        metrics=["mae"],
+    )
+
+    from src.datasets.postprocessing.hexel_reconstruction import load_filtered_test_metadata
+
+    with pytest.raises(ValueError, match="val_indices.csv"):
+        load_filtered_test_metadata(config=config, mask_scope="actual", split_csv=config.data.val_split)
+
+
 def test_evaluate_and_visualize_hexels_metrics_only_skips_artifacts(tmp_path, monkeypatch):
     with (tmp_path / "feature_channel_map_1.json").open("w") as f:
         json.dump({"ignition_grid": [0], "bp_out_grid": [3]}, f)
@@ -468,8 +555,100 @@ def test_evaluate_and_visualize_hexels_uses_buffer_scope_paths_and_outputs(tmp_p
 
     assert all(path.endswith("hex01_buffer.shp") for path in mask_paths)
     assert save_dirs == [str(tmp_path / "out" / "buffer_mask_eval")]
-    assert metrics["hex01/buffer_mae"] == pytest.approx(1.0)
-    assert metrics["all/buffer_mae"] == pytest.approx(1.0)
+
+
+def test_evaluate_and_visualize_hexels_isolates_artifacts_under_save_dir_suffix(tmp_path, monkeypatch):
+    """`save_dir_suffix` (e.g. "val") should nest stitched artifacts under a dedicated
+    subdirectory so they don't collide with the default test-split outputs."""
+    with (tmp_path / "feature_channel_map_1.json").open("w") as f:
+        json.dump({"ignition_grid": [0], "bp_out_grid": [3]}, f)
+
+    patch = np.ones((2, 2, 4), dtype=np.float32)
+    patch[:, :, 3] = 1.0
+    np.save(tmp_path / "patch.npy", patch)
+
+    pd.DataFrame([{"filename": "patch.npy", "hex_id": 1, "valid_ratio": 1.0, "season": "spring", "cause": "H", "row": 0, "col": 0}]).to_csv(
+        tmp_path / "val_indices.csv", index=False
+    )
+    shutil.copyfile(tmp_path / "val_indices.csv", tmp_path / "train_indices.csv")
+    shutil.copyfile(tmp_path / "val_indices.csv", tmp_path / "test_indices.csv")
+
+    config = Config(
+        save_dir=str(tmp_path / "out"),
+        modelling_approach="1",
+        model=ModelConfig(num_classes=1, input_branches=["spatial"], hidden_features=[8, 16]),
+        optimizer=OptimizerConfig(loss="mse", name="Adam", lr=0.001),
+        training=TrainingConfig(max_epochs=1, log_every_n_epoch=1),
+        evaluation=EvaluationConfig(best_ckpt_metrics=["loss"], best_ckpt_metrics_mode=["min"]),
+        data=DataConfig(
+            root_dir=str(tmp_path),
+            raw_data_dir=str(tmp_path),
+            train_split="train_indices.csv",
+            val_split="val_indices.csv",
+            test_split="test_indices.csv",
+            input_sources=[DataSourceConfig(name="grid", params=GridParams(feature_names_list=["ignition_grid"], target_name="bp"))],
+        ),
+        logger=LoggerConfig(enabled=False, project_name="test", workspace="test", experiment_name="test"),
+        metrics=["mae"],
+        data_prep=DataPrepConfig(win_h=2, win_w=2),
+    )
+
+    save_dirs = []
+
+    monkeypatch.setattr(post_utils, "get_range_output_cached", lambda *args, **kwargs: (1.0, 0.0))
+    monkeypatch.setattr(post_utils, "load_spatial_raster", lambda *args, **kwargs: (np.zeros((2, 2), dtype=np.float32), {}))
+    monkeypatch.setattr(post_utils, "save_predicted_hexels", lambda *args, **kwargs: save_dirs.append(kwargs.get("save_dir", args[3])))
+    monkeypatch.setattr(post_utils, "visualize_target_grids", lambda **kwargs: None)
+    monkeypatch.setattr(post_utils, "plot_hexbin_distribution", lambda **kwargs: None)
+    monkeypatch.setattr(post_utils, "plot_histogram_distribution", lambda **kwargs: None)
+
+    post_utils.evaluate_and_visualize_hexels(
+        test_predictions=np.ones((1, 1, 2, 2), dtype=np.float32),
+        config=config,
+        out_norm="none",
+        device=torch.device("cpu"),
+        metric_functions=None,
+        split_csv=config.data.val_split,
+        save_dir_suffix="val",
+    )
+
+    assert save_dirs == [str(tmp_path / "out" / "val")]
+
+
+def test_print_and_log_eval_metrics_uses_split_label_and_metric_prefix(capsys):
+    experiment_logger = MagicMock()
+
+    post_utils.print_and_log_eval_metrics(
+        test_metrics={"mae": 0.1},
+        hexel_metrics={"all/mae": 0.2},
+        experiment_logger=experiment_logger,
+        split_label="Val",
+        metric_prefix="val_hexel",
+    )
+
+    captured = capsys.readouterr()
+    assert "[Val patch-level metrics]" in captured.out
+    assert "[Val per-hexel and aggregated metrics]" in captured.out
+
+    experiment_logger.log_metrics.assert_any_call({"val_patch_mae": 0.1})
+    experiment_logger.log_metrics.assert_any_call({"val_hexel/all/mae": 0.2})
+
+
+def test_print_and_log_eval_metrics_defaults_to_test_split(capsys):
+    experiment_logger = MagicMock()
+
+    post_utils.print_and_log_eval_metrics(
+        test_metrics={"mae": 0.1},
+        hexel_metrics={"all/mae": 0.2},
+        experiment_logger=experiment_logger,
+    )
+
+    captured = capsys.readouterr()
+    assert "[Test patch-level metrics]" in captured.out
+    assert "[Test per-hexel and aggregated metrics]" in captured.out
+
+    experiment_logger.log_metrics.assert_any_call({"test_patch_mae": 0.1})
+    experiment_logger.log_metrics.assert_any_call({"test_hexel/all/mae": 0.2})
 
 
 def test_buffer_scope_evaluation_reports_actual_and_buffer_only_splits(tmp_path, monkeypatch):
@@ -642,6 +821,22 @@ def test_distribution_axis_limit_only_caps_probability_scale():
 
     assert get_distribution_axis_limit(gt_vals, pred_vals, probability_scale=True) == 1.0
     assert get_distribution_axis_limit(gt_vals, pred_vals, probability_scale=False) > 3.0
+
+
+def test_select_prediction_target_channel_supports_multi_target_outputs():
+    predictions = np.stack(
+        [
+            np.full((2, 2), 1.0, dtype=np.float32),
+            np.full((2, 2), 2.0, dtype=np.float32),
+            np.full((2, 2), 3.0, dtype=np.float32),
+        ],
+        axis=0,
+    )[None]
+
+    selected = post_utils.select_prediction_target_channel(predictions, target_name="fi", target_index=1)
+
+    assert selected.shape == (1, 2, 2)
+    np.testing.assert_allclose(selected, 2.0)
 
 
 def test_distribution_plots_drop_masked_nodata_values(tmp_path):

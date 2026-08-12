@@ -52,22 +52,41 @@ def _paired_hexels():
 
 class TestPairStitchedHexels:
     def test_pairs_matching_sequence(self):
-        bp = [_hexel("bp", [[0.1]], [[0.1]], hex_id="01"), _hexel("bp", [[0.2]], [[0.2]], hex_id="02")]
-        fi = [_hexel("fi", [[1.0]], [[1.0]], hex_id="01"), _hexel("fi", [[2.0]], [[2.0]], hex_id="02")]
-        pairs = list(pair_stitched_hexels(bp, fi))
+        hexels = [
+            _hexel("bp", [[0.1]], [[0.1]], hex_id="01"),
+            _hexel("fi", [[1.0]], [[1.0]], hex_id="01"),
+            _hexel("bp", [[0.2]], [[0.2]], hex_id="02"),
+            _hexel("fi", [[2.0]], [[2.0]], hex_id="02"),
+        ]
+        pairs = list(pair_stitched_hexels(hexels))
         assert [p[0].hex_id for p in pairs] == ["01", "02"]
+        assert [p[0].target.name for p in pairs] == ["bp", "bp"]
+        assert [p[1].target.name for p in pairs] == ["fi", "fi"]
 
-    def test_count_mismatch_raises(self):
-        bp = [_hexel("bp", [[0.1]], [[0.1]], hex_id="01")]
-        fi = []
-        with pytest.raises(ValueError, match="counts differ"):
-            list(pair_stitched_hexels(bp, fi))
+    def test_ignores_extra_targets(self):
+        hexels = [
+            _hexel("bp", [[0.1]], [[0.1]], hex_id="01"),
+            _hexel("fi", [[1.0]], [[1.0]], hex_id="01"),
+            _hexel("ros", [[3.0]], [[3.0]], hex_id="01"),
+        ]
+        pairs = list(pair_stitched_hexels(hexels))
+        assert len(pairs) == 1
+        assert pairs[0][0].target.name == "bp"
+        assert pairs[0][1].target.name == "fi"
 
-    def test_id_sequence_mismatch_raises(self):
-        bp = [_hexel("bp", [[0.1]], [[0.1]], hex_id="01")]
-        fi = [_hexel("fi", [[1.0]], [[1.0]], hex_id="02")]
-        with pytest.raises(ValueError, match="sequence mismatch"):
-            list(pair_stitched_hexels(bp, fi))
+    def test_missing_target_raises(self):
+        hexels = [_hexel("bp", [[0.1]], [[0.1]], hex_id="01")]
+        with pytest.raises(ValueError, match="missing required target"):
+            list(pair_stitched_hexels(hexels))
+
+    def test_duplicate_target_raises(self):
+        hexels = [
+            _hexel("bp", [[0.1]], [[0.1]], hex_id="01"),
+            _hexel("bp", [[0.2]], [[0.2]], hex_id="01"),
+            _hexel("fi", [[1.0]], [[1.0]], hex_id="01"),
+        ]
+        with pytest.raises(ValueError, match="Duplicate"):
+            list(pair_stitched_hexels(hexels))
 
 
 class TestComputeHazardHexel:

@@ -7,6 +7,7 @@ import os
 import shutil
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -135,6 +136,7 @@ def _evaluation_args() -> argparse.Namespace:
         robust_plot_percentile=None,
         stitch_mode="mean",
         mask_scope="actual",
+        run_id=None,
     )
 
 
@@ -187,6 +189,12 @@ def run_counterfactual_evaluation(
     summary_frames = []
     component_frames = []
     weather_summary_frames = []
+    # Cache one materialized run per (scenario, resolved config_path, resolved data_root).
+    # Multiple logical endpoint names (e.g. "bp"/"fi"/"ros") can point at the exact same
+    # multi-output checkpoint so that existing per-target plotting scripts keep working
+    # unchanged; in that case the underlying model only needs to run inference once per
+    # scenario, and every alias endpoint reuses that run's prediction_dir/metrics/summaries.
+    run_cache: dict[tuple[str, Path, Path], dict[str, Any]] = {}
     for endpoint in endpoints:
         endpoint_config_path = resolve_project_path(endpoint.config_path, project_root)
         base_config = load_config(str(endpoint_config_path))
@@ -200,6 +208,34 @@ def run_counterfactual_evaluation(
             raise ValueError(f"No test metadata found for hex_ids={sorted(hex_ids)} and endpoint={endpoint.name!r}.")
 
         for scenario in scenarios:
+            cache_key = (scenario.name, endpoint_config_path.resolve(), data_root.resolve())
+            cached = run_cache.get(cache_key)
+            if cached is not None:
+                index_rows.append(
+                    {
+                        "scenario": scenario.name,
+                        "endpoint": endpoint.name,
+                        "prediction_dir": str(cached["prediction_dir"].resolve()),
+                    }
+                )
+                metric_rows.extend(
+                    {"scenario": scenario.name, "endpoint": endpoint.name, "metric": metric, "value": value}
+                    for metric, value in cached["metrics"].items()
+                )
+                if cached["fuel_summary"] is not None:
+                    summary = cached["fuel_summary"].copy()
+                    summary["endpoint"] = endpoint.name
+                    summary_frames.append(summary)
+                if cached["fuel_components"] is not None:
+                    components = cached["fuel_components"].copy()
+                    components["endpoint"] = endpoint.name
+                    component_frames.append(components)
+                if cached["weather_summary"] is not None:
+                    summary = cached["weather_summary"].copy()
+                    summary["endpoint"] = endpoint.name
+                    weather_summary_frames.append(summary)
+                continue
+
             prediction_dir = save_dir / "predictions" / scenario.name / endpoint.name
             checkpoint_filename = base_config.evaluation.checkpoint_filename
             _prepare_prediction_dir(
@@ -217,6 +253,9 @@ def run_counterfactual_evaluation(
             run_config.logger.enabled = False
 
             patch_transform = None
+            fuel_summary = None
+            fuel_components = None
+            weather_summary = None
             if scenario.kind == "fuel":
                 patch_transform = FuelCounterfactualTransform.from_metadata(
                     metadata=metadata,
@@ -227,11 +266,13 @@ def run_counterfactual_evaluation(
                     prediction_dir=prediction_dir,
                     raw_data_dir=raw_data_dir,
                 )
-                summary = patch_transform.summary.copy()
+                fuel_summary = patch_transform.summary.copy()
+                summary = fuel_summary.copy()
                 summary.insert(0, "endpoint", endpoint.name)
                 summary_frames.append(summary)
                 if not patch_transform.components.empty:
-                    components = patch_transform.components.copy()
+                    fuel_components = patch_transform.components.copy()
+                    components = fuel_components.copy()
                     components.insert(0, "endpoint", endpoint.name)
                     component_frames.append(components)
             elif scenario.kind == "weather":
@@ -248,7 +289,8 @@ def run_counterfactual_evaluation(
                     weather_result.edited_csv_path,
                     baseline_csv_path=baseline_weather_csv,
                 )
-                summary = weather_result.summary.copy()
+                weather_summary = weather_result.summary.copy()
+                summary = weather_summary.copy()
                 summary.insert(0, "endpoint", endpoint.name)
                 weather_summary_frames.append(summary)
 
@@ -274,6 +316,13 @@ def run_counterfactual_evaluation(
                     "prediction_dir": str(prediction_dir.resolve()),
                 }
             )
+            run_cache[cache_key] = {
+                "prediction_dir": prediction_dir,
+                "metrics": metrics,
+                "fuel_summary": fuel_summary,
+                "fuel_components": fuel_components,
+                "weather_summary": weather_summary,
+            }
 
     save_dir.mkdir(parents=True, exist_ok=True)
     index = pd.DataFrame(index_rows)

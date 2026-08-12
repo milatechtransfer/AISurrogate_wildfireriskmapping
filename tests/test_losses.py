@@ -12,6 +12,7 @@ from src.losses import (
     HuberLoss,
     MAELoss,
     MSELoss,
+    MultiTaskLoss,
     RegressionPearsonLoss,
     WeightedLoss,
 )
@@ -474,3 +475,47 @@ def test_weighted_loss_passes_patch_metadata_to_hex_summary_loss():
     assert loss_fn.requires_patch_metadata is True
     assert set(parts) == {"kl", "hex_mean_pearson"}
     assert torch.isfinite(total)
+
+
+def test_multi_task_loss_routes_channels_masks_and_metadata():
+    targets = torch.tensor(
+        [
+            [
+                [[0.1, 0.2], [0.3, 0.4]],
+                [[1.0, 2.0], [3.0, 4.0]],
+                [[0.5, 1.0], [1.5, 2.0]],
+            ],
+            [
+                [[0.6, 0.7], [0.8, 0.9]],
+                [[2.0, 3.0], [4.0, 5.0]],
+                [[1.0, 1.5], [2.0, 2.5]],
+            ],
+        ],
+        dtype=torch.float32,
+    )
+    logits = targets.clone().requires_grad_(True)
+    masks = torch.ones_like(targets, dtype=torch.bool)
+    masks[:, 1:, 0, 0] = False
+    patch_metadata = {"hex_id": torch.tensor([1, 2])}
+
+    loss_fn = MultiTaskLoss(
+        target_names=["bp", "fi", "ros"],
+        losses={
+            "bp": WeightedLoss(
+                losses={"kl": BernoulliKLLoss(), "hex": HexSummaryLoss(summary="mean", correlation="pearson")},
+                weights={"kl": 0.9, "hex": 0.1},
+            ),
+            "fi": HuberLoss(),
+            "ros": HuberLoss(),
+        },
+        task_weights={"bp": 0.5, "fi": 0.25, "ros": 0.25},
+    )
+
+    total, parts = loss_fn(logits, targets, masks, patch_metadata=patch_metadata)
+    total.backward()
+
+    assert loss_fn.requires_patch_metadata is True
+    assert set(parts) == {"bp/kl", "bp/hex", "bp/total", "fi/total", "ros/total"}
+    assert torch.isfinite(total)
+    assert logits.grad is not None
+    assert torch.count_nonzero(logits.grad[:, 0]) > 0

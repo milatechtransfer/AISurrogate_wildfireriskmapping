@@ -81,6 +81,13 @@ scenarios:
       donor_hex_ids: ["17"]
 ```
 
+> Same as the fuel counterfactual config: if `bp`/`fi`/`ros` come from a single
+> multi-output checkpoint instead of three separate models, point all three endpoints at
+> that same `config_path` (see `configs/counterfactual_mean_weather_multi_output.yaml`
+> for a ready-to-run example, or `configs/counterfactual_fuel_multi_output.yaml` for the
+> equivalent fuel-scenario config); `evaluate_counterfactual.py` and the plotting scripts
+> below handle this transparently.
+
 `mode` is required explicitly. The current workflow supports only
 `external_mean_zone_transplant`.
 

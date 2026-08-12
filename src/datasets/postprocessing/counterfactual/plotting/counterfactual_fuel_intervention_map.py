@@ -108,8 +108,8 @@ def paired_prediction_support(
 ) -> np.ndarray:
     """Return the mask of pixels with valid predictions in both the baseline and `scenario` runs."""
     prediction_dirs = prediction_dirs_from_index(experiment_dir)
-    baseline = read_prediction(prediction_raster_path(prediction_dirs[("baseline", endpoint)], hex_id))
-    scenario_values = read_prediction(prediction_raster_path(prediction_dirs[(scenario, endpoint)], hex_id))
+    baseline = read_prediction(prediction_raster_path(prediction_dirs[("baseline", endpoint)], hex_id, target_name=endpoint))
+    scenario_values = read_prediction(prediction_raster_path(prediction_dirs[(scenario, endpoint)], hex_id, target_name=endpoint))
     baseline_values = np.asarray(baseline.filled(np.nan), dtype=np.float64)
     scenario_values_arr = np.asarray(scenario_values.filled(np.nan), dtype=np.float64)
     return np.isfinite(baseline_values) & np.isfinite(scenario_values_arr)

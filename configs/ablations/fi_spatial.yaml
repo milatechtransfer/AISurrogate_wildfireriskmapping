@@ -1,0 +1,125 @@
+# BP model on the common input pipeline.
+# Common input pipeline (shared by BP/FI/ROS):
+#   - dataset: data_samples_v2 (aggregated 2-channel ignition: human + lightning)
+#   - grid: fuel (one-hot) + elevation + terrain derivatives (slope, aspect_sin, aspect_cos)
+#   - spatialized weather + fire-size with per-source missing masks
+#   - wind as Cartesian components only (wind_x, wind_y); WindSpeed dropped (redundant with the norm)
+#
+# BP keeps its own training recipe: kl + ccc + hex pairwise-rank losses, min-max output
+# normalization, bp-nodata-as-zero support, and input-only prediction support policy.
+# Unlike the previous BP best model (non-spatialized tabular fed through an auxiliary MLP
+# branch), BP now consumes the spatialized tabular channels on the spatial branch, matching
+# FI/ROS. Spatialized input is heavier, so batch_size is 32 (was 64 for the auxiliary variant).
+save_dir: "experiments/fi_spatial_only"
+
+modelling_approach: "1"
+
+seed: 42
+deterministic: true
+
+model:
+  num_classes: 1
+  input_branches: ["spatial"]
+  use_coordconv: false
+
+optimizer:
+  name: "AdamW"
+  lr: 7.0e-4
+  loss: ["huber", "raw_pearson"]
+  huber_beta: 1.0
+  loss_weights:
+    huber: 0.7
+    raw_pearson: 0.3
+
+lr_scheduler:
+  name: "cosine_warmup"
+  warmup_epochs: 5
+
+training:
+  max_epochs: 25
+  log_every_n_epoch: 1
+
+evaluation:
+  best_ckpt_metrics: ["ccc"]
+  best_ckpt_metrics_mode: ["max"]
+  checkpoint_filename: "best.pth"
+  fi_nodata_as_zero: true
+  prediction_support_policy: "input"
+
+data:
+  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4"
+  raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+
+  train_split: "train_indices.csv"
+  val_split: "val_indices.csv"
+  test_split: "test_indices.csv"
+
+  batch_size: 64
+  num_workers: 2
+  valid_mask_threshold: 0.01
+
+  input_sources:
+    - name: "grid"
+      params:
+        feature_names_list: ["ignition_grid_human", "ignition_grid_lightning", "fuel_grid", "elevation_grid"]
+        target_name: "fi"
+        out_norm: "log_standard"
+        fuel_feats_encoding: "iROS"
+        normalize_fuel_feats_ordinal: false # set to true if using ordinal
+        transforms_list: []
+        augmentation_prob: 0.0
+        terrain_derivatives: ["slope", "aspect_sin", "aspect_cos"]
+
+logger:
+  enabled: true
+  project_name: "nrcan05-wildfireriskmapping"
+  workspace: "mila-amlrt"
+  experiment_name: "fi_spatial_only"
+  tags:
+    - "full_data"
+    - "modelling_approach=1"
+    - "target=bp"
+    - "coordconv=patch_local"
+    - "data_samples_v4"
+    - "ignition=aggregated_human_lightning"
+    - "raw_fuel_iROS"
+    - "best_ckpt=ccc"
+    - "loss=kl_ccc_hexpairrank"
+    - "hex_loss_weight_total=0.10"
+    - "out_norm=min_max"
+    - "fi_nodata_as_zero=true"
+    - "prediction_support_policy=input"
+    - "tabular_fusion=spatialized"
+    - "spatialized_sources=weather_fire_size"
+    - "missing_masks=fire_size"
+    - "terrain_derivatives=slope_aspect"
+    - "wind=vector_components"
+  log_every_n_step: 10
+
+metrics:
+  - "mse"
+  - "mae"
+  - "normalized_mae"
+  - "mae_top01"
+  - "mae_top02"
+  - "mae_top05"
+  - "mae_top10"
+  - "spearman"
+  - "bias"
+  - "normalized_bias"
+  - "ccc"
+  - "iou_top005"
+  - "iou_top01"
+  - "iou_top02"
+  - "iou_top05"
+  - "iou_top10"
+  - "auc_iou_top10"
+  - "auc_iou_full"
+
+data_prep:
+  modelling_approach: 1
+  win_h: 256
+  win_w: 256
+  overlap_ratio: 0.2
+  ignition_weighting: "distribution" # ("max", "distribution")
+  fuel_representation: "raw" # ("raw", "group")

@@ -362,7 +362,7 @@ def get_predicted_hexel(
 def get_config_target_specs(config: Config) -> list[TargetSpec]:
     for source in config.data.input_sources:
         if source.name == "grid" and isinstance(source.params, GridParams):
-            return get_target_specs(source.params.target_name)
+            return get_target_specs([target.name for target in source.params.resolved_targets()])
     return get_target_specs("bp")
 
 
@@ -447,13 +447,14 @@ def get_prediction_mask_channel_indices(
 def get_target_out_norm(grid_params: GridParams | None, target: TargetSpec, fallback_out_norm: str) -> str:
     if grid_params is None:
         return fallback_out_norm
-    return grid_params.out_norm
+    return grid_params.target_config(target.name).out_norm
 
 
 def get_target_log_stats(grid_params: GridParams | None, target: TargetSpec) -> tuple[float | None, float | None]:
     if grid_params is None:
         return None, None
-    return grid_params.target_log_mean, grid_params.target_log_std
+    target_config = grid_params.target_config(target.name)
+    return target_config.log_mean, target_config.log_std
 
 
 def get_target_postprocessing_settings(config: Config, out_norm: str) -> list[TargetPostprocessingSettings]:
@@ -507,15 +508,15 @@ def get_target_postprocessing_settings(config: Config, out_norm: str) -> list[Ta
 def select_prediction_target_channel(
     predictions: np.ndarray,
     target_name: str,
+    target_index: int = 0,
 ) -> np.ndarray:
     if predictions.ndim == 3:
+        if target_index != 0:
+            raise ValueError(f"Cannot select target index {target_index} from channel-free predictions with shape {predictions.shape}.")
         return predictions
-    if predictions.ndim == 4 and predictions.shape[1] == 1:
-        return predictions[:, 0]
-    raise ValueError(
-        f"Expected single-target predictions with shape (N,H,W) or (N,1,H,W), got {predictions.shape} "
-        f"while selecting target={target_name!r}."
-    )
+    if predictions.ndim == 4 and 0 <= target_index < predictions.shape[1]:
+        return predictions[:, target_index]
+    raise ValueError(f"Cannot select target={target_name!r} at index {target_index} from predictions with shape {predictions.shape}.")
 
 
 def calculate_hexel_metrics_pytorch(
@@ -533,10 +534,11 @@ def calculate_hexel_metrics_pytorch(
     gt_clean = np.nan_to_num(gt_grid, nan=0.0)
     pred_clean = np.nan_to_num(pred_grid, nan=0.0)
 
-    t_targets = torch.from_numpy(gt_clean).to(device=device, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-    t_preds = torch.from_numpy(pred_clean).to(device=device, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-    t_mask = torch.from_numpy(valid_mask_np).to(device=device, dtype=torch.bool).unsqueeze(0).unsqueeze(0)
+    compute_device = "cpu" if torch.device(device).type == "mps" else device
 
+    t_targets = torch.from_numpy(gt_clean).to(device=compute_device, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+    t_preds = torch.from_numpy(pred_clean).to(device=compute_device, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+    t_mask = torch.from_numpy(valid_mask_np).to(device=compute_device, dtype=torch.bool).unsqueeze(0).unsqueeze(0)
     results = {}
     # compute metrics requested in config.
     with torch.no_grad():
@@ -596,21 +598,31 @@ def evaluate_and_visualize_hexels(
     save_plots: bool = True,
     robust_plot_percentile: float | None = None,
     mask_scope: str = "actual",
+    split_csv: str | None = None,
+    save_dir_suffix: str | None = None,
     test_metadata: pd.DataFrame | None = None,
 ) -> dict[str, float]:
     """
     A util function to re-construct predicted hexels out of test predictions, and visualize side-by-side with the Groundtruth.
     Also computes and aggregates stitched hexel-level metrics.
+
+    ``split_csv`` selects which patch metadata split to stitch (defaults to
+    ``config.data.test_split``); pass ``config.data.val_split`` to compute
+    hexel-level metrics on the validation split instead. ``save_dir_suffix``,
+    if given, isolates that split's artifacts under a dedicated subdirectory
+    (e.g. "val") so they don't collide with the default test-split outputs.
     """
     prediction_support_label = "input support" if config.evaluation.prediction_support_policy == "input" else "target support"
     scope = normalize_mask_scope(mask_scope)
     show_prediction_support_outline = config.evaluation.prediction_support_policy == "input" and scope == "actual"
-    artifacts_save_dir = get_mask_scope_save_dir(config.save_dir, scope)
+    base_save_dir = os.path.join(config.save_dir, save_dir_suffix) if save_dir_suffix else config.save_dir
+    artifacts_save_dir = get_mask_scope_save_dir(base_save_dir, scope)
 
     from src.datasets.postprocessing.hexel_reconstruction import reconstruct_denormalized_hexels
 
     all_hexel_metrics: list[tuple[str, str | None, str | None, dict[str, float]]] = []
     current_hex_id: str | None = None
+    multi_target = len(get_config_target_specs(config)) > 1
 
     for stitched_hexel in reconstruct_denormalized_hexels(
         test_predictions=test_predictions,
@@ -618,6 +630,7 @@ def evaluate_and_visualize_hexels(
         out_norm=out_norm,
         stitch_mode=stitch_mode,
         mask_scope=scope,
+        split_csv=split_csv,
         test_metadata=test_metadata,
     ):
         if stitched_hexel.hex_id != current_hex_id:
@@ -628,7 +641,7 @@ def evaluate_and_visualize_hexels(
             print(f"======Working with hex{current_hex_id}========")
 
         target = stitched_hexel.target
-        target_name_for_artifacts = None
+        target_name_for_artifacts = target.name if multi_target else None
         grid_gt = stitched_hexel.gt_grid
         reconstructed_hexel_denorm = stitched_hexel.pred_grid
         actual_support_mask = stitched_hexel.actual_support_mask
@@ -704,7 +717,8 @@ def evaluate_and_visualize_hexels(
                 gt_grid=grid_gt, pred_grid=reconstructed_hexel_denorm, device=device, metric_functions=metric_functions
             )
             metric_scope: str | None = None if scope == "actual" else scope
-            all_hexel_metrics.append((stitched_hexel.hex_id, None, metric_scope, hex_metrics))
+            metric_target_name = target.name if multi_target else None
+            all_hexel_metrics.append((stitched_hexel.hex_id, metric_target_name, metric_scope, hex_metrics))
 
             if scope == "buffer" and actual_support_mask is not None:
                 actual_gt, actual_pred = mask_grids_by_support(
@@ -729,8 +743,8 @@ def evaluate_and_visualize_hexels(
                     device=device,
                     metric_functions=metric_functions,
                 )
-                all_hexel_metrics.append((stitched_hexel.hex_id, None, "actual", actual_metrics))
-                all_hexel_metrics.append((stitched_hexel.hex_id, None, "buffer_only", buffer_only_metrics))
+                all_hexel_metrics.append((stitched_hexel.hex_id, metric_target_name, "actual", actual_metrics))
+                all_hexel_metrics.append((stitched_hexel.hex_id, metric_target_name, "buffer_only", buffer_only_metrics))
 
             percentiles_to_plot = [
                 fn.keywords["percentile"]
@@ -786,23 +800,31 @@ def evaluate_and_visualize_hexels(
 
 
 def print_and_log_eval_metrics(
-    test_metrics: str | dict[str, float] | None, hexel_metrics: dict[str, float] | None, experiment_logger: CometLogger | None = None
+    test_metrics: str | dict[str, float] | None,
+    hexel_metrics: dict[str, float] | None,
+    experiment_logger: CometLogger | None = None,
+    split_label: str = "Test",
+    metric_prefix: str = "test_hexel",
 ) -> None:
     """
     Prints terminal metrics and Comet logging for both patch-level and hexel-level metrics.
+
+    ``split_label`` customizes the printed section headers (e.g. "Val") and
+    ``metric_prefix`` customizes the Comet metric key prefix (e.g. "val_hexel")
+    so metrics from different splits don't collide when logged side by side.
     """
     # patch-level metrics
     if isinstance(test_metrics, dict):
-        print("\n[Test patch-level metrics]")
+        print(f"\n[{split_label} patch-level metrics]")
         for k, v in test_metrics.items():
             print(f"  {k}: {v:.6f}")
 
         if experiment_logger:
-            experiment_logger.log_metrics({f"test_{k}": v for k, v in test_metrics.items()})
+            experiment_logger.log_metrics({f"{split_label.lower()}_patch_{k}": v for k, v in test_metrics.items()})
 
     # hexel-level metrics
     if hexel_metrics:
-        print("\n[Test per-hexel and aggregated metrics]")
+        print(f"\n[{split_label} per-hexel and aggregated metrics]")
         current_group = None
 
         for k, v in hexel_metrics.items():
@@ -814,4 +836,4 @@ def print_and_log_eval_metrics(
             print(f"  [{group}] {metric_name}: {v:.6f}")
 
         if experiment_logger:
-            experiment_logger.log_metrics({f"hexel/{k}": v for k, v in hexel_metrics.items()})
+            experiment_logger.log_metrics({f"{metric_prefix}/{k}": v for k, v in hexel_metrics.items()})

@@ -253,3 +253,67 @@ def test_run_counterfactual_evaluation_orchestrates_weather_scenario(
     )
     weather_summary = pd.read_csv(save_dir / "weather_edit_summary.csv")
     assert weather_summary[["endpoint", "donor_fwi_mean"]].to_dict("records") == [{"endpoint": "bp", "donor_fwi_mean": 29.0}]
+
+
+def test_run_counterfactual_evaluation_dedupes_endpoints_sharing_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multiple endpoint names pointing at the same multi-output checkpoint (e.g. bp/fi
+    aliases for one joint model) should only trigger one evaluate_hexels run per scenario,
+    with every alias endpoint reusing that run's prediction_dir and metrics."""
+    project_root = tmp_path
+    data_root = project_root / "data"
+    source_dir = project_root / "trained"
+    save_dir = project_root / "counterfactual"
+    data_root.mkdir()
+    source_dir.mkdir()
+    (source_dir / "best.pt").write_bytes(b"checkpoint")
+    pd.DataFrame([{"hex_id": "16", "filename": "patch.npy", "valid_ratio": 1.0}]).to_csv(data_root / "test.csv", index=False)
+    config_path = project_root / "counterfactual.yaml"
+    with config_path.open("w") as handle:
+        yaml.safe_dump(
+            {
+                "raw_data_dir": "raw",
+                "save_dir": "counterfactual",
+                "hex_ids": ["16"],
+                "endpoints": {
+                    "bp": {"config_path": "shared.yaml"},
+                    "fi": {"config_path": "shared.yaml"},
+                },
+                "scenarios": [
+                    {"name": "baseline", "kind": "baseline"},
+                ],
+            },
+            handle,
+        )
+
+    run_config = _EndpointRunConfig(
+        save_dir=str(source_dir),
+        data=_DataConfig(root_dir=str(data_root)),
+    )
+    evaluation_calls: list[dict] = []
+
+    def _fake_evaluate_hexels(**kwargs):
+        evaluation_calls.append(kwargs)
+        return {"bp_mae": 1.5, "fi_mae": 0.3}
+
+    monkeypatch.setattr("src.evaluate_counterfactual.load_config", lambda _: run_config)
+    monkeypatch.setattr("src.evaluate_counterfactual.evaluate_hexels", _fake_evaluate_hexels)
+
+    index = run_counterfactual_evaluation(
+        config_path,
+        endpoint_names=None,
+        scenario_names={"baseline"},
+        overwrite=False,
+        project_root=project_root,
+    )
+
+    assert len(evaluation_calls) == 1
+    assert index[["scenario", "endpoint"]].to_dict("records") == [
+        {"scenario": "baseline", "endpoint": "bp"},
+        {"scenario": "baseline", "endpoint": "fi"},
+    ]
+    assert index["prediction_dir"].nunique() == 1
+    metrics = pd.read_csv(save_dir / "counterfactual_metrics.csv")
+    assert set(metrics["endpoint"]) == {"bp", "fi"}

@@ -1,0 +1,31 @@
+raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+save_dir: "experiments/counterfactual_mean_weather_multi_output_hex16"
+hex_ids: ["16"]
+nonfuel_ids: [100, 101, 102, 105, 106, 110]
+
+# Single multi-output checkpoint jointly predicting bp/fi(/ros) instead of three
+# separate single-target models. All three endpoint names still point at the exact
+# same config_path, so `evaluate_counterfactual.py` runs inference for this checkpoint
+# only once per scenario and the existing per-target plotting scripts (`--endpoint bp`,
+# `--endpoint fi`, `--endpoint ros`) keep working unchanged, reading each target's
+# raster from its suffixed filename (`hexel_XX_<target>_predicted.tif`) inside the
+# shared prediction directory.
+endpoints:
+  bp:
+    config_path: "configs/multi_output_spatial_weather.yaml"
+  fi:
+    config_path: "configs/multi_output_spatial_weather.yaml"
+  ros:
+    config_path: "configs/multi_output_spatial_weather.yaml"
+
+scenarios:
+  - name: "baseline"
+    kind: "baseline"
+    description: "Unmodified prepared weather inputs."
+
+  - name: "bc_mean_weather_transplant"
+    kind: "weather"
+    description: "Assign every hex16 weather zone the exact mean processed-weather vector across all hex17 rows, without dilution from other hexels sharing those zones."
+    params:
+      mode: "external_mean_zone_transplant"
+      donor_hex_ids: ["17"]

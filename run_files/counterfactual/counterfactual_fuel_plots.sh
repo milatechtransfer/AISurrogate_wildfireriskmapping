@@ -4,9 +4,9 @@
 #SBATCH --error=logs/job_%x_%j.err
 #SBATCH --partition=long-cpu
 #SBATCH --ntasks=1
-#SBATCH --time=2:00:00
+#SBATCH --mem=16Gb
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=24Gb
+#SBATCH --time=2:00:00
 
 set -euo pipefail
 
@@ -14,7 +14,7 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
 source .venv/bin/activate
 
-config="configs/counterfactual_fuel.yaml"
+config="configs/counterfactual_fuel_multi_output.yaml"
 hex_id="16"
 scenarios=(
     "remove_barriers_adjacent_modal"

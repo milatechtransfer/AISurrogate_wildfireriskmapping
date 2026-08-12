@@ -9,7 +9,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --mem-per-cpu=16Gb
 #SBATCH --cpus-per-task=8
-#SBATCH --array=0-2                # Launches 3 parallel seeded runs (0,1,2); override e.g. `sbatch --array=0-4 ...` for 5 seeds.
+#SBATCH --array=0-2 # One run per entry in SEEDS (src/config.py); run_id must be < len(SEEDS).
 
 set -euo pipefail
 
