@@ -15,4 +15,6 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
 source .venv/bin/activate
 
-python -m src.evaluate_counterfactual --config configs/counterfactual_fuel_multi_output.yaml --overwrite
+python -m src.evaluate_counterfactual \
+    --config configs/counterfactual/counterfactual_fuel_multi_output.yaml \
+    --overwrite
