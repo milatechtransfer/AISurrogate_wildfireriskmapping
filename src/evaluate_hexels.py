@@ -19,6 +19,7 @@ import yaml
 
 from data_preparation.paths import MASK_SCOPE_CHOICES
 from src.config import Config, GridParams, apply_run_id_overrides
+from src.datasets.context_crop import validate_context_crop_metadata
 from src.datasets.dataset import MultiSourceDataset, get_test_dataloader
 from src.datasets.postprocessing.utils import evaluate_and_visualize_hexels, print_and_log_eval_metrics
 from src.datasets.utils import get_dataset_dimensions
@@ -192,6 +193,12 @@ def main(
         seed=seed,
         patch_transform=patch_transform,
         metadata_filter=metadata_filter,
+    )
+    if not isinstance(test_loader.dataset, MultiSourceDataset):
+        raise TypeError(f"Expected MultiSourceDataset, got {type(test_loader.dataset).__name__}.")
+    validate_context_crop_metadata(
+        test_loader.dataset.metadata,
+        config.data_prep.resolved_target_crop() if config.data_prep.context_crop_enabled else None,
     )
     dataloader_time = time.time() - dataloader_start_time
 

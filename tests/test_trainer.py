@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from src.config import (
     Config,
     DataConfig,
+    DataPrepConfig,
     DataSourceConfig,
     EvaluationConfig,
     GridParams,
@@ -313,6 +314,20 @@ def test_trainer_step(dummy_config, dummy_data):
     preds, loss, loss_parts, targets, masks = trainer._step(batch)
     assert preds.shape == targets.shape
     assert isinstance(loss, torch.Tensor)
+
+
+def test_trainer_step_crops_predictions_targets_and_masks_to_center(tmp_path):
+    config = _make_config(tmp_path)
+    config.data_prep = DataPrepConfig(win_h=32, win_w=32, target_crop_h=16, target_crop_w=16)
+    trainer = Trainer(config, spatial_input_channels=1)
+    patch_trainer(trainer)
+    batch = next(iter(DataLoader(GridDataset(size=2), batch_size=2)))
+
+    predictions, _, _, targets, masks = trainer._step(batch)
+
+    assert predictions.shape == (2, 1, 16, 16)
+    assert targets.shape == (2, 1, 16, 16)
+    assert masks.shape == (2, 1, 16, 16)
 
 
 def test_trainer_step_routes_multi_target_losses(tmp_path):

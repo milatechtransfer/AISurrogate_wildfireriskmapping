@@ -19,6 +19,37 @@ python -m data_preparation.process_hexels_into_grids --root_dir="/network/projec
 
 `--fuel_grid_representation` controls the fuel grid representation: `raw` (default) produces raw class values, while `group` groups similar classes together using `FUEL_GROUP_MAP` and saves the grid as 0-N values.
 
+### Context crops
+
+To provide more spatial context while supervising and stitching only the center of each patch, set a larger input window and a smaller centered target crop:
+
+```bash
+python -m data_preparation.process_hexels_into_grids \
+	--root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA" \
+	--save_dir="/path/to/data_samples_context_512_crop_256" \
+	--modelling_approach=1 \
+	--win_h=512 \
+	--win_w=512 \
+	--target_crop_h=256 \
+	--target_crop_w=256 \
+	--overlap_ratio=0.2 \
+	--ignition_weighting="distribution" \
+	--fuel_grid_representation="raw"
+```
+
+The overlap and metadata coordinates apply to the `256x256` prediction tiles. Each saved `512x512` patch includes 128 pixels of context on every side. Match the training config with:
+
+```yaml
+data_prep:
+  win_h: 512
+  win_w: 512
+  target_crop_h: 256
+  target_crop_w: 256
+  overlap_ratio: 0.2
+```
+
+When `target_crop_h` and `target_crop_w` are omitted, training and stitching retain the original full-window behavior.
+
 Step 2: Create training, validation and test splits.
 
 - Run the `get_stratified_data_split` function in `data_preparation/utils.py` to run stratified sampling over the available hex_ids. This will give a train, val, test split with 37,5,5 hexels in each respectively

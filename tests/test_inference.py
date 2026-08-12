@@ -175,6 +175,19 @@ def test_predictor_sigmoids_bp_outputs():
     assert torch.allclose(predictions, torch.full((1, 1, 2, 2), 0.5))
 
 
+def test_predictor_returns_only_configured_center_crop():
+    config = {
+        "data": {"input_sources": [{"name": "grid", "params": {"target_name": "bp"}}]},
+        "data_prep": {"win_h": 4, "win_w": 4, "target_crop_h": 2, "target_crop_w": 2},
+    }
+    predictor = BurnRiskPredictor(model=ConstantModel(0.0), device="cpu", config=config)
+
+    predictions = predictor(torch.zeros(1, 1, 4, 4))
+
+    assert predictions.shape == (1, 1, 2, 2)
+    assert torch.allclose(predictions, torch.full((1, 1, 2, 2), 0.5))
+
+
 def test_predictor_activates_and_splits_multi_target_outputs():
     config = {
         "data": {
