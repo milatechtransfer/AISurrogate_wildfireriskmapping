@@ -1,0 +1,30 @@
+#!/bin/bash
+#SBATCH --job-name=cf_wind_direction_plots
+#SBATCH --output=logs/job_%x_%j.out
+#SBATCH --error=logs/job_%x_%j.err
+#SBATCH --partition=long-cpu
+#SBATCH --ntasks=1
+#SBATCH --time=2:00:00
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=24Gb
+
+set -euo pipefail
+
+cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
+mkdir -p logs
+source .venv/bin/activate
+
+config="configs/counterfactual/counterfactual_wind_direction_multi_output.yaml"
+hex_id="16"
+scenarios=(
+    "wind_dir_000" "wind_dir_045" "wind_dir_090" "wind_dir_135" "wind_dir_180"
+    "wind_dir_225" "wind_dir_270" "wind_dir_315" "wind_dir_360"
+)
+endpoints=("bp" "fi" "ros")
+
+for scenario in "${scenarios[@]}"; do
+    for endpoint in "${endpoints[@]}"; do
+        python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
+            --config "${config}" --scenario "${scenario}" --endpoint "${endpoint}" --hex_id "${hex_id}"
+    done
+done

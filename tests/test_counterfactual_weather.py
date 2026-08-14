@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +36,15 @@ def _weather_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
         }
     )
     return raw, processed
+
+
+def _write_norm_params(path: Path) -> None:
+    """Write minimal weather normalization params: wind_x/wind_y z-score only."""
+    payload = {
+        "min_max": {"cols": [], "min": [], "max": []},
+        "z_score": {"cols": ["wind_x", "wind_y"], "mean": [1.0, -1.0], "std": [2.0, 0.5]},
+    }
+    path.write_text(json.dumps(payload))
 
 
 def test_apply_external_mean_zone_transplant_builds_exact_recipient_hex_zone_lut() -> None:
@@ -297,6 +307,155 @@ def test_apply_weather_edit_dispatches_windy_mode_and_requires_threshold() -> No
             scenario_name="scenario",
             recipient_hex_ids=["16"],
             params={"donor_hex_ids": ["17"]},
+        )
+
+
+def test_apply_wind_direction_zone_transplant_forces_direction_and_renormalizes(tmp_path: Path) -> None:
+    raw, processed = _weather_frames()
+    norm_params_path = tmp_path / "weather_norm_params.json"
+    _write_norm_params(norm_params_path)
+
+    # threshold=0 keeps both hex17 donor rows (WindSpeed=10, 40); direction=90 (east)
+    # forces raw wind_x=WindSpeed, wind_y=0 before re-normalizing with mean/std=(1,2)/(-1,0.5).
+    edited, reports = cw.apply_wind_direction_zone_transplant(
+        raw,
+        processed,
+        recipient_hex_ids=["16"],
+        donor_hex_ids=["17"],
+        direction_degrees=90.0,
+        wind_speed_threshold=0.0,
+        norm_params_path=norm_params_path,
+        scenario_name="wind_dir_090",
+    )
+
+    expected = {"Temperature": 2.0, "FireWeatherIndex": 3.0, "wind_x": 12.0, "wind_y": 2.0}
+    for zone in (4, 9):
+        row = edited.loc[(edited["hex_id"] == 16) & (edited["WeatherZone"] == zone)].iloc[0]
+        for column, value in expected.items():
+            assert row[column] == pytest.approx(value)
+
+    assert len(reports) == 1
+    report = reports[0]
+    assert report.mode == "wind_direction_zone_transplant"
+    assert report.n_donor_rows == 2
+    assert report.donor_fwi_mean == pytest.approx(40.0)
+    assert report.wind_speed_threshold == pytest.approx(0.0)
+    assert report.direction_degrees == pytest.approx(90.0)
+
+
+def test_apply_wind_direction_zone_transplant_supports_self_donor(tmp_path: Path) -> None:
+    raw, processed = _weather_frames()
+    norm_params_path = tmp_path / "weather_norm_params.json"
+    _write_norm_params(norm_params_path)
+
+    # hex16 donates its own mean (both rows, WindSpeed=5, 25) with direction forced to 90.
+    edited, reports = cw.apply_wind_direction_zone_transplant(
+        raw,
+        processed,
+        recipient_hex_ids=["16"],
+        donor_hex_ids=["16"],
+        direction_degrees=90.0,
+        wind_speed_threshold=0.0,
+        norm_params_path=norm_params_path,
+        scenario_name="wind_dir_090_self",
+    )
+
+    expected = {"Temperature": -0.5, "FireWeatherIndex": -0.5, "wind_x": 7.0, "wind_y": 2.0}
+    for zone in (4, 9):
+        row = edited.loc[(edited["hex_id"] == 16) & (edited["WeatherZone"] == zone)].iloc[0]
+        for column, value in expected.items():
+            assert row[column] == pytest.approx(value)
+    assert reports[0].donor_hex_ids == "16"
+
+
+def test_apply_wind_direction_zone_transplant_filters_by_wind_speed_threshold(tmp_path: Path) -> None:
+    raw, processed = _weather_frames()
+    norm_params_path = tmp_path / "weather_norm_params.json"
+    _write_norm_params(norm_params_path)
+
+    # threshold=20 keeps only hex17's WindSpeed=40 row; direction=0 (north) forces
+    # raw wind_x=0, wind_y=WindSpeed.
+    _, reports = cw.apply_wind_direction_zone_transplant(
+        raw,
+        processed,
+        recipient_hex_ids=["16"],
+        donor_hex_ids=["17"],
+        direction_degrees=0.0,
+        wind_speed_threshold=20.0,
+        norm_params_path=norm_params_path,
+        scenario_name="wind_dir_000",
+    )
+    assert reports[0].n_donor_rows == 1
+    assert reports[0].donor_fwi_mean == pytest.approx(50.0)
+
+
+def test_apply_wind_direction_zone_transplant_requires_norm_params_for_wind_columns(tmp_path: Path) -> None:
+    raw, processed = _weather_frames()
+    norm_params_path = tmp_path / "weather_norm_params.json"
+    norm_params_path.write_text(
+        json.dumps({"min_max": {"cols": [], "min": [], "max": []}, "z_score": {"cols": ["Temperature"], "mean": [0.0], "std": [1.0]}})
+    )
+
+    with pytest.raises(ValueError, match="does not define z-score parameters"):
+        cw.apply_wind_direction_zone_transplant(
+            raw,
+            processed,
+            recipient_hex_ids=["16"],
+            donor_hex_ids=["17"],
+            direction_degrees=90.0,
+            wind_speed_threshold=0.0,
+            norm_params_path=norm_params_path,
+            scenario_name="scenario",
+        )
+
+
+def test_apply_weather_edit_dispatches_wind_direction_mode_and_requires_params(tmp_path: Path) -> None:
+    raw, processed = _weather_frames()
+    norm_params_path = tmp_path / "weather_norm_params.json"
+    _write_norm_params(norm_params_path)
+
+    edited, reports = cw.apply_weather_edit(
+        raw,
+        processed,
+        mode="wind_direction_zone_transplant",
+        scenario_name="wind_dir_090",
+        recipient_hex_ids=["16"],
+        params={"donor_hex_ids": ["17"], "direction_degrees": 90.0, "wind_speed_threshold": 0.0},
+        norm_params_path=norm_params_path,
+    )
+    assert reports[0].mode == "wind_direction_zone_transplant"
+    assert set(map(tuple, edited[["hex_id", "WeatherZone"]].to_numpy())) == set(
+        map(tuple, processed[["hex_id", "WeatherZone"]].drop_duplicates().to_numpy())
+    )
+
+    with pytest.raises(ValueError, match="must define a numeric 'direction_degrees'"):
+        cw.apply_weather_edit(
+            raw,
+            processed,
+            mode="wind_direction_zone_transplant",
+            scenario_name="scenario",
+            recipient_hex_ids=["16"],
+            params={"donor_hex_ids": ["17"], "wind_speed_threshold": 0.0},
+            norm_params_path=norm_params_path,
+        )
+    with pytest.raises(ValueError, match="must define a numeric 'wind_speed_threshold'"):
+        cw.apply_weather_edit(
+            raw,
+            processed,
+            mode="wind_direction_zone_transplant",
+            scenario_name="scenario",
+            recipient_hex_ids=["16"],
+            params={"donor_hex_ids": ["17"], "direction_degrees": 90.0},
+            norm_params_path=norm_params_path,
+        )
+    with pytest.raises(ValueError, match="requires norm_params_path"):
+        cw.apply_weather_edit(
+            raw,
+            processed,
+            mode="wind_direction_zone_transplant",
+            scenario_name="scenario",
+            recipient_hex_ids=["16"],
+            params={"donor_hex_ids": ["17"], "direction_degrees": 90.0, "wind_speed_threshold": 0.0},
         )
 
 

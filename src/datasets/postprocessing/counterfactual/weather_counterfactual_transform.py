@@ -9,7 +9,11 @@ import pandas as pd
 
 from src.datasets.fuel_utils import normalize_hex_id
 from src.datasets.postprocessing.counterfactual.counterfactual_base import ScenarioConfig
-from src.datasets.postprocessing.counterfactual.counterfactual_weather import apply_weather_edit, load_all_raw_weather_with_hex_ids
+from src.datasets.postprocessing.counterfactual.counterfactual_weather import (
+    WEATHER_NORM_PARAMS_FILENAME,
+    apply_weather_edit,
+    load_all_raw_weather_with_hex_ids,
+)
 
 WEATHER_INTERVENTION_CSV_NAME = "weather_table_processed.csv"
 
@@ -51,6 +55,7 @@ def materialize_weather_scenario(
 
     processed = pd.read_csv(processed_weather_csv)
     raw_features = load_all_raw_weather_with_hex_ids(raw_data_dir)
+    norm_params_path = processed_weather_csv.parent / WEATHER_NORM_PARAMS_FILENAME
     edited, reports = apply_weather_edit(
         raw_features,
         processed,
@@ -58,6 +63,7 @@ def materialize_weather_scenario(
         scenario_name=scenario.name,
         recipient_hex_ids=[normalize_hex_id(hex_id) for hex_id in recipient_hex_ids],
         params=params,
+        norm_params_path=norm_params_path if norm_params_path.exists() else None,
     )
 
     out_path = weather_intervention_csv_path(prediction_dir)

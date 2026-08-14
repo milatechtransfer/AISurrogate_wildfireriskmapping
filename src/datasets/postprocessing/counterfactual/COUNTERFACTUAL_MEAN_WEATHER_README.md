@@ -1,10 +1,10 @@
 # Counterfactual Weather Interventions
 
 Evaluate how BP, FI, and ROS predictions for hex16 change when its weather-zone
-inputs are edited via one of two interventions: transplanting hex17's mean
-processed-weather vector, or transplanting the mean processed-weather vector of
-hex16's own windiest days. Trained checkpoints and all non-weather inputs remain
-fixed.
+inputs are edited via one of three interventions: transplanting hex17's mean
+processed-weather vector, transplanting the mean processed-weather vector of
+hex16's own windiest days, or sweeping hex16's wind through 9 fixed compass
+directions. Trained checkpoints and all non-weather inputs remain fixed.
 
 ## Mean-Weather Intervention
 
@@ -206,6 +206,97 @@ python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_res
   --scenario bc_windy_self_transplant \
   --endpoint fi \
   --hex_id 16
+```
+
+## Wind-Direction Sweep Intervention
+
+`configs/counterfactual/counterfactual_wind_direction_multi_output.yaml` sweeps a
+single hexel's wind through 9 compass directions (0/45/.../315, plus 360 = 0 again
+to close the loop for circular/rose plots), holding every donor row's real
+`WindSpeed` magnitude fixed and only forcing its direction. Non-wind features
+(temperature, humidity, FFMC, FWI, ...) are still averaged from the real donor
+rows, unchanged.
+
+The configured `wind_direction_zone_transplant` mode:
+
+1. Restricts donor rows to `donor_hex_ids` rows whose raw `WindSpeed` is `>=`
+   `wind_speed_threshold` (set the threshold to `0` to use every donor row / the
+   donor's ordinary average wind speed, instead of only its windiest days).
+2. For each surviving donor row, keeps its recorded `WindSpeed` but overrides its
+   `WindDirection` to the scenario's `direction_degrees`, then recomputes
+   `wind_x`/`wind_y` and re-normalizes them with the same z-score parameters
+   fit at training time (`weather_norm_params.json`, expected alongside the
+   processed weather table).
+3. Averages every other weather feature unchanged across the same donor rows.
+4. Replaces the recipient hexels' `(hex_id, WeatherZone)` entries with that vector.
+
+**Prefer a self-donor** (`donor_hex_ids == recipient_hex_ids`, as in the example
+below) to isolate the pure direction effect: the recipient keeps its own real
+non-wind climate, and only wind direction is swept. An external donor also
+imports that donor's non-wind climate, conflating a wind-direction sweep with a
+mean-weather transplant.
+
+Because all 9 direction scenarios share one `save_dir`,
+`evaluate_counterfactual.py` and the plotting script write each direction's
+predictions/figures to its own `predictions/wind_dir_XXX/` and
+`figures/wind_dir_XXX_<target>/` subfolder automatically - no extra scaffolding
+needed for "one experiment folder, one subfolder per direction".
+
+### Configuration
+
+```yaml
+raw_data_dir: "/path/to/raw/hexel/data"
+save_dir: "experiments/counterfactual_wind_direction_hex16"
+hex_ids: ["16"]
+nonfuel_ids: [100, 101, 102, 105, 106, 110]
+
+endpoints:
+  bp:
+    config_path: "configs/multi_output_spatial_weather.yaml"
+  fi:
+    config_path: "configs/multi_output_spatial_weather.yaml"
+  ros:
+    config_path: "configs/multi_output_spatial_weather.yaml"
+
+scenarios:
+  - name: "baseline"
+    kind: "baseline"
+    description: "Unmodified prepared weather inputs."
+
+  - name: "wind_dir_000"
+    kind: "weather"
+    description: "Hex16's windiest days (raw WindSpeed >= 20 km/h), wind forced to blow from 0 deg (N)."
+    params: {mode: "wind_direction_zone_transplant", donor_hex_ids: ["16"], wind_speed_threshold: 20, direction_degrees: 0}
+  # ... one scenario per direction (045, 090, 135, 180, 225, 270, 315, 360)
+```
+
+`direction_degrees` and `wind_speed_threshold` are both required for this mode
+and raise a clear `ValueError` if omitted; the mode also requires
+`weather_norm_params.json` to exist next to the processed weather table.
+
+### Running
+
+Run all configured endpoints:
+
+```bash
+python -m src.evaluate_counterfactual \
+  --config configs/counterfactual/counterfactual_wind_direction_multi_output.yaml \
+  --endpoint bp \
+  --endpoint fi \
+  --endpoint ros \
+  --overwrite
+```
+
+Generate the response maps for every direction:
+
+```bash
+for scenario in wind_dir_000 wind_dir_045 wind_dir_090 wind_dir_135 wind_dir_180 wind_dir_225 wind_dir_270 wind_dir_315 wind_dir_360; do
+  python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
+    --config configs/counterfactual/counterfactual_wind_direction_multi_output.yaml \
+    --scenario "${scenario}" \
+    --endpoint fi \
+    --hex_id 16
+done
 ```
 
 On SLURM, submit `run_files/counterfactual/counterfactual_windy_weather_iROS.sh`,
