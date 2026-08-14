@@ -16,9 +16,12 @@ FWI_COLUMN = "FireWeatherIndex"
 HEX_ID_COLUMN = "hex_id"
 RAW_HEX_ID_COLUMN = "__hex_id"
 WEATHER_ZONE_COLUMN = "WeatherZone"
+WIND_SPEED_COLUMN = "WindSpeed"
 STRUCTURAL_COLUMNS: tuple[str, ...] = ("Order", "Season", HEX_ID_COLUMN, WEATHER_ZONE_COLUMN)
 NON_AVERAGE_COLUMNS: tuple[str, ...] = (*STRUCTURAL_COLUMNS, "WindDirection")
-WEATHER_EDIT_MODES = ("external_mean_zone_transplant",)
+EXTERNAL_MEAN_ZONE_TRANSPLANT_MODE = "external_mean_zone_transplant"
+WINDY_MEAN_ZONE_TRANSPLANT_MODE = "windy_mean_zone_transplant"
+WEATHER_EDIT_MODES = (EXTERNAL_MEAN_ZONE_TRANSPLANT_MODE, WINDY_MEAN_ZONE_TRANSPLANT_MODE)
 RAW_WEATHER_GLOB_PATTERN = "hex*/tabular/hex*_DailyWeather.csv"
 
 
@@ -36,6 +39,8 @@ class WeatherEditReport:
     donor_fwi_mean: float
     baseline_fwi_mean: float
     scenario_fwi_mean: float
+    # Set only for wind-filtered donor means (`windy_mean_zone_transplant`); None otherwise.
+    wind_speed_threshold: float | None = None
 
 
 def _hex_id_from_weather_path(path: Path) -> str:
@@ -112,19 +117,34 @@ def _validate_raw_processed_alignment(raw_features: pd.DataFrame, processed: pd.
     return processed_hex_ids
 
 
-def apply_external_mean_zone_transplant(
+def _donor_mask_from_hex_ids(processed_hex_ids: pd.Series, donor_hex_ids: list[str]) -> tuple[list[str], np.ndarray]:
+    normalized_donor_ids = [normalize_hex_id(hex_id) for hex_id in donor_hex_ids]
+    if not normalized_donor_ids:
+        raise ValueError("donor_hex_ids must be non-empty.")
+    donor_mask = processed_hex_ids.isin(normalized_donor_ids).to_numpy()
+    if not donor_mask.any():
+        raise ValueError(f"No weather rows found for donor_hex_ids={normalized_donor_ids}.")
+    return normalized_donor_ids, donor_mask
+
+
+def _apply_mean_zone_transplant(
     raw_features: pd.DataFrame,
     processed: pd.DataFrame,
     *,
     recipient_hex_ids: list[str],
     donor_hex_ids: list[str],
     scenario_name: str,
+    mode: str,
+    wind_speed_threshold: float | None = None,
 ) -> tuple[pd.DataFrame, list[WeatherEditReport]]:
     """Give recipient hexels the exact mean processed-weather vector of donor hexels.
 
     The returned table contains one row per ``(hex_id, WeatherZone)``. Baseline
     hex-zone means are retained everywhere except recipient hexels, whose zone rows
-    receive the donor mean exactly.
+    receive the donor mean exactly. `donor_hex_ids` may overlap or exactly match
+    `recipient_hex_ids` (e.g. a hexel can donate its own filtered rows to itself).
+    When `wind_speed_threshold` is set, the donor mean is restricted to donor rows
+    whose raw `WindSpeed` is greater than or equal to the threshold.
     """
     if FWI_COLUMN not in raw_features.columns or FWI_COLUMN not in processed.columns:
         raise ValueError(f"Raw and processed weather tables must include {FWI_COLUMN!r}.")
@@ -138,12 +158,19 @@ def apply_external_mean_zone_transplant(
     if missing_recipients:
         raise ValueError(f"No weather rows found for recipient hex_id(s)={missing_recipients}.")
 
-    normalized_donor_ids = [normalize_hex_id(hex_id) for hex_id in donor_hex_ids]
-    if not normalized_donor_ids:
-        raise ValueError("donor_hex_ids must be non-empty.")
-    donor_mask = processed_hex_ids.isin(normalized_donor_ids).to_numpy()
-    if not donor_mask.any():
-        raise ValueError(f"No weather rows found for donor_hex_ids={normalized_donor_ids}.")
+    normalized_donor_ids, donor_mask = _donor_mask_from_hex_ids(processed_hex_ids, donor_hex_ids)
+
+    if wind_speed_threshold is not None:
+        if WIND_SPEED_COLUMN not in raw_features.columns:
+            raise ValueError(f"raw_features is missing {WIND_SPEED_COLUMN!r}, required to apply a wind_speed_threshold.")
+        wind_speed = pd.to_numeric(raw_features[WIND_SPEED_COLUMN], errors="coerce").to_numpy(dtype=np.float64)
+        windy_donor_mask = donor_mask & (wind_speed >= wind_speed_threshold)
+        if not windy_donor_mask.any():
+            raise ValueError(
+                f"No donor weather rows with {WIND_SPEED_COLUMN} >= {wind_speed_threshold} "
+                f"found among donor_hex_ids={normalized_donor_ids}."
+            )
+        donor_mask = windy_donor_mask
 
     mean_columns = [
         column for column in processed.columns if column not in NON_AVERAGE_COLUMNS and pd.api.types.is_numeric_dtype(processed[column])
@@ -166,7 +193,7 @@ def apply_external_mean_zone_transplant(
         reports.append(
             WeatherEditReport(
                 scenario_name=scenario_name,
-                mode="external_mean_zone_transplant",
+                mode=mode,
                 recipient_hex_id=recipient_hex_id,
                 n_recipient_rows=int(recipient_mask.sum()),
                 n_recipient_zones=int(processed.loc[recipient_mask, WEATHER_ZONE_COLUMN].nunique()),
@@ -175,9 +202,59 @@ def apply_external_mean_zone_transplant(
                 donor_fwi_mean=donor_fwi_mean,
                 baseline_fwi_mean=float(raw_features.loc[recipient_mask, FWI_COLUMN].mean()),
                 scenario_fwi_mean=donor_fwi_mean,
+                wind_speed_threshold=wind_speed_threshold,
             )
         )
     return edited, reports
+
+
+def apply_external_mean_zone_transplant(
+    raw_features: pd.DataFrame,
+    processed: pd.DataFrame,
+    *,
+    recipient_hex_ids: list[str],
+    donor_hex_ids: list[str],
+    scenario_name: str,
+) -> tuple[pd.DataFrame, list[WeatherEditReport]]:
+    """Give recipient hexels the exact mean processed-weather vector of donor hexels.
+
+    See `_apply_mean_zone_transplant` for the shared implementation.
+    """
+    return _apply_mean_zone_transplant(
+        raw_features,
+        processed,
+        recipient_hex_ids=recipient_hex_ids,
+        donor_hex_ids=donor_hex_ids,
+        scenario_name=scenario_name,
+        mode=EXTERNAL_MEAN_ZONE_TRANSPLANT_MODE,
+    )
+
+
+def apply_windy_mean_zone_transplant(
+    raw_features: pd.DataFrame,
+    processed: pd.DataFrame,
+    *,
+    recipient_hex_ids: list[str],
+    donor_hex_ids: list[str],
+    wind_speed_threshold: float,
+    scenario_name: str,
+) -> tuple[pd.DataFrame, list[WeatherEditReport]]:
+    """Give recipient hexels the mean processed-weather vector of donor rows with high wind.
+
+    Identical to `apply_external_mean_zone_transplant`, except the donor mean is
+    computed only over donor rows whose raw `WindSpeed` is >= `wind_speed_threshold`.
+    `donor_hex_ids` may equal `recipient_hex_ids` to give a hexel the mean of its own
+    windiest days instead of an external donor's.
+    """
+    return _apply_mean_zone_transplant(
+        raw_features,
+        processed,
+        recipient_hex_ids=recipient_hex_ids,
+        donor_hex_ids=donor_hex_ids,
+        scenario_name=scenario_name,
+        mode=WINDY_MEAN_ZONE_TRANSPLANT_MODE,
+        wind_speed_threshold=wind_speed_threshold,
+    )
 
 
 def apply_weather_edit(
@@ -195,10 +272,28 @@ def apply_weather_edit(
     donor_hex_ids = params.get("donor_hex_ids")
     if not isinstance(donor_hex_ids, list | tuple) or not donor_hex_ids:
         raise ValueError(f"Weather scenario {scenario_name!r} must define a non-empty donor_hex_ids list.")
+    donor_hex_ids = [str(value) for value in donor_hex_ids]
+
+    if mode == WINDY_MEAN_ZONE_TRANSPLANT_MODE:
+        wind_speed_threshold = params.get("wind_speed_threshold")
+        if wind_speed_threshold is None:
+            raise ValueError(
+                f"Weather scenario {scenario_name!r} with mode {WINDY_MEAN_ZONE_TRANSPLANT_MODE!r} "
+                "must define a numeric 'wind_speed_threshold'."
+            )
+        return apply_windy_mean_zone_transplant(
+            raw_features,
+            processed,
+            recipient_hex_ids=recipient_hex_ids,
+            donor_hex_ids=donor_hex_ids,
+            wind_speed_threshold=float(wind_speed_threshold),
+            scenario_name=scenario_name,
+        )
+
     return apply_external_mean_zone_transplant(
         raw_features,
         processed,
         recipient_hex_ids=recipient_hex_ids,
-        donor_hex_ids=[str(value) for value in donor_hex_ids],
+        donor_hex_ids=donor_hex_ids,
         scenario_name=scenario_name,
     )

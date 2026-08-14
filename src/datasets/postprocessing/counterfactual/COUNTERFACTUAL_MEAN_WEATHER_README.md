@@ -1,10 +1,12 @@
-# Counterfactual Mean-Weather Intervention
+# Counterfactual Weather Interventions
 
 Evaluate how BP, FI, and ROS predictions for hex16 change when its weather-zone
-inputs are replaced by the mean processed-weather vector from hex17. Trained
-checkpoints and all non-weather inputs remain fixed.
+inputs are edited via one of two interventions: transplanting hex17's mean
+processed-weather vector, or transplanting the mean processed-weather vector of
+hex16's own windiest days. Trained checkpoints and all non-weather inputs remain
+fixed.
 
-## Intervention
+## Mean-Weather Intervention
 
 The configured `external_mean_zone_transplant` mode:
 
@@ -88,8 +90,8 @@ scenarios:
 > equivalent fuel-scenario config); `evaluate_counterfactual.py` and the plotting scripts
 > below handle this transparently.
 
-`mode` is required explicitly. The current workflow supports only
-`external_mean_zone_transplant`.
+`mode` is required explicitly. The current workflow supports
+`external_mean_zone_transplant` and `windy_mean_zone_transplant` (below).
 
 Each endpoint's `spatialized_weather` input source must set
 `hex_id_col: "hex_id"` so inference resolves the materialized table by
@@ -120,3 +122,92 @@ python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_res
 
 On SLURM, submit `run_files/counterfactual_mean_weather_iROS.sh`, followed by
 `run_files/counterfactual_mean_weather_plots.sh` with an `afterok` dependency.
+
+## Windy Self-Transplant Intervention
+
+`configs/counterfactual/counterfactual_windy_weather.yaml` (and its
+`_multi_output` counterpart) evaluate a second weather edit: give hex16 the mean
+processed-weather vector of hex16's own windiest days, instead of an external
+donor hexel. This isolates the effect of a hexel's high-wind conditions becoming
+its typical conditions, without mixing in a different hexel's climate.
+
+The configured `windy_mean_zone_transplant` mode:
+
+1. Reconstructs the raw weather-table row order with a hex ID attached to each row.
+2. Restricts the donor rows to `donor_hex_ids` rows whose raw `WindSpeed` is `>=`
+   the configured `wind_speed_threshold`.
+3. Computes the mean of every processed weather feature across those windy donor
+   rows only.
+4. Builds the baseline `(hex_id, WeatherZone) -> feature vector` lookup table.
+5. Replaces the recipient hexels' `(hex_id, WeatherZone)` entries with the exact
+   windy-donor mean vector.
+
+`donor_hex_ids` may equal `recipient_hex_ids` (a hexel donates its own windy rows
+to itself, as in the example config below) or differ (an external hexel's windy
+rows are transplanted, as with `external_mean_zone_transplant`).
+
+The example config uses `donor_hex_ids: ["16"]`, `wind_speed_threshold: 20`
+(km/h) - approximately the 90th percentile of hex16's raw `WindSpeed`
+distribution (median 11, 90th pct 20, 95th pct 23.4, max 64.8), so the donor mean
+is computed over hex16's windiest ~10% of rows.
+
+### Configuration
+
+```yaml
+raw_data_dir: "/path/to/raw/hexel/data"
+save_dir: "experiments/counterfactual_windy_weather_hex16"
+hex_ids: ["16"]
+nonfuel_ids: [100, 101, 102, 105, 106, 110]
+
+endpoints:
+  bp:
+    config_path: "configs/bp_common_input_pipeline.yaml"
+  fi:
+    config_path: "configs/fi_common_input_pipeline.yaml"
+  ros:
+    config_path: "configs/ros_common_input_pipeline.yaml"
+
+scenarios:
+  - name: "baseline"
+    kind: "baseline"
+    description: "Unmodified prepared weather inputs."
+
+  - name: "bc_windy_self_transplant"
+    kind: "weather"
+    description: "Assign every hex16 weather zone the exact mean processed-weather vector across hex16's own rows with raw WindSpeed >= 20 km/h."
+    params:
+      mode: "windy_mean_zone_transplant"
+      donor_hex_ids: ["16"]
+      wind_speed_threshold: 20
+```
+
+`wind_speed_threshold` is required for this mode (a numeric raw `WindSpeed`
+lower bound, applied as `>=`) and raises a clear `ValueError` if omitted, or if no
+donor rows clear the threshold.
+
+### Running
+
+Run all configured endpoints:
+
+```bash
+python -m src.evaluate_counterfactual \
+  --config configs/counterfactual/counterfactual_windy_weather_multi_output.yaml \
+  --endpoint bp \
+  --endpoint fi \
+  --endpoint ros \
+  --overwrite
+```
+
+Generate one response-map set:
+
+```bash
+python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
+  --config configs/counterfactual/counterfactual_windy_weather_multi_output.yaml \
+  --scenario bc_windy_self_transplant \
+  --endpoint fi \
+  --hex_id 16
+```
+
+On SLURM, submit `run_files/counterfactual/counterfactual_windy_weather_iROS.sh`,
+followed by `run_files/counterfactual/counterfactual_windy_weather_plots.sh` with
+an `afterok` dependency.

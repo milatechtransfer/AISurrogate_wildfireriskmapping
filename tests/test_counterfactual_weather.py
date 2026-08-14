@@ -18,6 +18,7 @@ def _weather_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
             "__hex_id": ["16", "16", "17", "17", "01", "01"],
             "WeatherZone": [4, 9, 30, 31, 4, 4],
             "FireWeatherIndex": [10.0, 20.0, 30.0, 50.0, 5.0, 7.0],
+            "WindSpeed": [5.0, 25.0, 10.0, 40.0, 8.0, 12.0],
         }
     )
     processed = pd.DataFrame(
@@ -178,6 +179,124 @@ def test_apply_weather_edit_dispatches_mean_mode_and_rejects_invalid_configurati
             scenario_name="scenario",
             recipient_hex_ids=["16"],
             params={},
+        )
+
+
+def test_apply_windy_mean_zone_transplant_restricts_donor_mean_to_high_wind_rows() -> None:
+    raw, processed = _weather_frames()
+
+    # Among hex17 donor rows (indices 2, 3; WindSpeed=10, 40), only index 3 clears
+    # the threshold, so the donor mean should equal that single row exactly.
+    edited, reports = cw.apply_windy_mean_zone_transplant(
+        raw,
+        processed,
+        recipient_hex_ids=["16"],
+        donor_hex_ids=["17"],
+        wind_speed_threshold=20.0,
+        scenario_name="windy_scenario",
+    )
+
+    windy_row = processed.loc[3, ["Temperature", "FireWeatherIndex", "wind_x", "wind_y"]]
+    for zone in (4, 9):
+        row = edited.loc[(edited["hex_id"] == 16) & (edited["WeatherZone"] == zone)].iloc[0]
+        assert row[windy_row.index].to_numpy(dtype=np.float64) == pytest.approx(windy_row.to_numpy(dtype=np.float64))
+
+    assert len(reports) == 1
+    report = reports[0]
+    assert report.mode == "windy_mean_zone_transplant"
+    assert report.n_donor_rows == 1
+    assert report.donor_fwi_mean == pytest.approx(50.0)
+    assert report.wind_speed_threshold == pytest.approx(20.0)
+
+
+def test_apply_windy_mean_zone_transplant_supports_self_donor() -> None:
+    raw, processed = _weather_frames()
+
+    # hex16's own rows (indices 0, 1; WindSpeed=5, 25): only index 1 clears the
+    # threshold, so hex16 donates its own windiest-day mean to itself.
+    edited, reports = cw.apply_windy_mean_zone_transplant(
+        raw,
+        processed,
+        recipient_hex_ids=["16"],
+        donor_hex_ids=["16"],
+        wind_speed_threshold=20.0,
+        scenario_name="self_windy_scenario",
+    )
+
+    windy_row = processed.loc[1, ["Temperature", "FireWeatherIndex", "wind_x", "wind_y"]]
+    for zone in (4, 9):
+        row = edited.loc[(edited["hex_id"] == 16) & (edited["WeatherZone"] == zone)].iloc[0]
+        assert row[windy_row.index].to_numpy(dtype=np.float64) == pytest.approx(windy_row.to_numpy(dtype=np.float64))
+    assert reports[0].donor_hex_ids == "16"
+    assert reports[0].n_donor_rows == 1
+
+
+def test_apply_windy_mean_zone_transplant_threshold_is_inclusive() -> None:
+    raw, processed = _weather_frames()
+
+    # Threshold exactly equal to donor row's WindSpeed (40) must still match (>=).
+    _, reports = cw.apply_windy_mean_zone_transplant(
+        raw,
+        processed,
+        recipient_hex_ids=["16"],
+        donor_hex_ids=["17"],
+        wind_speed_threshold=40.0,
+        scenario_name="scenario",
+    )
+    assert reports[0].n_donor_rows == 1
+
+
+def test_apply_windy_mean_zone_transplant_raises_when_no_rows_clear_threshold() -> None:
+    raw, processed = _weather_frames()
+
+    with pytest.raises(ValueError, match="No donor weather rows with WindSpeed >="):
+        cw.apply_windy_mean_zone_transplant(
+            raw,
+            processed,
+            recipient_hex_ids=["16"],
+            donor_hex_ids=["17"],
+            wind_speed_threshold=100.0,
+            scenario_name="scenario",
+        )
+
+
+def test_apply_windy_mean_zone_transplant_requires_wind_speed_column() -> None:
+    raw, processed = _weather_frames()
+
+    with pytest.raises(ValueError, match="missing 'WindSpeed'"):
+        cw.apply_windy_mean_zone_transplant(
+            raw.drop(columns="WindSpeed"),
+            processed,
+            recipient_hex_ids=["16"],
+            donor_hex_ids=["17"],
+            wind_speed_threshold=20.0,
+            scenario_name="scenario",
+        )
+
+
+def test_apply_weather_edit_dispatches_windy_mode_and_requires_threshold() -> None:
+    raw, processed = _weather_frames()
+    edited, reports = cw.apply_weather_edit(
+        raw,
+        processed,
+        mode="windy_mean_zone_transplant",
+        scenario_name="scenario",
+        recipient_hex_ids=["16"],
+        params={"donor_hex_ids": ["17"], "wind_speed_threshold": 20},
+    )
+    assert reports[0].mode == "windy_mean_zone_transplant"
+    assert set(map(tuple, edited[["hex_id", "WeatherZone"]].to_numpy())) == set(
+        map(tuple, processed[["hex_id", "WeatherZone"]].drop_duplicates().to_numpy())
+    )
+
+    with pytest.raises(ValueError, match="must define a numeric 'wind_speed_threshold'"):
+        cw.apply_weather_edit(
+            raw,
+            processed,
+            mode="windy_mean_zone_transplant",
+            scenario_name="scenario",
+            recipient_hex_ids=["16"],
+            params={"donor_hex_ids": ["17"]},
         )
 
 
