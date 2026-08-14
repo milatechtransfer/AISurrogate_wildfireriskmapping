@@ -24,7 +24,7 @@ from src.datasets.sources import GridSource, SpatializedTabularSource, TabularSo
 from src.datasets.sources.spatialized_tabular import _NO_HEX_ID
 from src.datasets.sources.tabular import _NO_HEX_ID as _TABULAR_NO_HEX_ID
 from src.datasets.transforms import get_transforms, setup_augmentations
-from src.datasets.utils import get_dataset_dimensions
+from src.datasets.utils import get_dataset_dimensions, get_dataset_spatial_feature_names
 
 
 @pytest.fixture
@@ -590,6 +590,30 @@ def test_build_dataset_appends_spatialized_tabular_channels_to_grid(temp_data_di
     assert set(sample) == {"grid"}
     inputs, _, _ = sample["grid"]
     assert inputs.shape == (5, 32, 32)
+    assert get_dataset_spatial_feature_names(dataset) == [
+        "grid/ignition_grid",
+        "grid/fuel_grid",
+        "grid/elevation_grid",
+        f"spatialized_weather/{weather_feats[0]}",
+        f"spatialized_weather/{weather_feats[1]}",
+    ]
+
+
+def test_spatialized_fire_size_can_rasterize_empirical_quantiles(temp_data_dir):
+    tmpdir, _, _, _, _, _, fire_size_csv, _ = temp_data_dir
+    params = SpatializedTabularParams(
+        csv_name=fire_size_csv,
+        feature_names_list=["size"],
+        fire_weather_zone_id_col="grid_code",
+        quantiles=[0.25, 0.5, 0.75],
+    )
+    source = SpatializedTabularSource(root_dir=tmpdir, params=params, modelling_approach="1")
+
+    sample = source.get_sample({"file_path": os.path.join(tmpdir, "sample_0.npy")})
+
+    assert source.input_dim() == 3
+    assert source.output_feature_names() == ["size_q25", "size_q50", "size_q75"]
+    assert sample[:, 0, 0].tolist() == pytest.approx([30.0, 50.0, 75.0])
 
 
 def test_build_dataset_can_include_patch_metadata(temp_data_dir, monkeypatch):

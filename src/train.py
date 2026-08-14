@@ -9,12 +9,12 @@ from types import FrameType
 
 import numpy as np
 import pandas as pd
-import yaml
 
-from src.config import Config, GridParams, apply_run_id_overrides
+from src.config import GridParams, apply_run_id_overrides
+from src.config_io import load_config
 from src.datasets.dataset import get_test_dataloader, get_train_val_dataloader
 from src.datasets.postprocessing.utils import evaluate_and_visualize_hexels, print_and_log_eval_metrics
-from src.datasets.utils import get_dataset_dimensions
+from src.datasets.utils import get_dataset_dimensions, get_dataset_spatial_feature_names
 from src.trainer import Trainer
 from src.utils import seed_everything
 
@@ -64,19 +64,6 @@ def _handle_sigterm(signum: int, _frame: FrameType | None) -> None:
     print(f"[Signal] Received {signal.Signals(signum).name}; job is being preempted/timed out and will be requeued.")
 
 
-def load_config(path: str) -> Config:
-    """
-    load yaml config
-    """
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"Config file not found: {path}")
-
-    with open(path) as f:
-        raw = yaml.safe_load(f)
-
-    return Config(**raw)
-
-
 def main() -> None:
     signal.signal(signal.SIGTERM, _handle_sigterm)
 
@@ -96,6 +83,7 @@ def main() -> None:
     train_loader, val_loader = get_train_val_dataloader(config=config.data, modelling_approach=config.modelling_approach, seed=seed)
 
     spatial_channels, auxiliary_input_dims = get_dataset_dimensions(train_loader.dataset)
+    spatial_input_names = get_dataset_spatial_feature_names(train_loader.dataset)
     print(f"Detected Data Dimensions: Spatial={spatial_channels} | Auxiliary={auxiliary_input_dims}")
 
     # ---------- Training ----------
@@ -104,6 +92,7 @@ def main() -> None:
         spatial_input_channels=spatial_channels,
         auxiliary_input_dims=auxiliary_input_dims,
         train_dataset=train_loader.dataset,
+        spatial_input_names=spatial_input_names,
     )
 
     trainer.run_training(

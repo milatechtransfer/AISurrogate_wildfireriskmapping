@@ -110,6 +110,19 @@ def get_dataset_dimensions(dataset) -> tuple[int | None, dict[str, int]]:
     return spatial_channels, auxiliary_input_dims
 
 
+def get_dataset_spatial_feature_names(dataset) -> list[str]:
+    sources = getattr(dataset, "sources", {})
+    grid_source = sources.get("grid")
+    if grid_source is None:
+        return []
+
+    names = [f"grid/{name}" for name in grid_source.output_feature_names()]
+    for source_name, source in sources.items():
+        if source_name in SPATIALIZED_TABULAR_SOURCE_NAMES:
+            names.extend(f"{source_name}/{name}" for name in source.output_feature_names())
+    return names
+
+
 def get_fuel_curve_normalization_stats(dataset) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     """
     Returns ``(fuel_curve_mean, fuel_curve_std)`` tensors from the GridSource if a

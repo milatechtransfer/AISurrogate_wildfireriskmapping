@@ -17,7 +17,7 @@ from src.config import Config, GridParams
 from src.datasets.context_crop import centered_crop_slices, validate_context_crop_metadata
 from src.datasets.fuel_utils import FUEL_CURVE_ENCODINGS
 from src.datasets.targets import activate_target_predictions, get_target_specs
-from src.datasets.utils import apply_bp_nodata_zero_range, get_fuel_curve_normalization_stats
+from src.datasets.utils import apply_bp_nodata_zero_range, get_dataset_spatial_feature_names, get_fuel_curve_normalization_stats
 from src.logger import CometLogger
 from src.losses import MultiTaskLoss, WeightedLoss
 from src.models.factory import build_model, resolve_model_architecture
@@ -35,11 +35,19 @@ class Trainer:
         spatial_input_channels: int | None = None,
         auxiliary_input_dims: dict[str, int] | None = None,
         train_dataset=None,
+        spatial_input_names: list[str] | None = None,
     ):
         self.config = config
         self.spatial_input_channels = spatial_input_channels
         self.auxiliary_input_dims = auxiliary_input_dims if auxiliary_input_dims is not None else {}
         self.train_dataset = train_dataset
+        self.spatial_input_names = spatial_input_names
+        if self.spatial_input_names is None and train_dataset is not None:
+            self.spatial_input_names = get_dataset_spatial_feature_names(train_dataset)
+        if self.spatial_input_names:
+            if spatial_input_channels is not None and len(self.spatial_input_names) != spatial_input_channels:
+                raise ValueError(f"Detected {spatial_input_channels} spatial channels but resolved names {self.spatial_input_names}.")
+            self.config.model.spatial_input_names = list(self.spatial_input_names)
         if train_dataset is not None and hasattr(train_dataset, "metadata"):
             validate_context_crop_metadata(
                 train_dataset.metadata,
@@ -465,6 +473,8 @@ class Trainer:
 
     @staticmethod
     def _are_metrics_better(curr: list[float], best: list[float], modes: list[str]):
+        if not all(np.isfinite(value) for value in curr):
+            return False
         if not best:
             return True
 
@@ -484,6 +494,27 @@ class Trainer:
                 raise ValueError(f"Unknown mode: {mode}")
         return improved  # Only True if at least one metric improved, none worse
 
+    @staticmethod
+    def _accumulate_metrics(
+        running_metrics: dict[str, float],
+        metric_counts: dict[str, int],
+        metric_values: dict[str, torch.Tensor],
+        batch_size: int,
+    ) -> None:
+        for name, value in metric_values.items():
+            scalar = value.item()
+            if not np.isfinite(scalar):
+                continue
+            running_metrics[name] += scalar * batch_size
+            metric_counts[name] += batch_size
+
+    @staticmethod
+    def _average_metrics(running_metrics: dict[str, float], metric_counts: dict[str, int]) -> dict[str, float]:
+        return {
+            name: total_value / metric_counts[name] if metric_counts[name] > 0 else float("nan")
+            for name, total_value in running_metrics.items()
+        }
+
     # Supports any LRScheduler object and metric-based ReduceLROnPlateau schedulers
     def train_epoch(
         self, loader: DataLoader, lr_scheduler: LRScheduler | ReduceLROnPlateau | None = None, lr_scheduler_type: str | None = None
@@ -492,18 +523,23 @@ class Trainer:
         running_loss = 0.0
         running_batch_count = 0
         running_metrics = {name: 0.0 for name in self._metric_result_keys()}
+        metric_counts = {name: 0 for name in running_metrics}
         running_loss_parts: dict[str, float] = {}
 
         training_loop = tqdm(loader, desc="Training", leave=True)
+        accumulation_steps = self.config.training.gradient_accumulation_steps
+        self.optimizer.zero_grad()
 
-        for batch in training_loop:
+        for batch_idx, batch in enumerate(training_loop):
             predictions, loss, loss_parts, targets, masks = self._step(batch)
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+            (loss / accumulation_steps).backward()
+            optimizer_step = (batch_idx + 1) % accumulation_steps == 0 or batch_idx + 1 == len(loader)
+            if optimizer_step:
+                self.optimizer.step()
+                self.optimizer.zero_grad()
 
             # use scheduler if its type is batch-level
-            if lr_scheduler is not None and lr_scheduler_type == "batch":
+            if optimizer_step and lr_scheduler is not None and lr_scheduler_type == "batch":
                 lr_scheduler.step()
 
             batch_size = targets.size(0) if hasattr(targets, "size") else 1
@@ -522,8 +558,9 @@ class Trainer:
             # compute the metrics
             with torch.no_grad():
                 metric_predictions, metric_targets = self._prepare_metric_tensors(predictions.detach(), targets)
-                for name, value in self._compute_metric_values(metric_predictions, metric_targets, masks).items():
-                    running_metrics[name] += value.item() * batch_size
+                metric_values = self._compute_metric_values(metric_predictions, metric_targets, masks)
+                self._accumulate_metrics(running_metrics, metric_counts, metric_values, batch_size)
+                for name, value in metric_values.items():
                     if self.logger and self.global_step % self.log_every_n_step == 0:
                         self.logger.log_metrics({f"train_step_{name}": value.item()}, step=self.global_step)
 
@@ -547,8 +584,7 @@ class Trainer:
                 results[f"loss_{k}"] = total_v / max(1, running_batch_count)
 
         # add averaged metrics to results
-        for name, total_value in running_metrics.items():
-            results[name] = total_value / max(1, running_batch_count)
+        results.update(self._average_metrics(running_metrics, metric_counts))
 
         return results
 
@@ -567,6 +603,7 @@ class Trainer:
         running_loss = 0.0
         running_batch_count = 0
         running_metrics = {name: 0.0 for name in self._metric_result_keys()}
+        metric_counts = {name: 0 for name in running_metrics}
         running_loss_parts: dict[str, float] = {}
 
         peak_mps_driver_allocated_gb = 0.0
@@ -588,8 +625,8 @@ class Trainer:
             # compute the metrics
             with torch.no_grad():
                 metric_predictions, metric_targets = self._prepare_metric_tensors(predictions.detach(), targets)
-                for name, value in self._compute_metric_values(metric_predictions, metric_targets, masks).items():
-                    running_metrics[name] += value.item() * batch_size
+                metric_values = self._compute_metric_values(metric_predictions, metric_targets, masks)
+                self._accumulate_metrics(running_metrics, metric_counts, metric_values, batch_size)
 
                 if loss_parts is not None:
                     for k, v in loss_parts.items():
@@ -621,8 +658,7 @@ class Trainer:
                 results[f"loss_{k}"] = total_v / max(1, running_batch_count)
 
         # add averaged metrics to results
-        for name, total_value in running_metrics.items():
-            results[name] = total_value / max(1, running_batch_count)
+        results.update(self._average_metrics(running_metrics, metric_counts))
 
         if return_predictions and peak_mps_driver_allocated_gb > 0.0:
             self.last_peak_mps_driver_allocated_gb = peak_mps_driver_allocated_gb

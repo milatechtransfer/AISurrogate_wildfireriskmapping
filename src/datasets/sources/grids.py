@@ -160,6 +160,12 @@ class GridSource(DataSource):
             self.channel_feature_map = json.load(f)
             self.raw_input_channel_indices = [item for key in self.feature_names_list for item in self.channel_feature_map[key]]
             self.preprocess_channel_indices = sorted(set(self.raw_input_channel_indices))
+            channel_names_by_index = {
+                channel_index: feature_name
+                for feature_name in self.feature_names_list
+                for channel_index in self.channel_feature_map[feature_name]
+            }
+            encoded_feature_names = [channel_names_by_index[channel_index] for channel_index in self.preprocess_channel_indices]
             self.channel_index_to_local_index = {
                 channel_index: local_index for local_index, channel_index in enumerate(self.preprocess_channel_indices)
             }
@@ -182,9 +188,11 @@ class GridSource(DataSource):
                 self.fuel_feat_local_index = self.channel_index_to_local_index[self.fuel_feat_index]
                 if self.fuel_feats_encoding == "one_hot":
                     updated_input_channel_indices = []
+                    updated_feature_names = []
                     for channel_index in self.raw_input_local_indices:
                         if channel_index < self.fuel_feat_local_index:
                             updated_input_channel_indices.append(channel_index)
+                            updated_feature_names.append(encoded_feature_names[channel_index])
                         elif channel_index == self.fuel_feat_local_index:
                             updated_input_channel_indices.extend(
                                 range(
@@ -192,14 +200,26 @@ class GridSource(DataSource):
                                     self.fuel_feat_local_index + self.num_fuel_classes,
                                 )
                             )
+                            updated_feature_names.extend(f"fuel_grid_class_{index}" for index in range(self.num_fuel_classes))
                         else:
                             updated_input_channel_indices.append(channel_index + self.num_fuel_classes - 1)
+                            updated_feature_names.append(encoded_feature_names[channel_index])
                     self.input_channel_indices = updated_input_channel_indices
+                    self.input_feature_names = updated_feature_names
                 elif self.fuel_feats_encoding in FUEL_CURVE_ENCODINGS:
                     # Remove the scalar fuel channel entirely; it will be returned as a separate iROS array.
                     self.input_channel_indices = [
                         channel_index for channel_index in self.raw_input_local_indices if channel_index != self.fuel_feat_local_index
                     ]
+                    self.input_feature_names = [
+                        encoded_feature_names[channel_index]
+                        for channel_index in self.raw_input_local_indices
+                        if channel_index != self.fuel_feat_local_index
+                    ]
+                else:
+                    self.input_feature_names = [encoded_feature_names[channel_index] for channel_index in self.input_channel_indices]
+            else:
+                self.input_feature_names = [encoded_feature_names[channel_index] for channel_index in self.input_channel_indices]
             if "elevation_grid" in self.feature_names_list:
                 elev_feat_local_index = self.channel_index_to_local_index[self.channel_feature_map["elevation_grid"][0]]
                 elev_feat_encoded_index = elev_feat_local_index
@@ -260,7 +280,7 @@ class GridSource(DataSource):
         ``self._dense_fuel_per_hex``    -- {hex_id_str: (max_code+1, L)} for hex-specific codes
         ``self._known_fuel_codes``      -- frozenset of all fuel codes with an explicit lookup entry
         """
-        max_code = max(code for code, _ in self.fuel_curve_lookup.keys())
+        max_code = max(code for code, _ in self.fuel_curve_lookup)
         L = self.fuel_curve_len
 
         # Base array: codes whose curve is the same for every hex (hex_id key is None).
@@ -285,7 +305,7 @@ class GridSource(DataSource):
         self._dense_fuel_per_hex: dict[str, np.ndarray] = dense_per_hex
         # Set of all fuel codes that have an explicit entry in the lookup.
         # Used at get_sample time to detect unsupported codes early.
-        self._known_fuel_codes: frozenset[int] = frozenset(code for code, _ in self.fuel_curve_lookup.keys())
+        self._known_fuel_codes: frozenset[int] = frozenset(code for code, _ in self.fuel_curve_lookup)
 
     def _compute_fuel_curve_normalization_stats(self) -> None:
         """
@@ -505,3 +525,6 @@ class GridSource(DataSource):
         if self.input_channel_indices:
             return len(self.input_channel_indices) + terrain_dim
         return 0
+
+    def output_feature_names(self) -> list[str]:
+        return [*self.input_feature_names, *self.terrain_derivatives]

@@ -547,6 +547,32 @@ def test_validate_runs(dummy_config, dummy_data):
     assert "dummy" in results
 
 
+def test_metric_aggregation_ignores_nonfinite_batches():
+    running_metrics = {"fi/ccc": 0.0, "ros/ccc": 0.0}
+    metric_counts = {"fi/ccc": 0, "ros/ccc": 0}
+
+    Trainer._accumulate_metrics(
+        running_metrics,
+        metric_counts,
+        {"fi/ccc": torch.tensor(float("nan")), "ros/ccc": torch.tensor(0.4)},
+        batch_size=2,
+    )
+    Trainer._accumulate_metrics(
+        running_metrics,
+        metric_counts,
+        {"fi/ccc": torch.tensor(0.6), "ros/ccc": torch.tensor(0.8)},
+        batch_size=2,
+    )
+
+    averages = Trainer._average_metrics(running_metrics, metric_counts)
+    assert averages["fi/ccc"] == pytest.approx(0.6)
+    assert averages["ros/ccc"] == pytest.approx(0.6)
+
+
+def test_checkpoint_comparison_rejects_nonfinite_metrics():
+    assert not Trainer._are_metrics_better([0.6, float("nan")], [], ["max", "max"])
+
+
 def test_validate_return_predictions(dummy_config, dummy_data):
     trainer = Trainer(dummy_config, spatial_input_channels=SPATIAL_CHANNELS)
     patch_trainer(trainer)

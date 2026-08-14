@@ -15,14 +15,14 @@ import numpy as np
 import pandas as pd
 import psutil
 import torch
-import yaml
 
 from data_preparation.paths import MASK_SCOPE_CHOICES
 from src.config import Config, GridParams, apply_run_id_overrides
+from src.config_io import load_config
 from src.datasets.context_crop import validate_context_crop_metadata
 from src.datasets.dataset import MultiSourceDataset, get_test_dataloader
 from src.datasets.postprocessing.utils import evaluate_and_visualize_hexels, print_and_log_eval_metrics
-from src.datasets.utils import get_dataset_dimensions
+from src.datasets.utils import get_dataset_dimensions, get_dataset_spatial_feature_names
 from src.trainer import Trainer
 from src.utils import (
     seed_everything,
@@ -101,19 +101,6 @@ def parse_args() -> argparse.Namespace:
         "Comet experiment name matching the corresponding training run (see run_files/train_no_tmp_copy_array.sh).",
     )
     return parser.parse_args()
-
-
-def load_config(path: str) -> Config:
-    """
-    load yaml config
-    """
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"Config file not found: {path}")
-
-    with open(path) as f:
-        raw = yaml.safe_load(f)
-
-    return Config(**raw)
 
 
 def main(
@@ -204,11 +191,17 @@ def main(
 
     # Get all data sources from the test dataset
     spatial_channels, auxiliary_input_dims = get_dataset_dimensions(test_loader.dataset)
+    spatial_input_names = get_dataset_spatial_feature_names(test_loader.dataset)
     print(f"Detected Data Dimensions: Spatial={spatial_channels} | Auxiliary={auxiliary_input_dims}")
 
     # iROS stats come from the checkpoint (registered buffers), not re-computed at eval time.
     trainer_init_start_time = time.time()
-    trainer = Trainer(config, spatial_input_channels=spatial_channels, auxiliary_input_dims=auxiliary_input_dims)
+    trainer = Trainer(
+        config,
+        spatial_input_channels=spatial_channels,
+        auxiliary_input_dims=auxiliary_input_dims,
+        spatial_input_names=spatial_input_names,
+    )
     trainer_init_time = time.time() - trainer_init_start_time
     if getattr(args, "tif_only", False):
         trainer.metric_functions = {}

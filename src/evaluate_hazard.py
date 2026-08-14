@@ -40,7 +40,7 @@ from src.datasets.postprocessing.hexel_reconstruction import (
 from src.datasets.postprocessing.utils import get_config_grid_params
 from src.datasets.postprocessing.visualize_predictions import as_float_array_with_nan
 from src.datasets.targets import get_target_spec
-from src.datasets.utils import get_dataset_dimensions
+from src.datasets.utils import get_dataset_dimensions, get_dataset_spatial_feature_names
 from src.evaluate_hexels import load_config
 from src.trainer import Trainer
 from src.utils import seed_everything
@@ -164,10 +164,12 @@ def run_test_inference(model_config: Config, seed: int) -> tuple[np.ndarray, str
         seed=seed,
     )
     spatial_channels, auxiliary_input_dims = get_dataset_dimensions(test_loader.dataset)
+    spatial_input_names = get_dataset_spatial_feature_names(test_loader.dataset)
     trainer = Trainer(
         model_config,
         spatial_input_channels=spatial_channels,
         auxiliary_input_dims=auxiliary_input_dims,
+        spatial_input_names=spatial_input_names,
     )
     trainer.load_model(filename=model_config.evaluation.checkpoint_filename)
     _, test_predictions = trainer.test(test_loader, return_predictions=True)

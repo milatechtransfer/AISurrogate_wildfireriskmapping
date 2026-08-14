@@ -29,6 +29,7 @@ class ModelConfig(BaseModel):
     num_classes: int = 1
     output_head: Literal["shared", "bp_behavior"] = "shared"
     hidden_features: list[int] = [64, 128, 256, 512]
+    spatial_input_names: list[str] = []
 
     # Controls if we use MultiSourceUNet or BaselineUNet
     # Use ["spatial"] for base unet
@@ -40,6 +41,22 @@ class ModelConfig(BaseModel):
     use_transpose_conv: bool = False
     use_activation_after_upsampling: bool = False
     use_coordconv: bool = False
+
+    # Mechanistic fire propagation
+    propagation_base_channels: int = Field(default=24, gt=0)
+    propagation_downsample_factor: Literal[4, 8] = 8
+    propagation_steps: int = Field(default=24, gt=0)
+    propagation_cell_size_m: float = Field(default=100.0, gt=0.0)
+    propagation_survival_sharpness: float = Field(default=6.0, gt=0.0)
+    propagation_min_area_multiplier: float = Field(default=0.05, gt=0.0)
+    propagation_max_area_multiplier: float = Field(default=20.0, gt=0.0)
+    propagation_logit_eps: float = Field(default=1e-6, gt=0.0, lt=0.5)
+
+    @model_validator(mode="after")
+    def validate_propagation_area_multiplier(self) -> "ModelConfig":
+        if self.propagation_max_area_multiplier <= self.propagation_min_area_multiplier:
+            raise ValueError("propagation_max_area_multiplier must exceed propagation_min_area_multiplier.")
+        return self
 
     # specific to auxiliary model
     auxiliary_hidden_dims: dict[str, list[int] | dict[str, list[int]]] = {"tabular_weather": [32, 64]}
@@ -92,6 +109,7 @@ class SchedulerConfig(BaseModel):
 class TrainingConfig(BaseModel):
     max_epochs: int = 50
     log_every_n_epoch: int = 1
+    gradient_accumulation_steps: int = Field(default=1, gt=0)
 
 
 class EvaluationConfig(BaseModel):
@@ -222,6 +240,20 @@ class SpatializedTabularParams(TabularParams):
     include_missing_firezone_mask: bool = False
     missing_value_strategy: str = "global_mean"
     global_fill_csv_name: str | None = None
+    quantiles: list[float] | None = None
+
+    @field_validator("quantiles")
+    @classmethod
+    def validate_quantiles(cls, values: list[float] | None) -> list[float] | None:
+        if values is None:
+            return None
+        if not values:
+            raise ValueError("quantiles must not be empty.")
+        if any(not 0.0 < value < 1.0 for value in values):
+            raise ValueError("quantiles must lie strictly between 0 and 1.")
+        if values != sorted(set(values)):
+            raise ValueError("quantiles must be sorted and unique.")
+        return values
 
 
 class DataSourceConfig(BaseModel):

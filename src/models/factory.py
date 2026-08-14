@@ -2,10 +2,12 @@ import torch
 import torch.nn as nn
 
 from src.config import ModelConfig
+from src.models.mechanistic_propagation import MechanisticFirePropagationUNet
 from src.models.unet import BaselineUNet, MultiSourceUNet
 
 BASELINE_UNET_NAMES = {"baseline_unet", "baseline", "unet"}
 MULTI_SOURCE_UNET_NAMES = {"multi_source_unet", "multisource_unet", "multi_source", "multisource"}
+MECHANISTIC_PROPAGATION_NAMES = {"mechanistic_propagation", "fire_propagation", "propagation_unet"}
 
 
 def _normalize_architecture_name(name: str) -> str:
@@ -83,5 +85,21 @@ def build_model(
             target_names=target_names,
         )
 
-    supported = sorted(BASELINE_UNET_NAMES | MULTI_SOURCE_UNET_NAMES | {"auto"})
+    if architecture in MECHANISTIC_PROPAGATION_NAMES:
+        if auxiliary_requested:
+            raise ValueError("Mechanistic propagation supports spatial inputs and early-fused iROS only.")
+        if target_names is None:
+            raise ValueError("target_names are required for mechanistic propagation.")
+        return MechanisticFirePropagationUNet(
+            input_channels=spatial_input_channels,
+            spatial_input_names=model_config.spatial_input_names,
+            model_config=model_config,
+            fuel_curve_input_dim=fuel_curve_input_dim,
+            fuel_curve_embed_dim=fuel_curve_embed_dim,
+            fuel_curve_mean=fuel_curve_mean,
+            fuel_curve_std=fuel_curve_std,
+            target_names=target_names,
+        )
+
+    supported = sorted(BASELINE_UNET_NAMES | MULTI_SOURCE_UNET_NAMES | MECHANISTIC_PROPAGATION_NAMES | {"auto"})
     raise ValueError(f"Unknown model architecture '{model_config.architecture}'. Supported values: {supported}")
