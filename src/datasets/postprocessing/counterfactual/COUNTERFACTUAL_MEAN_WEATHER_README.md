@@ -265,14 +265,16 @@ scenarios:
 
   - name: "wind_dir_000"
     kind: "weather"
-    description: "Hex16's windiest days (raw WindSpeed >= 20 km/h), wind forced to blow from 0 deg (N)."
-    params: {mode: "wind_direction_zone_transplant", donor_hex_ids: ["16"], wind_speed_threshold: 20, direction_degrees: 0}
+    description: "Hex16's average wind speed (all rows, WindSpeed >= 0), wind forced to blow from 0 deg (N)."
+    params: {mode: "wind_direction_zone_transplant", donor_hex_ids: ["16"], wind_speed_threshold: 0, direction_degrees: 0}
   # ... one scenario per direction (045, 090, 135, 180, 225, 270, 315, 360)
 ```
 
 `direction_degrees` and `wind_speed_threshold` are both required for this mode
-and raise a clear `ValueError` if omitted; the mode also requires
-`weather_norm_params.json` to exist next to the processed weather table.
+and raise a clear `ValueError` if omitted (`wind_speed_threshold: 0` includes
+every donor row, i.e. the donor's ordinary average wind speed); the mode also
+requires `weather_norm_params.json` to exist next to the processed weather
+table.
 
 ### Running
 
