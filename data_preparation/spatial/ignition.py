@@ -207,4 +207,19 @@ def load_ignition_grid_weighted(
     H, W = ref.shape
     out = np.ma.stack(channels, axis=-1)  # (H, W, num_causes)
     assert out.shape == (H, W, len(fire_cause_mapping))
+
+    # The ignition TIFs do not carry nodata outside the hex boundary (they are
+    # fully "valid" over their whole rectangular extent, having a value of 0), so masking must be
+    # borrowed from firezones_grid instead, which is pixel-aligned with the
+    # ignition grids and correctly masked to the true hex boundary. This requires
+    # the caller to have loaded firezones_grid with the same reference_profile
+    # and mask_scope used here, so the two arrays line up pixel-for-pixel.
+    if zone_mask.shape != (H, W):
+        raise ValueError(
+            f"firezones_grid shape {zone_mask.shape} does not match ignition grid shape {(H, W)} for hex{hex_id}. "
+            "Ensure firezones_grid was loaded with the same reference_profile and mask_scope as this call, "
+            "otherwise the hex boundary mask cannot be applied correctly."
+        )
+    out.mask = np.ma.getmaskarray(out) | zone_mask[:, :, None]
+
     return out

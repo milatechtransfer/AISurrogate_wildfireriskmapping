@@ -5,9 +5,8 @@ import numpy as np
 from data_preparation.paths import Paths
 
 # from data_preparation.spatial.ignition import load_ignition_grid, load_ignition_grid_weighted
-from data_preparation.spatial.utils import FUEL_GROUP_MAP, load_spatial_raster
-
 # from data_preparation.visualizations import visualize_elevation_grid, visualize_fuel_grid
+from data_preparation.spatial.utils import FUEL_GROUP_MAP, load_spatial_raster
 
 
 def load_fuel_grid(

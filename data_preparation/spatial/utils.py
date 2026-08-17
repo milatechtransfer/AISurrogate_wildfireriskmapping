@@ -87,10 +87,10 @@ def load_raster(path: str) -> np.ma.MaskedArray:
 
 def load_spatial_raster(
     path: Path,
-    reproject_flag: bool = False,
+    reproject_flag: bool = True,
     mask_path: Path | None = None,
     reference_profile: dict[str, Any] | None = None,
-    crop_nodata_border: bool = False,
+    crop_nodata_border: bool = True,
 ) -> tuple[np.ma.MaskedArray, dict[str, Any]]:
     """
     Load one raster band, optionally reproject, clip, and crop its outer
