@@ -20,15 +20,24 @@ from src.datasets.postprocessing.counterfactual.counterfactual_base import (
     load_counterfactual_config,
     resolve_counterfactual_paths,
 )
+from src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_intervention_map import (
+    load_zone_labels_on_prediction_grid,
+)
 from src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps import (
     ENDPOINT_SPECS,
     _extent_km,
     load_endpoint_response,
 )
 from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz import (
+    DEFAULT_ZONE_OVERLAY_ALPHA,
+    DEFAULT_ZONE_OVERLAY_COLOR,
+    DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    add_zone_overlay_args,
     delta_norm,
     downsample_for_display,
+    overlay_zone_boundaries,
     prediction_dirs_from_index,
+    prediction_footprint,
 )
 
 matplotlib.use("Agg")
@@ -62,6 +71,10 @@ def plot_compass_diff_maps(
     downsample: int,
     radius: float = 0.35,
     panel_size: float = 0.20,
+    zone_labels: np.ma.MaskedArray | None = None,
+    zone_overlay_color: str = DEFAULT_ZONE_OVERLAY_COLOR,
+    zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
+    zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
 ) -> None:
     """One \u0394{endpoint} panel per compass bearing, arranged on a circle (0\u00b0 = N, up)."""
     spec = ENDPOINT_SPECS[endpoint]
@@ -79,6 +92,14 @@ def plot_compass_diff_maps(
             extent=extent,
             origin="upper",
             interpolation="nearest",
+        )
+        overlay_zone_boundaries(
+            ax,
+            zone_labels,
+            extent=extent,
+            color=zone_overlay_color,
+            linewidth=zone_overlay_linewidth,
+            alpha=zone_overlay_alpha,
         )
         ax.set_aspect("equal")
         ax.set_xticks([])
@@ -113,6 +134,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--downsample", type=int, default=3, help="Stride factor for map display only.")
     parser.add_argument("--raw_data_dir", type=Path, default=None, help="Overrides raw_data_dir from --config.")
     parser.add_argument("--out_dir", type=Path, default=None, help="Defaults to experiment_dir/figures/compass.")
+    add_zone_overlay_args(parser)
     return parser.parse_args()
 
 
@@ -127,8 +149,9 @@ def main() -> None:
 
     deltas: dict[int, np.ma.MaskedArray] = {}
     extent_m: tuple[float, float, float, float] | None = None
+    reference_profile: dict | None = None
     for direction_degrees in DIRECTIONS_DEG:
-        _, _, _, delta, extent_m, _ = load_endpoint_response(
+        _, _, _, delta, extent_m, reference_profile = load_endpoint_response(
             experiment_dir,
             prediction_dirs,
             args.hex_id,
@@ -139,6 +162,16 @@ def main() -> None:
         )
         deltas[direction_degrees] = delta
     assert extent_m is not None
+    assert reference_profile is not None
+
+    zone_labels = None
+    if args.zone_overlay:
+        zone_labels = load_zone_labels_on_prediction_grid(
+            raw_data_dir=raw_data_dir,
+            reference_profile=reference_profile,
+            hex_id=args.hex_id,
+            support=prediction_footprint(prediction_dirs, args.hex_id, endpoint=args.endpoint),
+        )
 
     spec = ENDPOINT_SPECS[args.endpoint]
     out_path = out_dir / f"wind_direction_compass_{args.endpoint}.png"
@@ -149,6 +182,10 @@ def main() -> None:
         out_path=out_path,
         suptitle=f"{spec.label} \u0394 by forced wind direction \u2014 hex {args.hex_id}",
         downsample=args.downsample,
+        zone_labels=zone_labels,
+        zone_overlay_color=args.zone_overlay_color,
+        zone_overlay_linewidth=args.zone_overlay_linewidth,
+        zone_overlay_alpha=args.zone_overlay_alpha,
     )
     print(f"Compass diff map written to {out_path}")
 
