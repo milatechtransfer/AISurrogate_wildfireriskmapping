@@ -22,4 +22,4 @@ scenarios:
     params:
       mode: "windy_mean_zone_transplant"
       donor_hex_ids: ["16"]
-      wind_speed_threshold: 20
+      wind_speed_percentile: 90

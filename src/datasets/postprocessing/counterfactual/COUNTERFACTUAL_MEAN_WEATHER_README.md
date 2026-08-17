@@ -134,8 +134,10 @@ its typical conditions, without mixing in a different hexel's climate.
 The configured `windy_mean_zone_transplant` mode:
 
 1. Reconstructs the raw weather-table row order with a hex ID attached to each row.
-2. Restricts the donor rows to `donor_hex_ids` rows whose raw `WindSpeed` is `>=`
-   the configured `wind_speed_threshold`.
+2. Computes the `wind_speed_percentile`-th percentile of raw `WindSpeed` across the
+   `donor_hex_ids` pool, then restricts the donor rows to those `>=` that value
+   (`wind_speed_percentile: 0` keeps every donor row / the donor's ordinary average
+   wind speed; `90` keeps its windiest 10%).
 3. Computes the mean of every processed weather feature across those windy donor
    rows only.
 4. Builds the baseline `(hex_id, WeatherZone) -> feature vector` lookup table.
@@ -146,10 +148,12 @@ The configured `windy_mean_zone_transplant` mode:
 to itself, as in the example config below) or differ (an external hexel's windy
 rows are transplanted, as with `external_mean_zone_transplant`).
 
-The example config uses `donor_hex_ids: ["16"]`, `wind_speed_threshold: 20`
-(km/h) - approximately the 90th percentile of hex16's raw `WindSpeed`
-distribution (median 11, 90th pct 20, 95th pct 23.4, max 64.8), so the donor mean
-is computed over hex16's windiest ~10% of rows.
+The example config uses `donor_hex_ids: ["16"]`, `wind_speed_percentile: 90` -
+the 90th percentile of hex16's raw `WindSpeed` distribution resolves to 20 km/h
+(median 11, 90th pct 20, 95th pct 23.4, max 64.8), so the donor mean is computed
+over hex16's windiest ~10% of rows. The resolved absolute cutoff is recorded per
+scenario as `wind_speed_threshold_kmh` in `weather_edit_summary.csv` for
+transparency.
 
 ### Configuration
 
@@ -174,16 +178,17 @@ scenarios:
 
   - name: "bc_windy_self_transplant"
     kind: "weather"
-    description: "Assign every hex16 weather zone the exact mean processed-weather vector across hex16's own rows with raw WindSpeed >= 20 km/h."
+    description: "Assign every hex16 weather zone the exact mean processed-weather vector across hex16's own rows with raw WindSpeed >= 20 km/h (90th percentile)."
     params:
       mode: "windy_mean_zone_transplant"
       donor_hex_ids: ["16"]
-      wind_speed_threshold: 20
+      wind_speed_percentile: 90
 ```
 
-`wind_speed_threshold` is required for this mode (a numeric raw `WindSpeed`
-lower bound, applied as `>=`) and raises a clear `ValueError` if omitted, or if no
-donor rows clear the threshold.
+`wind_speed_percentile` is required for this mode (a numeric value in `[0, 100]`,
+the percentile of the donor pool's own raw `WindSpeed` distribution used as an
+inclusive `>=` lower bound) and raises a clear `ValueError` if omitted or out of
+range.
 
 ### Running
 
@@ -219,9 +224,10 @@ rows, unchanged.
 
 The configured `wind_direction_zone_transplant` mode:
 
-1. Restricts donor rows to `donor_hex_ids` rows whose raw `WindSpeed` is `>=`
-   `wind_speed_threshold` (set the threshold to `0` to use every donor row / the
-   donor's ordinary average wind speed, instead of only its windiest days).
+1. Computes the `wind_speed_percentile`-th percentile of raw `WindSpeed` across
+   the `donor_hex_ids` pool, then restricts donor rows to those `>=` that value
+   (`wind_speed_percentile: 0` uses every donor row / the donor's ordinary
+   average wind speed, instead of only its windiest days).
 2. For each surviving donor row, keeps its recorded `WindSpeed` but overrides its
    `WindDirection` to the scenario's `direction_degrees`, then recomputes
    `wind_x`/`wind_y` and re-normalizes them with the same z-score parameters
@@ -265,15 +271,15 @@ scenarios:
 
   - name: "wind_dir_000"
     kind: "weather"
-    description: "Hex16's average wind speed (all rows, WindSpeed >= 0), wind forced to blow from 0 deg (N)."
-    params: {mode: "wind_direction_zone_transplant", donor_hex_ids: ["16"], wind_speed_threshold: 0, direction_degrees: 0}
+    description: "Hex16's average wind speed (all rows, wind_speed_percentile=0), wind forced to blow from 0 deg (N)."
+    params: {mode: "wind_direction_zone_transplant", donor_hex_ids: ["16"], wind_speed_percentile: 0, direction_degrees: 0}
   # ... one scenario per direction (045, 090, 135, 180, 225, 270, 315, 360)
 ```
 
-`direction_degrees` and `wind_speed_threshold` are both required for this mode
-and raise a clear `ValueError` if omitted (`wind_speed_threshold: 0` includes
-every donor row, i.e. the donor's ordinary average wind speed); the mode also
-requires `weather_norm_params.json` to exist next to the processed weather
+`direction_degrees` and `wind_speed_percentile` are both required for this mode
+and raise a clear `ValueError` if omitted or out of range (`wind_speed_percentile: 0`
+includes every donor row, i.e. the donor's ordinary average wind speed); the mode
+also requires `weather_norm_params.json` to exist next to the processed weather
 table.
 
 ### Running
