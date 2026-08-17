@@ -35,6 +35,46 @@ def generate_feature_channel_map(feature_list: list[np.ndarray], feature_channel
         json.dump(feature_channel_map, f, indent=4)
 
 
+def crop_window_path(feature_channel_map_path: str) -> str:
+    """Path to the per-hex crop-window registry saved alongside the feature channel map.
+
+    Data prep crops every feature grid to the shared valid-data bounding box
+    (see ``stack_sample`` below) before splitting it into patches, so patch
+    ``row``/``col`` coordinates are relative to that cropped array, not the full
+    reprojected reference grid. Reconstruction at evaluation time must apply the
+    exact same crop before stitching patches back together, otherwise every
+    patch is pasted at an offset position. This registry records, per hex (and
+    mask scope), the crop window used so reconstruction can reproduce it exactly.
+    """
+    return os.path.join(os.path.dirname(feature_channel_map_path), "crop_windows.json")
+
+
+def save_crop_window(feature_channel_map_path: str, hex_id: str, mask_scope: str | None, window: tuple[int, int, int, int]):
+    """Persist the (row_off, col_off, height, width) crop window used for one hex/scope."""
+    path = crop_window_path(feature_channel_map_path)
+    registry: dict[str, dict[str, list[int]]] = {}
+    if os.path.exists(path):
+        with open(path) as f:
+            registry = json.load(f)
+    scope_key = mask_scope or "none"
+    registry.setdefault(str(hex_id), {})[scope_key] = list(window)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(registry, f, indent=4)
+
+
+def load_crop_window(feature_channel_map_path: str, hex_id: str, mask_scope: str | None) -> tuple[int, int, int, int] | None:
+    """Load the persisted (row_off, col_off, height, width) crop window for one hex/scope, if present."""
+    path = crop_window_path(feature_channel_map_path)
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        registry = json.load(f)
+    scope_key = mask_scope or "none"
+    window = registry.get(str(hex_id), {}).get(scope_key)
+    return tuple(window) if window is not None else None  # type: ignore[return-value]
+
+
 def load_spatial_features_per_hexel(
     root_dir: str,
     hex_id: str,
@@ -133,9 +173,18 @@ def load_spatial_features_per_hexel(
         # Crop the shared empty nodata border, once, using the union of the
         # boundary-defining masks (fuel/elevation/ignition/firezones), so every
         # feature layer is trimmed identically regardless of its own nodata quirks.
+        # Persist this crop window so reconstruction at evaluation time can apply
+        # the exact same crop before stitching patches (whose row/col metadata is
+        # relative to this cropped array, not the full reference grid).
         crop_window = get_data_window(np.ma.masked_array(np.zeros(input_mask.shape, dtype=np.uint8), mask=input_mask))
         row_start, row_end = int(crop_window.row_off), int(crop_window.row_off) + int(crop_window.height)
         col_start, col_end = int(crop_window.col_off), int(crop_window.col_off) + int(crop_window.width)
+        save_crop_window(
+            feature_channel_map_path,
+            hex_id=hex_id,
+            mask_scope=scope,
+            window=(row_start, col_start, row_end - row_start, col_end - col_start),
+        )
         stacked = stacked[row_start:row_end, col_start:col_end, :]
         input_mask = input_mask[row_start:row_end, col_start:col_end]
 
@@ -158,6 +207,9 @@ def load_spatial_features_per_hexel(
     all_paths = Paths(hex_id=hex_id, root_dir=root_dir)
     scope_mask_path = all_paths.mask_grid(hex_id=hex_id, mask_scope=scope) if scope is not None else None
 
+    # Elevation establishes the reference grid for all other rasters. reproject_flag
+    # defaults to True here so elevation itself gets reprojected onto the standard
+    # "ESRI:102002" CRS/resolution, matching how the training data was prepared.
     elevation_grid, reference_profile = load_spatial_raster(path=all_paths.elevation_grid(hex_id=hex_id), mask_path=scope_mask_path)
     # load all common grids on the elevation reference grid
     fuel_grid = load_fuel_grid(
@@ -220,17 +272,22 @@ def load_spatial_features_per_hexel(
 
 # if __name__ == "__main__":
 #     root_dir = "../NWT_data/fortsimpson_data_Jun2026"
-#     hex_id="100"
-#     scenario_name="FireSpotting"
-#     arr, mask, _ = load_spatial_features_per_hexel(root_dir=root_dir, hex_id=hex_id, scenario_name=scenario_name,
-#                                      feature_channel_map_path="../burnp3plus/data_samples_v3/feature_channel_map_1.json")
+#     hex_id = "100"
+#     scenario_name = "FireSpotting"
+#     arr, mask, _ = load_spatial_features_per_hexel(
+#         root_dir=root_dir,
+#         hex_id=hex_id,
+#         scenario_name=scenario_name,
+#         feature_channel_map_path="../burnp3plus/data_samples_v3/feature_channel_map_1.json",
+#     )
+#     assert arr is not None and mask is not None
 #     print(arr.shape)
 #     print(mask.shape)
 #     visualize_elevation_grid(mask[0])
-#     # visualize_elevation_grid(arr[0, :, :, 1])
-#     # visualize_elevation_grid(arr[0, :, :, 2])
-#     # visualize_elevation_grid(arr[0, :, :, 3])
-#     # visualize_elevation_grid(arr[0, :, :, 4])
-#     # visualize_elevation_grid(arr[0, :, :, 5])
-#     # visualize_elevation_grid(arr[0, :, :, 6])
-#     # visualize_elevation_grid(arr[0, :, :, 7])
+#     visualize_elevation_grid(arr[0, :, :, 1])
+#     visualize_elevation_grid(arr[0, :, :, 2])
+#     visualize_elevation_grid(arr[0, :, :, 3])
+#     visualize_elevation_grid(arr[0, :, :, 4])
+#     visualize_elevation_grid(arr[0, :, :, 5])
+#     visualize_elevation_grid(arr[0, :, :, 6])
+#     visualize_elevation_grid(arr[0, :, :, 7])

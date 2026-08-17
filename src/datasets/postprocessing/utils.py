@@ -17,6 +17,7 @@ import torch
 from rasterio.features import geometry_mask
 from rasterio.profiles import Profile
 
+from data_preparation.hexel_loader import load_crop_window
 from data_preparation.paths import MaskScope, Paths, normalize_mask_scope
 from data_preparation.spatial.utils import (
     denormalize_burn_count,
@@ -302,10 +303,31 @@ def get_predicted_hexel(
     all_paths = Paths(hex_id=hex_id, root_dir=raw_data_dir)
     scope = normalize_mask_scope(mask_scope) if mask_scope is not None else None
 
+    # Elevation establishes the reference grid for stitching predictions and
+    # reprojecting the ground-truth target below. Keep the default reproject_flag
+    # (True) so this matches the CRS/resolution ("ESRI:102002") the training data
+    # was prepared on.
     gt_elevation_grid, gt_elevation_grid_profile = load_spatial_raster(
         path=all_paths.elevation_grid(hex_id=hex_id),
         mask_path=all_paths.mask_grid(hex_id=hex_id, mask_scope=scope) if scope is not None else None,
     )
+
+    # Data prep crops every feature grid to the shared valid-data bounding box
+    # before splitting it into patches (see data_preparation.hexel_loader), so the
+    # patch `row`/`col` metadata in test_df is relative to that cropped array, not
+    # this freshly-loaded, uncropped reference grid. Apply the exact same crop
+    # here so patches are pasted at the correct position during stitching.
+    feature_channel_map_path = os.path.join(base_dir, f"feature_channel_map_{modelling_approach}.json")
+    crop_window = load_crop_window(feature_channel_map_path, hex_id=hex_id, mask_scope=scope)
+    if crop_window is not None:
+        row_off, col_off, height, width = crop_window
+        gt_elevation_grid = gt_elevation_grid[row_off : row_off + height, col_off : col_off + width]
+        gt_elevation_grid_profile = gt_elevation_grid_profile.copy()
+        cropped_transform = rasterio.windows.transform(
+            rasterio.windows.Window(col_off=col_off, row_off=row_off, width=width, height=height),
+            gt_elevation_grid_profile["transform"],
+        )
+        gt_elevation_grid_profile.update(height=height, width=width, transform=cropped_transform)
 
     if out_norm in {"min_max", "log"}:
         predictions = np.clip(predictions, 0, 1)
