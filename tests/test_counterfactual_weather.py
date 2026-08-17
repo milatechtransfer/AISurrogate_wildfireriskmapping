@@ -275,6 +275,54 @@ def test_apply_windy_mean_zone_transplant_rejects_out_of_range_percentile() -> N
         )
 
 
+def test_apply_windy_mean_zone_transplant_filters_by_season() -> None:
+    raw, processed = _weather_frames()
+
+    # hex17 donor rows (indices 2, 3): Season=[1, 2], WindSpeed=[10, 40]. Restricting
+    # to season=1 keeps only index 2, and to season=2 keeps only index 3, before the
+    # (here permissive, percentile=0) WindSpeed cutoff is resolved.
+    _, spring_reports = cw.apply_windy_mean_zone_transplant(
+        raw,
+        processed,
+        recipient_hex_ids=["16"],
+        donor_hex_ids=["17"],
+        wind_speed_percentile=0.0,
+        season=1,
+        scenario_name="scenario_s1",
+    )
+    assert spring_reports[0].n_donor_rows == 1
+    assert spring_reports[0].donor_fwi_mean == pytest.approx(30.0)
+    assert spring_reports[0].season == 1
+
+    _, summer_reports = cw.apply_windy_mean_zone_transplant(
+        raw,
+        processed,
+        recipient_hex_ids=["16"],
+        donor_hex_ids=["17"],
+        wind_speed_percentile=0.0,
+        season=2,
+        scenario_name="scenario_s2",
+    )
+    assert summer_reports[0].n_donor_rows == 1
+    assert summer_reports[0].donor_fwi_mean == pytest.approx(50.0)
+    assert summer_reports[0].season == 2
+
+
+def test_apply_windy_mean_zone_transplant_raises_when_no_rows_match_season() -> None:
+    raw, processed = _weather_frames()
+
+    with pytest.raises(ValueError, match="No weather rows with Season=99"):
+        cw.apply_windy_mean_zone_transplant(
+            raw,
+            processed,
+            recipient_hex_ids=["16"],
+            donor_hex_ids=["17"],
+            wind_speed_percentile=0.0,
+            season=99,
+            scenario_name="scenario",
+        )
+
+
 def test_apply_windy_mean_zone_transplant_requires_wind_speed_column() -> None:
     raw, processed = _weather_frames()
 
@@ -313,6 +361,20 @@ def test_apply_weather_edit_dispatches_windy_mode_and_requires_percentile() -> N
             recipient_hex_ids=["16"],
             params={"donor_hex_ids": ["17"]},
         )
+
+
+def test_apply_weather_edit_dispatches_windy_mode_with_optional_season() -> None:
+    raw, processed = _weather_frames()
+    _, reports = cw.apply_weather_edit(
+        raw,
+        processed,
+        mode="windy_mean_zone_transplant",
+        scenario_name="scenario",
+        recipient_hex_ids=["16"],
+        params={"donor_hex_ids": ["17"], "wind_speed_percentile": 0, "season": 1},
+    )
+    assert reports[0].season == 1
+    assert reports[0].n_donor_rows == 1
 
 
 def test_apply_wind_direction_zone_transplant_forces_direction_and_renormalizes(tmp_path: Path) -> None:
@@ -470,6 +532,8 @@ def test_apply_weather_edit_dispatches_wind_direction_mode_and_requires_params(t
 def _zone_dependent_weather_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
     """Single self-donor hex ("16") with two zones (4, 9) that have distinctly
     different wind climatologies, to exercise per-zone (not hex-wide) donor pools.
+    Each zone alternates Season 1/2 (lower/higher WindSpeed) to also exercise the
+    per-zone `season` filter.
     """
     raw = pd.DataFrame(
         {
@@ -482,7 +546,7 @@ def _zone_dependent_weather_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
     processed = pd.DataFrame(
         {
             "Order": [1, 2, 3, 4],
-            "Season": [1, 1, 1, 1],
+            "Season": [1, 2, 1, 2],
             "hex_id": [16, 16, 16, 16],
             "WeatherZone": raw["WeatherZone"],
             "Temperature": [10.0, 20.0, 30.0, 40.0],
@@ -530,6 +594,44 @@ def test_apply_windy_mean_zone_dependent_transplant_computes_per_zone_donor_mean
         assert report.mode == "windy_mean_zone_dependent_transplant"
         assert report.wind_speed_percentile == pytest.approx(100.0)
         assert report.n_recipient_zones == 1
+
+
+def test_apply_windy_mean_zone_dependent_transplant_filters_by_season_per_zone() -> None:
+    raw, processed = _zone_dependent_weather_frames()
+
+    # season=1 keeps only each zone's Season==1 row: zone 4's WindSpeed=5 row
+    # (index 0) and zone 9's WindSpeed=8 row (index 2), independently.
+    _, reports = cw.apply_windy_mean_zone_dependent_transplant(
+        raw,
+        processed,
+        recipient_hex_ids=["16"],
+        donor_hex_ids=["16"],
+        wind_speed_percentile=0.0,
+        season=1,
+        scenario_name="windy_zone_dependent_s1",
+    )
+    reports_by_zone = {report.weather_zone: report for report in reports}
+    assert reports_by_zone[4].n_donor_rows == 1
+    assert reports_by_zone[4].wind_speed_threshold_kmh == pytest.approx(5.0)
+    assert reports_by_zone[9].n_donor_rows == 1
+    assert reports_by_zone[9].wind_speed_threshold_kmh == pytest.approx(8.0)
+    for report in reports:
+        assert report.season == 1
+
+
+def test_apply_windy_mean_zone_dependent_transplant_raises_when_zone_has_no_matching_season() -> None:
+    raw, processed = _zone_dependent_weather_frames()
+
+    with pytest.raises(ValueError, match="No weather rows with Season=99"):
+        cw.apply_windy_mean_zone_dependent_transplant(
+            raw,
+            processed,
+            recipient_hex_ids=["16"],
+            donor_hex_ids=["16"],
+            wind_speed_percentile=0.0,
+            season=99,
+            scenario_name="scenario",
+        )
 
 
 def test_apply_wind_direction_zone_dependent_transplant_preserves_per_zone_magnitude(tmp_path: Path) -> None:

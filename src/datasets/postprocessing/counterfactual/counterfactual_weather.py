@@ -66,6 +66,11 @@ class WeatherEditReport:
     # Set only for zone-dependent modes (one report row per recipient (hex_id,
     # WeatherZone) pair); None for whole-hex modes.
     weather_zone: int | None = None
+    # Set only when a `season` filter was applied (currently `windy_mean_zone_transplant`
+    # and its zone-dependent variant); restricts the donor pool to rows whose
+    # processed `Season` integer matches, before the wind_speed_percentile cutoff.
+    # None means no season restriction (every season pooled together).
+    season: int | None = None
 
 
 def _hex_id_from_weather_path(path: Path) -> str:
@@ -178,6 +183,20 @@ def _percentile_wind_speed_filter(
     return filtered_mask, threshold_value
 
 
+def _season_filter(
+    season_values: np.ndarray,
+    base_mask: np.ndarray,
+    season: int,
+    *,
+    context: str,
+) -> np.ndarray:
+    """Restrict `base_mask` to rows whose processed `Season` integer equals `season`."""
+    filtered_mask = base_mask & (season_values == season)
+    if not filtered_mask.any():
+        raise ValueError(f"No weather rows with Season={season} found for {context}.")
+    return filtered_mask
+
+
 def _apply_mean_zone_transplant(
     raw_features: pd.DataFrame,
     processed: pd.DataFrame,
@@ -187,6 +206,7 @@ def _apply_mean_zone_transplant(
     scenario_name: str,
     mode: str,
     wind_speed_percentile: float | None = None,
+    season: int | None = None,
 ) -> tuple[pd.DataFrame, list[WeatherEditReport]]:
     """Give recipient hexels the exact mean processed-weather vector of donor hexels.
 
@@ -196,7 +216,11 @@ def _apply_mean_zone_transplant(
     `recipient_hex_ids` (e.g. a hexel can donate its own filtered rows to itself).
     When `wind_speed_percentile` is set, the donor mean is restricted to donor rows
     whose raw `WindSpeed` is at/above that percentile of the donor pool's own
-    WindSpeed distribution (0 = every donor row, 90 = its windiest 10%).
+    WindSpeed distribution (0 = every donor row, 90 = its windiest 10%). When
+    `season` is also set, the donor pool is first restricted to that processed
+    `Season` integer (e.g. hex16's s1/s2) before the percentile is computed, so
+    "windiest days" is resolved within that season alone (e.g. windiest spring days
+    vs windiest summer/fall days).
     """
     if FWI_COLUMN not in raw_features.columns or FWI_COLUMN not in processed.columns:
         raise ValueError(f"Raw and processed weather tables must include {FWI_COLUMN!r}.")
@@ -211,6 +235,10 @@ def _apply_mean_zone_transplant(
         raise ValueError(f"No weather rows found for recipient hex_id(s)={missing_recipients}.")
 
     normalized_donor_ids, donor_mask = _donor_mask_from_hex_ids(processed_hex_ids, donor_hex_ids)
+
+    if season is not None:
+        season_values = pd.to_numeric(processed["Season"], errors="coerce").to_numpy(dtype=np.float64)
+        donor_mask = _season_filter(season_values, donor_mask, season, context=f"donor_hex_ids={normalized_donor_ids}")
 
     wind_speed_threshold_kmh: float | None = None
     if wind_speed_percentile is not None:
@@ -253,6 +281,7 @@ def _apply_mean_zone_transplant(
                 scenario_fwi_mean=donor_fwi_mean,
                 wind_speed_percentile=wind_speed_percentile,
                 wind_speed_threshold_kmh=wind_speed_threshold_kmh,
+                season=season,
             )
         )
     return edited, reports
@@ -288,6 +317,7 @@ def apply_windy_mean_zone_transplant(
     donor_hex_ids: list[str],
     wind_speed_percentile: float,
     scenario_name: str,
+    season: int | None = None,
 ) -> tuple[pd.DataFrame, list[WeatherEditReport]]:
     """Give recipient hexels the mean processed-weather vector of donor rows with high wind.
 
@@ -296,7 +326,10 @@ def apply_windy_mean_zone_transplant(
     pool's own raw WindSpeed distribution (0 = every donor row / its ordinary
     average wind speed, 90 = its windiest 10%). `donor_hex_ids` may equal
     `recipient_hex_ids` to give a hexel the mean of its own windiest days instead of
-    an external donor's.
+    an external donor's. When `season` is set (the processed `Season` integer, e.g.
+    hex16's s1=1/s2=2), the donor pool is first restricted to that season before the
+    percentile is resolved, so "windiest days" is computed within that season alone
+    (e.g. windiest spring days vs windiest summer/fall days).
     """
     return _apply_mean_zone_transplant(
         raw_features,
@@ -306,6 +339,7 @@ def apply_windy_mean_zone_transplant(
         scenario_name=scenario_name,
         mode=WINDY_MEAN_ZONE_TRANSPLANT_MODE,
         wind_speed_percentile=wind_speed_percentile,
+        season=season,
     )
 
 
@@ -452,6 +486,7 @@ def _apply_mean_zone_dependent_transplant(
     wind_speed_percentile: float,
     direction_degrees: float | None = None,
     norm_params_path: str | Path | None = None,
+    season: int | None = None,
 ) -> tuple[pd.DataFrame, list[WeatherEditReport]]:
     """Shared zone-scoped implementation for the `*_zone_dependent_transplant` modes.
 
@@ -466,8 +501,10 @@ def _apply_mean_zone_dependent_transplant(
     zones can have quite different wind climatologies. Pass `direction_degrees` (and
     `norm_params_path`) to also force wind direction per zone (as
     `wind_direction_zone_dependent_transplant` does); leave both `None` for a
-    zone-dependent windy-mean transplant. Emits one `WeatherEditReport` per
-    recipient `(hex_id, WeatherZone)` pair.
+    zone-dependent windy-mean transplant. When `season` is set, each zone's donor
+    pool is first restricted to that processed `Season` integer before the
+    percentile is resolved (windiest days within that season alone, per zone).
+    Emits one `WeatherEditReport` per recipient `(hex_id, WeatherZone)` pair.
     """
     if FWI_COLUMN not in raw_features.columns or FWI_COLUMN not in processed.columns:
         raise ValueError(f"Raw and processed weather tables must include {FWI_COLUMN!r}.")
@@ -495,6 +532,7 @@ def _apply_mean_zone_dependent_transplant(
 
     wind_speed = pd.to_numeric(raw_features[WIND_SPEED_COLUMN], errors="coerce").to_numpy(dtype=np.float64)
     processed_zones = pd.to_numeric(processed[WEATHER_ZONE_COLUMN], errors="coerce").to_numpy(dtype=np.float64)
+    season_values = pd.to_numeric(processed["Season"], errors="coerce").to_numpy(dtype=np.float64) if season is not None else None
 
     mean_columns = [
         column for column in processed.columns if column not in NON_AVERAGE_COLUMNS and pd.api.types.is_numeric_dtype(processed[column])
@@ -516,6 +554,12 @@ def _apply_mean_zone_dependent_transplant(
         zone_donor_mask = donor_mask & (processed_zones == zone)
         if not zone_donor_mask.any():
             raise ValueError(f"No donor weather rows found for WeatherZone={zone!r} among donor_hex_ids={normalized_donor_ids}.")
+
+        if season_values is not None:
+            assert season is not None
+            zone_donor_mask = _season_filter(
+                season_values, zone_donor_mask, season, context=f"donor_hex_ids={normalized_donor_ids}, WeatherZone={zone!r}"
+            )
 
         filtered_zone_donor_mask, wind_speed_threshold_kmh = _percentile_wind_speed_filter(
             wind_speed,
@@ -564,6 +608,7 @@ def _apply_mean_zone_dependent_transplant(
                     wind_speed_threshold_kmh=wind_speed_threshold_kmh,
                     direction_degrees=float(direction_degrees) if direction_degrees is not None else None,
                     weather_zone=int(zone),
+                    season=season,
                 )
             )
     return edited, reports
@@ -577,12 +622,16 @@ def apply_windy_mean_zone_dependent_transplant(
     donor_hex_ids: list[str],
     wind_speed_percentile: float,
     scenario_name: str,
+    season: int | None = None,
 ) -> tuple[pd.DataFrame, list[WeatherEditReport]]:
     """Zone-scoped `apply_windy_mean_zone_transplant`.
 
     Each recipient WeatherZone gets the mean of its own (donor-hex, same-zone)
-    windiest rows, instead of one hex-wide donor mean broadcast to every zone. See
-    `_apply_mean_zone_dependent_transplant` for the shared implementation.
+    windiest rows, instead of one hex-wide donor mean broadcast to every zone. When
+    `season` is set, each zone's windiest rows are additionally restricted to that
+    processed `Season` integer first (e.g. windiest spring days vs windiest
+    summer/fall days, within each zone). See `_apply_mean_zone_dependent_transplant`
+    for the shared implementation.
     """
     return _apply_mean_zone_dependent_transplant(
         raw_features,
@@ -592,6 +641,7 @@ def apply_windy_mean_zone_dependent_transplant(
         scenario_name=scenario_name,
         mode=WINDY_MEAN_ZONE_DEPENDENT_TRANSPLANT_MODE,
         wind_speed_percentile=wind_speed_percentile,
+        season=season,
     )
 
 
@@ -683,6 +733,7 @@ def apply_weather_edit(
 
     if mode in (WINDY_MEAN_ZONE_TRANSPLANT_MODE, WINDY_MEAN_ZONE_DEPENDENT_TRANSPLANT_MODE):
         wind_speed_percentile = _required_param(params, "wind_speed_percentile", scenario_name=scenario_name, mode=mode)
+        season = params.get("season")
         windy_edit_function = (
             apply_windy_mean_zone_dependent_transplant
             if mode == WINDY_MEAN_ZONE_DEPENDENT_TRANSPLANT_MODE
@@ -695,6 +746,7 @@ def apply_weather_edit(
             donor_hex_ids=donor_hex_ids,
             wind_speed_percentile=float(wind_speed_percentile),
             scenario_name=scenario_name,
+            season=int(season) if season is not None else None,
         )
 
     return apply_external_mean_zone_transplant(

@@ -176,7 +176,7 @@ scenarios:
     kind: "baseline"
     description: "Unmodified prepared weather inputs."
 
-  - name: "bc_windy_self_transplant"
+  - name: "windy_self_transplant"
     kind: "weather"
     description: "Assign every hex16 weather zone the exact mean processed-weather vector across hex16's own rows with raw WindSpeed >= 20 km/h (90th percentile)."
     params:
@@ -208,10 +208,42 @@ Generate one response-map set:
 ```bash
 python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
   --config configs/counterfactual/counterfactual_windy_weather_multi_output.yaml \
-  --scenario bc_windy_self_transplant \
+  --scenario windy_self_transplant \
   --endpoint fi \
   --hex_id 16
 ```
+
+### Season Filter
+
+`windy_mean_zone_transplant` and `windy_mean_zone_dependent_transplant` accept an
+optional `season: <int>` param that restricts the donor pool to rows whose
+`Season` column equals that integer *before* the `wind_speed_percentile` cutoff is
+computed - so "windiest days" is resolved within that season alone, not globally
+then filtered. This lets you compare, e.g., spring's windiest days against
+summer/fall's windiest days for the same hexel.
+
+Season boundaries are hexel-specific and defined by Julian day in each hexel's
+`<hex_id>_Seasons.csv` (raw `"s1"`, `"s2"`, ... tokens are parsed to integers `1`,
+`2`, ... upstream). hex16 has two seasons: `s1` starts Julian day 121 (~Apr 30,
+spring/early summer) and `s2` starts Julian day 212 (~Jul 30, summer/fall).
+Windspeeds in hex16 are consistently higher in `s1` than `s2` across every
+`WeatherZone`.
+
+```yaml
+  - name: "windy_self_transplant_s1"
+    kind: "weather"
+    description: "hex16's own windiest days within Season 1 only."
+    params:
+      mode: "windy_mean_zone_transplant"
+      donor_hex_ids: ["16"]
+      wind_speed_percentile: 90
+      season: 1
+```
+
+Omit `season` to use the full donor pool across all seasons (the default,
+unchanged behavior). If no donor rows match the requested `season`, a clear
+`ValueError` is raised. `season` is not supported for
+`wind_direction_zone_transplant`/`_dependent` or `external_mean_zone_transplant`.
 
 ## Wind-Direction Sweep Intervention
 
@@ -324,3 +356,88 @@ Written to `figures/compass/wind_direction_compass_<endpoint>.png`.
 On SLURM, submit `run_files/counterfactual/counterfactual_wind_direction_iROS.sh`,
 followed by `run_files/counterfactual/counterfactual_wind_direction_plots.sh` (which
 also generates the compass figures) with an `afterok` dependency.
+
+## Zone-Dependent Windy/Wind-Direction Interventions
+
+The two interventions above pool donor rows across the *whole* donor hex and
+broadcast one identical mean vector to *every* recipient `WeatherZone` - so
+after the edit, every zone within a hexel has exactly the same weather. That
+collapses any natural zone-to-zone weather heterogeneity (e.g. hex16's zone 4
+averages ~16.4 km/h wind vs zone 12's ~10.3 km/h).
+
+`windy_mean_zone_dependent_transplant` and
+`wind_direction_zone_dependent_transplant` are zone-scoped variants that instead
+group donor rows by `(donor_hex_id, WeatherZone)`: each recipient zone gets a
+donor mean computed only from donor rows sharing *that same* `WeatherZone`, so
+zones keep their own distinct weather after the edit instead of all becoming
+identical. `wind_speed_percentile` is also resolved separately within each
+zone's own donor pool, since a single hex-wide percentile would not isolate
+comparably "windy" rows per zone. Everything else (donor-mean logic, forced
+`direction_degrees`, non-wind feature averaging) is identical to the whole-hex
+modes described above.
+
+`configs/counterfactual/counterfactual_windy_weather_zone_dependent_multi_output.yaml`
+and `configs/counterfactual/counterfactual_wind_direction_zone_dependent_multi_output.yaml`
+are the zone-dependent counterparts of the windy self-transplant and 9-direction
+sweep configs, e.g.:
+
+```yaml
+  - name: "windy_self_transplant_zone_dependent"
+    kind: "weather"
+    params:
+      mode: "windy_mean_zone_dependent_transplant"
+      donor_hex_ids: ["16"]
+      wind_speed_percentile: 90
+```
+
+```yaml
+  - name: "wind_dir_000"
+    kind: "weather"
+    params: {mode: "wind_direction_zone_dependent_transplant", donor_hex_ids: ["16"], wind_speed_percentile: 0, direction_degrees: 0}
+  # ... one scenario per direction (045, 090, 135, 180, 225, 270, 315, 360)
+```
+
+**Only use a self-donor** (`donor_hex_ids == recipient_hex_ids`) for the
+zone-dependent modes: an external donor would additionally require its
+`WeatherZone` IDs to line up with the recipient's, but zone IDs are assigned
+independently per hexel and are not guaranteed to be spatially or climatically
+comparable across hexels, so an external zone-dependent donor is not currently
+supported as a meaningful configuration.
+
+`windy_mean_zone_dependent_transplant` also accepts the optional `season: <int>`
+param described above; it is applied per-zone, before that zone's own
+`wind_speed_percentile` cutoff, so "windiest days" is resolved within
+`(zone, season)` jointly:
+
+```yaml
+  - name: "windy_self_transplant_zone_dependent_s1"
+    kind: "weather"
+    params:
+      mode: "windy_mean_zone_dependent_transplant"
+      donor_hex_ids: ["16"]
+      wind_speed_percentile: 90
+      season: 1
+```
+
+`weather_edit_summary.csv` gets one row per recipient `(hex_id, WeatherZone)`
+pair for these modes (via a `weather_zone` column), instead of one row per
+recipient hexel for the whole-hex modes.
+
+### Running
+
+```bash
+python -m src.evaluate_counterfactual \
+  --config configs/counterfactual/counterfactual_windy_weather_zone_dependent_multi_output.yaml \
+  --endpoint bp --endpoint fi --endpoint ros --overwrite
+
+python -m src.evaluate_counterfactual \
+  --config configs/counterfactual/counterfactual_wind_direction_zone_dependent_multi_output.yaml \
+  --endpoint bp --endpoint fi --endpoint ros --overwrite
+```
+
+Plots reuse the same response-map and compass-rose scripts, pointed at the new
+configs (see `run_files/counterfactual/counterfactual_windy_weather_zone_dependent_plots.sh`
+and `run_files/counterfactual/counterfactual_wind_direction_zone_dependent_plots.sh`).
+
+On SLURM, submit each `*_zone_dependent_iROS.sh` followed by its
+`*_zone_dependent_plots.sh` with an `afterok` dependency.

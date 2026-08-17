@@ -16,7 +16,7 @@ scenarios:
     kind: "baseline"
     description: "Unmodified prepared weather inputs."
 
-  - name: "bc_windy_self_transplant"
+  - name: "windy_self_transplant"
     kind: "weather"
     description: "Assign every hex16 weather zone the exact mean processed-weather vector across hex16's own rows with raw WindSpeed >= 20 km/h (~90th percentile of hex16's WindSpeed distribution), i.e. hex16 donates its own windiest-day conditions to itself."
     params:

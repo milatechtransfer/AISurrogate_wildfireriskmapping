@@ -23,10 +23,28 @@ scenarios:
     kind: "baseline"
     description: "Unmodified prepared weather inputs."
 
-  - name: "bc_windy_self_transplant"
+  - name: "windy_self_transplant"
     kind: "weather"
     description: "Assign every hex16 weather zone the exact mean processed-weather vector across hex16's own rows with raw WindSpeed >= 20 km/h (~90th percentile of hex16's WindSpeed distribution), i.e. hex16 donates its own windiest-day conditions to itself."
     params:
       mode: "windy_mean_zone_transplant"
       donor_hex_ids: ["16"]
       wind_speed_percentile: 90
+
+  - name: "windy_self_transplant_s1"
+    kind: "weather"
+    description: "Season-restricted variant of windy_self_transplant: hex16's own windiest days within Season 1 only (hex16_Seasons.csv: Julian day 121-211, ~Apr 30-Jul 29, spring/early summer), wind_speed_percentile=90 resolved within that season alone."
+    params:
+      mode: "windy_mean_zone_transplant"
+      donor_hex_ids: ["16"]
+      wind_speed_percentile: 90
+      season: 1
+
+  - name: "windy_self_transplant_s2"
+    kind: "weather"
+    description: "Season-restricted variant of windy_self_transplant: hex16's own windiest days within Season 2 only (hex16_Seasons.csv: Julian day 212+, ~Jul 30 onward, summer/fall), wind_speed_percentile=90 resolved within that season alone."
+    params:
+      mode: "windy_mean_zone_transplant"
+      donor_hex_ids: ["16"]
+      wind_speed_percentile: 90
+      season: 2
