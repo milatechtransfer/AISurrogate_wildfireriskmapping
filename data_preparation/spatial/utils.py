@@ -13,8 +13,6 @@ from rasterio.io import MemoryFile
 from rasterio.mask import mask
 from rasterio.transform import Affine
 from rasterio.warp import calculate_default_transform, reproject
-from rasterio.windows import get_data_window
-from rasterio.windows import transform as window_transform
 
 from data_preparation.paths import Paths
 from data_preparation.utils import find_hex_ids
@@ -90,11 +88,10 @@ def load_spatial_raster(
     reproject_flag: bool = True,
     mask_path: Path | None = None,
     reference_profile: dict[str, Any] | None = None,
-    crop_nodata_border: bool = True,
 ) -> tuple[np.ma.MaskedArray, dict[str, Any]]:
     """
-    Load one raster band, optionally reproject, clip, and crop its outer
-    NoData border, and return the raster and updated profile.
+    Load one raster band, optionally reproject and clip to a mask, and
+    return the raster and updated profile.
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found: {path}")
@@ -132,36 +129,6 @@ def load_spatial_raster(
         )
 
         nodata = profile.get("nodata", nodata)
-
-    if crop_nodata_border:
-        raster = np.ma.array(raster, copy=False)
-
-        if np.ma.getmaskarray(raster).all():
-            raise ValueError(f"Cannot crop raster because it contains no valid pixels: {path}")
-
-        # Find the smallest rectangular window containing valid pixels.
-        crop_window = get_data_window(raster)
-
-        if crop_window.width <= 0 or crop_window.height <= 0:
-            raise ValueError(f"Could not determine a valid crop window for raster: {path}")
-
-        row_start = int(crop_window.row_off)
-        row_end = row_start + int(crop_window.height)
-        col_start = int(crop_window.col_off)
-        col_end = col_start + int(crop_window.width)
-
-        raster = raster[row_start:row_end, col_start:col_end]
-
-        transform = window_transform(
-            crop_window,
-            transform,
-        )
-
-        profile.update(
-            height=raster.shape[0],
-            width=raster.shape[1],
-            transform=transform,
-        )
 
     return raster, profile
 

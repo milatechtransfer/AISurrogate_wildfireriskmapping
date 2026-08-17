@@ -4,6 +4,7 @@ import json
 import os
 
 import numpy as np
+from rasterio.windows import get_data_window
 
 from data_preparation.paths import Paths, normalize_mask_scope
 from data_preparation.spatial import NODATA, load_fuel_grid, load_ignition_grid, load_ignition_grid_weighted, load_spatial_raster
@@ -108,7 +109,19 @@ def load_spatial_features_per_hexel(
         input_mask = fuel_mask | elevation_mask | ignition_mask | firezones_mask
 
         # Check 4: all input grids must have the same spatial shape after reprojection.
-        grids_by_name = {"fuel": fuel_grid, "elevation": elevation_grid, "firezones": firezones_grid}
+        # each raster's own nodata footprint can differ slightly and independently
+        # cropping to it would misalign layers — so all grids share the same
+        # full reference-grid shape at this point, and only a single shared
+        # crop below trims the empty nodata border around the hex boundary.)
+        grids_by_name = {
+            "fuel": fuel_grid,
+            "elevation": elevation_grid,
+            "ignition": ignition_grid,
+            "firezones": firezones_grid,
+            "bp_out": bp_out_grid,
+            "fi_out": fi_out_grid,
+            "ros_out": ros_out_grid,
+        }
         shapes = {name: g.shape[:2] for name, g in grids_by_name.items()}
         if len(set(shapes.values())) > 1:
             raise ValueError(f"Grid shape mismatch after reprojection for hex {hex_id}: {shapes}")
@@ -116,6 +129,15 @@ def load_spatial_features_per_hexel(
         stacked_ma = np.ma.concatenate(features_list, axis=-1)
         stacked = stacked_ma.filled(NODATA).astype(np.float32)
         stacked[input_mask, :] = NODATA
+
+        # Crop the shared empty nodata border, once, using the union of the
+        # boundary-defining masks (fuel/elevation/ignition/firezones), so every
+        # feature layer is trimmed identically regardless of its own nodata quirks.
+        crop_window = get_data_window(np.ma.masked_array(np.zeros(input_mask.shape, dtype=np.uint8), mask=input_mask))
+        row_start, row_end = int(crop_window.row_off), int(crop_window.row_off) + int(crop_window.height)
+        col_start, col_end = int(crop_window.col_off), int(crop_window.col_off) + int(crop_window.width)
+        stacked = stacked[row_start:row_end, col_start:col_end, :]
+        input_mask = input_mask[row_start:row_end, col_start:col_end]
 
         # Check 5: warn if the vast majority of pixels are masked (misaligned or empty data).
         masked_frac = input_mask.mean()
@@ -164,7 +186,12 @@ def load_spatial_features_per_hexel(
                 mask_scope=scope,
             )
         else:
-            ignition_grid = load_ignition_grid(root_dir=root_dir, hex_id=hex_id, reference_profile=reference_profile, mask_scope=scope)
+            ignition_grid = load_ignition_grid(
+                root_dir=root_dir,
+                hex_id=hex_id,
+                reference_profile=reference_profile,
+                mask_scope=scope,
+            )
 
         bp_out_grid, _ = load_spatial_raster(
             all_paths.output_burn_prob(scenario_name=scenario_name),

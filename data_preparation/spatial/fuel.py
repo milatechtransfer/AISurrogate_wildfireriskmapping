@@ -69,8 +69,6 @@ def load_fuel_grid(
 #         firezones_grid=firezones_grid,
 #         reference_profile=reference_profile,
 #     )
-#     # ignition_grid = load_ignition_grid(root_dir=root_dir, hex_id=hex_id, reference_profile=reference_profile)
-
 #     print(ignition_grid.shape)
 #     visualize_elevation_grid(ignition_grid[:,:,0:1])
 #     visualize_elevation_grid(ignition_grid[:, :, 1:2])
