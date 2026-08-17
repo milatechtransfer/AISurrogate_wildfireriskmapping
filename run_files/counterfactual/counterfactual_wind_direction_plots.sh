@@ -28,3 +28,9 @@ for scenario in "${scenarios[@]}"; do
             --config "${config}" --scenario "${scenario}" --endpoint "${endpoint}" --hex_id "${hex_id}"
     done
 done
+
+# Compass roses: 8 direction-diff maps arranged around a circle (0deg = N, clockwise), one per endpoint.
+for endpoint in "${endpoints[@]}"; do
+    python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_wind_direction_compass \
+        --config "${config}" --endpoint "${endpoint}" --hex_id "${hex_id}"
+done

@@ -301,6 +301,20 @@ for scenario in wind_dir_000 wind_dir_045 wind_dir_090 wind_dir_135 wind_dir_180
 done
 ```
 
-On SLURM, submit `run_files/counterfactual/counterfactual_windy_weather_iROS.sh`,
-followed by `run_files/counterfactual/counterfactual_windy_weather_plots.sh` with
-an `afterok` dependency.
+Generate a compass-rose figure per endpoint - the 8 unique-bearing \u0394 maps (last
+panel of the response maps above) arranged on a circle, 0\u00b0 at the top (north)
+and bearings increasing clockwise (45\u00b0 = NE, 90\u00b0 = E, ...), on one shared
+colour scale for direct visual comparison:
+
+```bash
+python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_wind_direction_compass \
+  --config configs/counterfactual/counterfactual_wind_direction_multi_output.yaml \
+  --endpoint fi \
+  --hex_id 16
+```
+
+Written to `figures/compass/wind_direction_compass_<endpoint>.png`.
+
+On SLURM, submit `run_files/counterfactual/counterfactual_wind_direction_iROS.sh`,
+followed by `run_files/counterfactual/counterfactual_wind_direction_plots.sh` (which
+also generates the compass figures) with an `afterok` dependency.
