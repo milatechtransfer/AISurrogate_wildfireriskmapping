@@ -1,0 +1,19 @@
+extends: "physical_bp_512_crop_256_firesize_q3.yaml"
+
+save_dir: "experiments/mechanistic/unet_512_crop_256_firesize_q3_physical_control"
+
+model:
+  architecture: "baseline_unet"
+  hidden_features: [64, 128, 256, 512]
+
+logger:
+  experiment_name: "unet_512_crop_256_firesize_q3_physical_control"
+  tags:
+    - "mechanistic_control"
+    - "architecture=unet"
+    - "input_patch=512"
+    - "target_crop=256"
+    - "target_stride=204"
+    - "effective_batch=64"
+    - "bp_target=physical_probability"
+    - "fire_size=q10_q50_q90"

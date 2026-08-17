@@ -8,6 +8,11 @@ from src.models.unet import BaselineUNet, MultiSourceUNet
 BASELINE_UNET_NAMES = {"baseline_unet", "baseline", "unet"}
 MULTI_SOURCE_UNET_NAMES = {"multi_source_unet", "multisource_unet", "multi_source", "multisource"}
 MECHANISTIC_PROPAGATION_NAMES = {"mechanistic_propagation", "fire_propagation", "propagation_unet"}
+MECHANISTIC_PROPAGATION_V2_NAMES = {
+    "mechanistic_propagation_v2",
+    "fire_propagation_v2",
+    "propagation_unet_v2",
+}
 
 
 def _normalize_architecture_name(name: str) -> str:
@@ -85,7 +90,7 @@ def build_model(
             target_names=target_names,
         )
 
-    if architecture in MECHANISTIC_PROPAGATION_NAMES:
+    if architecture in MECHANISTIC_PROPAGATION_NAMES | MECHANISTIC_PROPAGATION_V2_NAMES:
         if auxiliary_requested:
             raise ValueError("Mechanistic propagation supports spatial inputs and early-fused iROS only.")
         if target_names is None:
@@ -99,7 +104,10 @@ def build_model(
             fuel_curve_mean=fuel_curve_mean,
             fuel_curve_std=fuel_curve_std,
             target_names=target_names,
+            variant="v2" if architecture in MECHANISTIC_PROPAGATION_V2_NAMES else "v1",
         )
 
-    supported = sorted(BASELINE_UNET_NAMES | MULTI_SOURCE_UNET_NAMES | MECHANISTIC_PROPAGATION_NAMES | {"auto"})
+    supported = sorted(
+        BASELINE_UNET_NAMES | MULTI_SOURCE_UNET_NAMES | MECHANISTIC_PROPAGATION_NAMES | MECHANISTIC_PROPAGATION_V2_NAMES | {"auto"}
+    )
     raise ValueError(f"Unknown model architecture '{model_config.architecture}'. Supported values: {supported}")

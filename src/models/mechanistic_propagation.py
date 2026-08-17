@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import Literal
 
 import torch
 import torch.nn as nn
@@ -29,6 +30,15 @@ def _conv_block(in_channels: int, out_channels: int, stride: int = 1) -> nn.Sequ
         nn.GroupNorm(_group_count(out_channels), out_channels),
         nn.SiLU(),
     )
+
+
+def _inverse_softplus(value: float) -> float:
+    return math.log(math.expm1(value))
+
+
+def _logit_fraction(value: float, maximum: float) -> float:
+    fraction = value / maximum
+    return math.log(fraction / (1.0 - fraction))
 
 
 class DecoderBlock(nn.Module):
@@ -63,6 +73,7 @@ class DifferentiableFirePropagation(nn.Module):
         survival_sharpness: float,
         min_area_multiplier: float,
         max_area_multiplier: float,
+        fire_size_quantile_levels: list[float] | None = None,
     ):
         super().__init__()
         self.steps = steps
@@ -73,6 +84,21 @@ class DifferentiableFirePropagation(nn.Module):
         initial_fraction = (1.0 - min_area_multiplier) / (max_area_multiplier - min_area_multiplier)
         initial_fraction = min(max(initial_fraction, 1e-6), 1.0 - 1e-6)
         self.raw_area_multiplier = nn.Parameter(torch.tensor(math.log(initial_fraction / (1.0 - initial_fraction))))
+        self.fire_size_weights: torch.Tensor
+        if fire_size_quantile_levels is None:
+            weights = torch.empty(0)
+        else:
+            levels = torch.tensor(fire_size_quantile_levels, dtype=torch.float32)
+            if levels.ndim != 1 or levels.numel() == 0:
+                raise ValueError("fire_size_quantile_levels must contain at least one percentile.")
+            if not bool(torch.all((levels > 0.0) & (levels < 1.0))):
+                raise ValueError("fire_size_quantile_levels must lie strictly between zero and one.")
+            if not bool(torch.all(levels[1:] > levels[:-1])):
+                raise ValueError("fire_size_quantile_levels must be sorted and unique.")
+            midpoints = (levels[:-1] + levels[1:]) / 2.0
+            boundaries = torch.cat([levels.new_tensor([0.0]), midpoints, levels.new_tensor([1.0])])
+            weights = (boundaries[1:] - boundaries[:-1]).view(1, -1, 1, 1)
+        self.register_buffer("fire_size_weights", weights, persistent=False)
 
     @property
     def area_multiplier(self) -> torch.Tensor:
@@ -98,6 +124,13 @@ class DifferentiableFirePropagation(nn.Module):
         required_area_ha = self.area_multiplier * math.pi * radius_m**2 / 10_000.0
         required_log10_ha = torch.log10(required_area_ha + 1.0)
         exceedance = torch.sigmoid(self.survival_sharpness * (fire_size_log10_ha_quantiles - required_log10_ha))
+        if self.fire_size_weights.numel() > 0:
+            if fire_size_log10_ha_quantiles.shape[1] != self.fire_size_weights.shape[1]:
+                raise ValueError(
+                    "Fire-size channel count does not match configured percentile levels: "
+                    f"{fire_size_log10_ha_quantiles.shape[1]} versus {self.fire_size_weights.shape[1]}."
+                )
+            return (exceedance * self.fire_size_weights.to(dtype=exceedance.dtype)).sum(dim=1, keepdim=True)
         return exceedance.mean(dim=1, keepdim=True)
 
     def forward(
@@ -109,8 +142,8 @@ class DifferentiableFirePropagation(nn.Module):
     ) -> torch.Tensor:
         if directional_transmission.shape[1] != len(self.DIRECTIONS):
             raise ValueError(f"Expected 8 directional transmission channels, got {directional_transmission.shape}.")
-        if fire_size_log10_ha_quantiles.shape[1] < 3:
-            raise ValueError("At least three fire-size quantiles are required for propagation.")
+        if fire_size_log10_ha_quantiles.shape[1] < 1:
+            raise ValueError("At least one fire-size value is required for propagation.")
 
         reach = seed_probability.clamp(0.0, 1.0) * burnability
         frontier = reach
@@ -148,6 +181,7 @@ class MechanisticFirePropagationUNet(nn.Module):
         fuel_curve_mean: torch.Tensor | None,
         fuel_curve_std: torch.Tensor | None,
         target_names: list[str],
+        variant: Literal["v1", "v2"] = "v1",
     ):
         super().__init__()
         required_targets = {"bp", "fi", "ros"}
@@ -160,6 +194,7 @@ class MechanisticFirePropagationUNet(nn.Module):
             raise ValueError(
                 f"Expected {input_channels} semantic spatial input names, got {len(spatial_input_names)}: {spatial_input_names}."
             )
+        self.variant = variant
 
         self.target_names = normalized_targets
         self.ignition_indices = self._indices_with_suffix(
@@ -171,13 +206,31 @@ class MechanisticFirePropagationUNet(nn.Module):
                 "Mechanistic propagation requires human and lightning ignition channels; "
                 f"resolved indices={self.ignition_indices} from {spatial_input_names}."
             )
-        self.fire_size_indices = [
-            index for index, name in enumerate(spatial_input_names) if name.startswith("spatialized_fire_size/LOG_SIZE_HA_q")
-        ]
-        if len(self.fire_size_indices) < 3:
+        quantile_channels = []
+        mean_channels = []
+        quantile_prefix = "spatialized_fire_size/LOG_SIZE_HA_q"
+        for index, name in enumerate(spatial_input_names):
+            if name.startswith(quantile_prefix):
+                quantile_label = name.removeprefix(quantile_prefix)
+                if not quantile_label.isdigit():
+                    raise ValueError(f"Could not parse fire-size percentile from channel {name!r}.")
+                quantile_channels.append((float(quantile_label) / 100.0, index))
+            elif name == "spatialized_fire_size/LOG_SIZE_HA":
+                mean_channels.append(index)
+        if quantile_channels and mean_channels:
+            raise ValueError("Configure either fire-size quantiles or mean LOG_SIZE_HA, not both.")
+        self.fire_size_quantile_levels: list[float] | None
+        if quantile_channels:
+            quantile_channels.sort()
+            self.fire_size_quantile_levels = [level for level, _ in quantile_channels]
+            self.fire_size_indices = [index for _, index in quantile_channels]
+        elif len(mean_channels) == 1:
+            self.fire_size_quantile_levels = None
+            self.fire_size_indices = mean_channels
+        else:
             raise ValueError(
-                "Mechanistic propagation requires spatialized raw LOG_SIZE_HA quantile channels; "
-                f"resolved indices={self.fire_size_indices} from {spatial_input_names}."
+                "Mechanistic propagation requires spatialized raw LOG_SIZE_HA quantiles or one mean LOG_SIZE_HA channel; "
+                f"resolved quantiles={quantile_channels}, means={mean_channels} from {spatial_input_names}."
             )
 
         curve_mean = fuel_curve_mean if fuel_curve_mean is not None else torch.zeros(1)
@@ -201,13 +254,26 @@ class MechanisticFirePropagationUNet(nn.Module):
         self.directional_transmission = nn.Conv2d(propagation_channels, 8, kernel_size=3, padding=1)
         if self.directional_transmission.bias is not None:
             nn.init.constant_(self.directional_transmission.bias, math.log(0.15 / 0.85))
-        self.raw_ignition_scale = nn.Parameter(torch.tensor(0.0))
+        self.max_ignition_scale: float | None = None
+        if self.variant == "v2":
+            self.max_ignition_scale = model_config.propagation_max_ignition_scale
+            self.raw_ignition_scale = nn.Parameter(
+                torch.tensor(
+                    _logit_fraction(
+                        model_config.propagation_initial_ignition_scale,
+                        model_config.propagation_max_ignition_scale,
+                    )
+                )
+            )
+        else:
+            self.raw_ignition_scale = nn.Parameter(torch.tensor(0.0))
         self.propagation = DifferentiableFirePropagation(
             steps=model_config.propagation_steps,
             coarse_cell_size_m=model_config.propagation_cell_size_m * self.downsample_factor,
             survival_sharpness=model_config.propagation_survival_sharpness,
             min_area_multiplier=model_config.propagation_min_area_multiplier,
             max_area_multiplier=model_config.propagation_max_area_multiplier,
+            fire_size_quantile_levels=self.fire_size_quantile_levels,
         )
 
         self.mechanistic_fusion = _conv_block(propagation_channels + 2, propagation_channels)
@@ -227,13 +293,58 @@ class MechanisticFirePropagationUNet(nn.Module):
                 ]
             )
 
-        self.bp_calibration = nn.Conv2d(channels[0], 1, kernel_size=1)
+        if self.variant == "v2":
+            self.raw_bp_scale = nn.Parameter(torch.tensor(_inverse_softplus(model_config.propagation_initial_bp_scale)))
+            self.bp_local_calibration = nn.Conv2d(channels[0], 1, kernel_size=1)
+            nn.init.zeros_(self.bp_local_calibration.weight)
+            if self.bp_local_calibration.bias is not None:
+                nn.init.zeros_(self.bp_local_calibration.bias)
+            self.max_local_log_calibration = model_config.propagation_max_local_log_calibration
+        else:
+            self.bp_calibration = nn.Conv2d(channels[0], 1, kernel_size=1)
         self.behavior_head = nn.Conv2d(channels[0], 2, kernel_size=1)
         self.bp_logit_eps = model_config.propagation_logit_eps
 
     @staticmethod
     def _indices_with_suffix(names: list[str], suffixes: tuple[str, ...]) -> list[int]:
         return [index for suffix in suffixes for index, name in enumerate(names) if name.endswith(f"/{suffix}")]
+
+    @property
+    def ignition_scale(self) -> torch.Tensor:
+        if self.variant == "v2":
+            if self.max_ignition_scale is None:
+                raise RuntimeError("V2 ignition scale is missing its configured maximum.")
+            return self.max_ignition_scale * torch.sigmoid(self.raw_ignition_scale)
+        return F.softplus(self.raw_ignition_scale) + 1e-4
+
+    @property
+    def bp_scale(self) -> torch.Tensor:
+        if self.variant != "v2":
+            raise RuntimeError("A global BP scale is only defined for mechanistic propagation v2.")
+        return F.softplus(self.raw_bp_scale) + 1e-6
+
+    def _seed_probability(
+        self,
+        x: torch.Tensor,
+        coarse_size: tuple[int, int],
+        coarse_burnability: torch.Tensor,
+    ) -> torch.Tensor:
+        ignition = x[:, self.ignition_indices].clamp_min(0.0).sum(dim=1, keepdim=True)
+        pooled_ignition = F.adaptive_avg_pool2d(ignition, coarse_size)
+        if self.variant == "v1":
+            pooling_area = (x.shape[-2] / coarse_size[0]) * (x.shape[-1] / coarse_size[1])
+            pooled_ignition = pooled_ignition * pooling_area
+        seed_probability = 1.0 - torch.exp(-self.ignition_scale * pooled_ignition)
+        if self.variant == "v1":
+            seed_probability = seed_probability * coarse_burnability
+        return seed_probability
+
+    def _calibrate_bp(self, decoded: torch.Tensor, reach_full: torch.Tensor) -> torch.Tensor:
+        if self.variant == "v1":
+            return reach_full * torch.sigmoid(self.bp_calibration(decoded))
+        local_log_calibration = self.max_local_log_calibration * torch.tanh(self.bp_local_calibration(decoded))
+        bp_hazard = self.bp_scale * reach_full * torch.exp(local_log_calibration)
+        return -torch.expm1(-bp_hazard)
 
     def forward(self, x: torch.Tensor, x_auxiliary: dict[str, torch.Tensor] | None = None) -> torch.Tensor:
         if x_auxiliary is None or "fuel_curve" not in x_auxiliary:
@@ -248,18 +359,14 @@ class MechanisticFirePropagationUNet(nn.Module):
         coarse_features = quarter if self.downsample_factor == 4 else eighth
         coarse_size = coarse_features.shape[-2:]
 
-        ignition = x[:, self.ignition_indices].clamp_min(0.0).sum(dim=1, keepdim=True)
-        pooled_ignition = F.adaptive_avg_pool2d(ignition, coarse_size)
-        pooling_area = (x.shape[-2] / coarse_size[0]) * (x.shape[-1] / coarse_size[1])
-        pooled_ignition = pooled_ignition * pooling_area
-
         burnability = (fuel_curve.clamp_min(0.0).sum(dim=1, keepdim=True) > 0.0).to(x.dtype)
         coarse_burnability = F.adaptive_avg_pool2d(burnability, coarse_size)
-        ignition_scale = F.softplus(self.raw_ignition_scale) + 1e-4
-        seed_probability = (1.0 - torch.exp(-ignition_scale * pooled_ignition)) * coarse_burnability
+        seed_probability = self._seed_probability(x, coarse_size, coarse_burnability)
 
         fire_size_quantiles = F.adaptive_avg_pool2d(x[:, self.fire_size_indices], coarse_size)
-        transmission = torch.sigmoid(self.directional_transmission(coarse_features)) * coarse_burnability
+        transmission = torch.sigmoid(self.directional_transmission(coarse_features))
+        if self.variant == "v1":
+            transmission = transmission * coarse_burnability
         reach = self.propagation(
             seed_probability=seed_probability,
             directional_transmission=transmission,
@@ -273,7 +380,7 @@ class MechanisticFirePropagationUNet(nn.Module):
             decoded = decoder_block(decoded, skip)
 
         reach_full = F.interpolate(reach, size=x.shape[-2:], mode="bilinear", align_corners=False).clamp(0.0, 1.0)
-        bp_probability = reach_full * torch.sigmoid(self.bp_calibration(decoded))
+        bp_probability = self._calibrate_bp(decoded, reach_full)
         bp_logits = torch.logit(bp_probability, eps=self.bp_logit_eps)
         behavior = self.behavior_head(decoded)
         outputs = {

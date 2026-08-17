@@ -51,11 +51,17 @@ class ModelConfig(BaseModel):
     propagation_min_area_multiplier: float = Field(default=0.05, gt=0.0)
     propagation_max_area_multiplier: float = Field(default=20.0, gt=0.0)
     propagation_logit_eps: float = Field(default=1e-6, gt=0.0, lt=0.5)
+    propagation_initial_ignition_scale: float = Field(default=0.05, gt=0.0)
+    propagation_max_ignition_scale: float = Field(default=1.0, gt=0.0)
+    propagation_initial_bp_scale: float = Field(default=0.1, gt=0.0)
+    propagation_max_local_log_calibration: float = Field(default=0.6931471805599453, ge=0.0)
 
     @model_validator(mode="after")
     def validate_propagation_area_multiplier(self) -> "ModelConfig":
         if self.propagation_max_area_multiplier <= self.propagation_min_area_multiplier:
             raise ValueError("propagation_max_area_multiplier must exceed propagation_min_area_multiplier.")
+        if self.propagation_initial_ignition_scale >= self.propagation_max_ignition_scale:
+            raise ValueError("propagation_initial_ignition_scale must be below propagation_max_ignition_scale.")
         return self
 
     # specific to auxiliary model
