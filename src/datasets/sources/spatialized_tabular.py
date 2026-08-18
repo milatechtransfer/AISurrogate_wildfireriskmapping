@@ -278,8 +278,9 @@ class SpatializedTabularSource(DataSource):
             matched_mask[pixel_mask] = True
 
         missing_firezone_mask = ~matched_mask
-        if self.missing_value_strategy == "raise" and missing_firezone_mask.any():
-            missing_zones = sorted({int(z) for z in zone_int_grid[finite_zone_mask & missing_firezone_mask]})
+        missing_lut_mask = finite_zone_mask & missing_firezone_mask
+        if self.missing_value_strategy == "raise" and missing_lut_mask.any():
+            missing_zones = sorted({int(z) for z in zone_int_grid[missing_lut_mask]})
             raise ValueError(f"Spatialized tabular source {self.csv_name!r} has missing LUT zones: {missing_zones[:20]}")
 
         if self.include_missing_firezone_mask:

@@ -388,6 +388,40 @@ def test_spatialized_tabular_source_rasterizes_zone_summaries(temp_data_dir):
     assert sample[-1, 1, 1].item() == 1.0
 
 
+def test_spatialized_tabular_raise_ignores_nodata_pixels(temp_data_dir):
+    tmpdir, _, _, _, weather_csv, weather_feats, _, _ = temp_data_dir
+    params = SpatializedTabularParams(
+        csv_name=weather_csv,
+        feature_names_list=weather_feats[:1],
+        fire_weather_zone_id_col="WeatherZone",
+        missing_value_strategy="raise",
+    )
+    source = SpatializedTabularSource(root_dir=tmpdir, params=params, modelling_approach="1")
+
+    sample = source.get_sample({"file_path": os.path.join(tmpdir, "sample_0.npy")})
+
+    assert torch.isfinite(sample[:, 0, 0]).all()
+    assert torch.isnan(sample[:, 1, 1]).all()
+
+
+def test_spatialized_tabular_raise_reports_unmatched_positive_zone(temp_data_dir):
+    tmpdir, _, _, _, weather_csv, weather_feats, _, _ = temp_data_dir
+    patch = np.load(os.path.join(tmpdir, "sample_0.npy"))
+    patch[:, :, 3] = 999.0
+    patch_path = os.path.join(tmpdir, "unknown_zone.npy")
+    np.save(patch_path, patch)
+    params = SpatializedTabularParams(
+        csv_name=weather_csv,
+        feature_names_list=weather_feats[:1],
+        fire_weather_zone_id_col="WeatherZone",
+        missing_value_strategy="raise",
+    )
+    source = SpatializedTabularSource(root_dir=tmpdir, params=params, modelling_approach="1")
+
+    with pytest.raises(ValueError, match=r"missing LUT zones: \[999\]"):
+        source.get_sample({"file_path": patch_path})
+
+
 def test_spatialized_tabular_global_mean_uses_all_rows(temp_data_dir):
     tmpdir, _, _, _, _, _, _, _ = temp_data_dir
 
