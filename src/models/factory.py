@@ -59,6 +59,9 @@ def build_model(
             fuel_curve_std=fuel_curve_std,
             output_head=model_config.output_head,
             target_names=target_names,
+            bp_head_depth=model_config.bp_head_depth,
+            bp_head_hidden_channels=model_config.bp_head_hidden_channels,
+            bp_split_decoder=model_config.bp_split_decoder,
         )
 
     if architecture in MULTI_SOURCE_UNET_NAMES:
@@ -81,6 +84,9 @@ def build_model(
             fuel_curve_std=fuel_curve_std,
             output_head=model_config.output_head,
             target_names=target_names,
+            bp_head_depth=model_config.bp_head_depth,
+            bp_head_hidden_channels=model_config.bp_head_hidden_channels,
+            bp_split_decoder=model_config.bp_split_decoder,
         )
 
     supported = sorted(BASELINE_UNET_NAMES | MULTI_SOURCE_UNET_NAMES | {"auto"})

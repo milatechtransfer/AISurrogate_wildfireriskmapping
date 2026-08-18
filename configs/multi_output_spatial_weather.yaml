@@ -1,6 +1,8 @@
 # Joint BP/FI/ROS emulator on the shared spatial input pipeline.
 # The UNet backbone and decoder are shared. A BP head predicts probability
-# logits, while one two-channel behavior head predicts conditional FI and ROS.
+# logits (via its own deeper conv trunk, `bp_head_depth`/`bp_head_hidden_channels`,
+# or a fully separate decoder branch via `bp_split_decoder`), while one
+# two-channel behavior head predicts conditional FI and ROS.
 save_dir: "experiments/multi_output_spatial_weather"
 
 modelling_approach: "1"
@@ -13,6 +15,14 @@ model:
   output_head: "bp_behavior"
   input_branches: ["spatial"]
   use_coordconv: false
+  # Extra 3x3 conv+BN+LeakyReLU blocks feeding the BP logit projection only
+  # (FI/ROS share a single 1x1 conv). Set to 0 to fall back to a linear BP head.
+  bp_head_depth: 2
+  # If BP still underperforms with the deeper head, give it a fully separate
+  # decoder branch (own upsampling + skip-fusion convs) instead of sharing the
+  # decoder with FI/ROS. Encoder/bottleneck stay shared either way. Only valid
+  # with output_head="bp_behavior".
+  bp_split_decoder: false
 
 optimizer:
   name: "AdamW"
