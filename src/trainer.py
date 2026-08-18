@@ -147,12 +147,10 @@ class Trainer:
         # Setup optimizer
         opt_name = self.config.optimizer.name
         # TODO: add other parameters
-        opt_params = {
-            "lr": self.config.optimizer.lr,
-        }
+        opt_params = {"lr": self.config.optimizer.lr}
 
         OptimizerClass = getattr(optim, opt_name)
-        self.optimizer = OptimizerClass(self.model.parameters(), **opt_params)
+        self.optimizer = OptimizerClass(self._optimizer_parameter_groups(), **opt_params)
 
         self.global_step = 0
 
@@ -165,6 +163,33 @@ class Trainer:
         self._validate_and_load_metrics()
 
         self._configure_metric_target_transform()
+
+    def _optimizer_parameter_groups(self):
+        lr_scales = self.config.optimizer.parameter_lr_scales
+        if not lr_scales:
+            return self.model.parameters()
+
+        named_parameters = [(name, parameter) for name, parameter in self.model.named_parameters() if parameter.requires_grad]
+        assigned_names: set[str] = set()
+        scaled_groups: list[dict] = []
+        base_lr = self.config.optimizer.lr
+
+        for prefix, scale in lr_scales.items():
+            matched = [(name, parameter) for name, parameter in named_parameters if name == prefix or name.startswith(f"{prefix}.")]
+            if not matched:
+                raise ValueError(f"optimizer.parameter_lr_scales prefix {prefix!r} matched no trainable parameters.")
+            duplicate_names = sorted(name for name, _ in matched if name in assigned_names)
+            if duplicate_names:
+                raise ValueError(f"optimizer.parameter_lr_scales prefixes overlap for parameters: {duplicate_names[:20]}")
+            assigned_names.update(name for name, _ in matched)
+            scaled_groups.append({"params": [parameter for _, parameter in matched], "lr": base_lr * scale})
+
+        default_parameters = [parameter for name, parameter in named_parameters if name not in assigned_names]
+        groups: list[dict] = []
+        if default_parameters:
+            groups.append({"params": default_parameters, "lr": base_lr})
+        groups.extend(scaled_groups)
+        return groups
 
     def _get_fuel_curve_stats(self) -> dict[str, torch.Tensor | None]:
         """Extract fuel curve normalization stats for model initialisation.
@@ -515,6 +540,11 @@ class Trainer:
             for name, total_value in running_metrics.items()
         }
 
+    def _add_derived_metrics(self, results: dict[str, float]) -> None:
+        ccc_keys = [f"{target_name}/ccc" for target_name in self._target_names]
+        if len(ccc_keys) > 1 and all(key in results and np.isfinite(results[key]) for key in ccc_keys):
+            results["mean/ccc"] = float(np.mean([results[key] for key in ccc_keys]))
+
     # Supports any LRScheduler object and metric-based ReduceLROnPlateau schedulers
     def train_epoch(
         self, loader: DataLoader, lr_scheduler: LRScheduler | ReduceLROnPlateau | None = None, lr_scheduler_type: str | None = None
@@ -535,6 +565,11 @@ class Trainer:
             (loss / accumulation_steps).backward()
             optimizer_step = (batch_idx + 1) % accumulation_steps == 0 or batch_idx + 1 == len(loader)
             if optimizer_step:
+                if self.config.training.gradient_clip_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        max_norm=self.config.training.gradient_clip_norm,
+                    )
                 self.optimizer.step()
                 self.optimizer.zero_grad()
 
@@ -550,7 +585,7 @@ class Trainer:
                 self.logger.log_metrics({"train_step_loss": loss.item()}, step=self.global_step)
 
                 # log LR since it can change with scheduler
-                current_lr = self.optimizer.param_groups[0]["lr"]
+                current_lr = max(group["lr"] for group in self.optimizer.param_groups)
                 self.logger.log_metrics({"learning_rate": current_lr}, step=self.global_step)
 
             training_loop.set_description(f"Loss: {running_loss / running_batch_count:.4f}")
@@ -585,6 +620,7 @@ class Trainer:
 
         # add averaged metrics to results
         results.update(self._average_metrics(running_metrics, metric_counts))
+        self._add_derived_metrics(results)
 
         return results
 
@@ -659,6 +695,7 @@ class Trainer:
 
         # add averaged metrics to results
         results.update(self._average_metrics(running_metrics, metric_counts))
+        self._add_derived_metrics(results)
 
         if return_predictions and peak_mps_driver_allocated_gb > 0.0:
             self.last_peak_mps_driver_allocated_gb = peak_mps_driver_allocated_gb
@@ -769,7 +806,7 @@ class Trainer:
 
             # log metrics and loss
             if epoch % log_every_n_epoch == 0:
-                current_lr = self.optimizer.param_groups[0]["lr"]
+                current_lr = max(group["lr"] for group in self.optimizer.param_groups)
                 msg = f"Epoch {epoch}/{num_epochs} - train_loss: {train_res['loss']:.4f}"
                 if val_result is not None:
                     msg += f", val_loss: {val_result['loss']:.4f}"
@@ -781,6 +818,9 @@ class Trainer:
 
                 if val_result:
                     metrics_to_log.update({f"val_{k}": v for k, v in val_result.items()})
+                diagnostic_metrics = getattr(self.model, "diagnostic_metrics", None)
+                if diagnostic_metrics is not None:
+                    metrics_to_log.update({f"model/{name}": value for name, value in diagnostic_metrics().items()})
 
                 if self.logger:
                     self.logger.log_metrics(metrics_to_log, epoch=epoch)

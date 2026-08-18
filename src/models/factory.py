@@ -13,6 +13,16 @@ MECHANISTIC_PROPAGATION_V2_NAMES = {
     "fire_propagation_v2",
     "propagation_unet_v2",
 }
+MECHANISTIC_PROPAGATION_V21_NAMES = {
+    "mechanistic_propagation_v21",
+    "mechanistic_propagation_stable",
+    "fire_propagation_v21",
+}
+MECHANISTIC_PROPAGATION_V3_NAMES = {
+    "mechanistic_propagation_v3",
+    "fire_propagation_v3",
+    "scenario_propagation_v3",
+}
 
 
 def _normalize_architecture_name(name: str) -> str:
@@ -90,7 +100,13 @@ def build_model(
             target_names=target_names,
         )
 
-    if architecture in MECHANISTIC_PROPAGATION_NAMES | MECHANISTIC_PROPAGATION_V2_NAMES:
+    mechanistic_names = (
+        MECHANISTIC_PROPAGATION_NAMES
+        | MECHANISTIC_PROPAGATION_V2_NAMES
+        | MECHANISTIC_PROPAGATION_V21_NAMES
+        | MECHANISTIC_PROPAGATION_V3_NAMES
+    )
+    if architecture in mechanistic_names:
         if auxiliary_requested:
             raise ValueError("Mechanistic propagation supports spatial inputs and early-fused iROS only.")
         if target_names is None:
@@ -104,10 +120,24 @@ def build_model(
             fuel_curve_mean=fuel_curve_mean,
             fuel_curve_std=fuel_curve_std,
             target_names=target_names,
-            variant="v2" if architecture in MECHANISTIC_PROPAGATION_V2_NAMES else "v1",
+            variant=(
+                "v3"
+                if architecture in MECHANISTIC_PROPAGATION_V3_NAMES
+                else "v21"
+                if architecture in MECHANISTIC_PROPAGATION_V21_NAMES
+                else "v2"
+                if architecture in MECHANISTIC_PROPAGATION_V2_NAMES
+                else "v1"
+            ),
         )
 
     supported = sorted(
-        BASELINE_UNET_NAMES | MULTI_SOURCE_UNET_NAMES | MECHANISTIC_PROPAGATION_NAMES | MECHANISTIC_PROPAGATION_V2_NAMES | {"auto"}
+        BASELINE_UNET_NAMES
+        | MULTI_SOURCE_UNET_NAMES
+        | MECHANISTIC_PROPAGATION_NAMES
+        | MECHANISTIC_PROPAGATION_V2_NAMES
+        | MECHANISTIC_PROPAGATION_V21_NAMES
+        | MECHANISTIC_PROPAGATION_V3_NAMES
+        | {"auto"}
     )
     raise ValueError(f"Unknown model architecture '{model_config.architecture}'. Supported values: {supported}")

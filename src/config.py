@@ -55,6 +55,10 @@ class ModelConfig(BaseModel):
     propagation_max_ignition_scale: float = Field(default=1.0, gt=0.0)
     propagation_initial_bp_scale: float = Field(default=0.1, gt=0.0)
     propagation_max_local_log_calibration: float = Field(default=0.6931471805599453, ge=0.0)
+    propagation_budget_hours_per_step: float = Field(default=2.0, gt=0.0)
+    propagation_budget_temperature_hours: float = Field(default=2.0, gt=0.0)
+    propagation_budget_min_hours: float = Field(default=0.0, ge=0.0)
+    propagation_budget_max_hours: float = Field(default=1.0, gt=0.0)
 
     @model_validator(mode="after")
     def validate_propagation_area_multiplier(self) -> "ModelConfig":
@@ -62,6 +66,8 @@ class ModelConfig(BaseModel):
             raise ValueError("propagation_max_area_multiplier must exceed propagation_min_area_multiplier.")
         if self.propagation_initial_ignition_scale >= self.propagation_max_ignition_scale:
             raise ValueError("propagation_initial_ignition_scale must be below propagation_max_ignition_scale.")
+        if self.propagation_budget_max_hours <= self.propagation_budget_min_hours:
+            raise ValueError("propagation_budget_max_hours must exceed propagation_budget_min_hours.")
         return self
 
     # specific to auxiliary model
@@ -89,9 +95,13 @@ class OptimizerConfig(BaseModel):
     loss_weights: dict[str, float] = {}
     huber_beta: float = Field(default=1.0, gt=0.0)
     target_losses: dict[TargetName, TargetLossConfig] = {}
+    parameter_lr_scales: dict[str, float] = {}
 
     @model_validator(mode="after")
     def validate_loss_configuration(self) -> "OptimizerConfig":
+        invalid_lr_scales = {name: scale for name, scale in self.parameter_lr_scales.items() if scale <= 0.0}
+        if invalid_lr_scales:
+            raise ValueError(f"optimizer.parameter_lr_scales must be positive: {invalid_lr_scales}")
         if self.target_losses:
             if self.loss is not None or self.loss_weights:
                 raise ValueError("Use either legacy loss/loss_weights or target_losses, not both.")
@@ -116,6 +126,7 @@ class TrainingConfig(BaseModel):
     max_epochs: int = 50
     log_every_n_epoch: int = 1
     gradient_accumulation_steps: int = Field(default=1, gt=0)
+    gradient_clip_norm: float | None = Field(default=None, gt=0.0)
 
 
 class EvaluationConfig(BaseModel):
@@ -284,6 +295,7 @@ class DataSourceConfig(BaseModel):
             "tabular_fire_size": TabularParams,
             "spatialized_weather": SpatializedTabularParams,
             "spatialized_fire_size": SpatializedTabularParams,
+            "spatialized_spread_opportunity": SpatializedTabularParams,
         }
         param_class = param_classes.get(name)
         if param_class is None:
@@ -380,6 +392,8 @@ class Config(BaseModel):
         if len(target_names) > 1:
             valid_checkpoint_metrics = {"loss"}
             valid_checkpoint_metrics.update(f"{target_name}/{metric_name}" for target_name in target_names for metric_name in self.metrics)
+            if "ccc" in self.metrics:
+                valid_checkpoint_metrics.add("mean/ccc")
             for target_name, loss_config in self.optimizer.target_losses.items():
                 valid_checkpoint_metrics.add(f"loss_{target_name}/total")
                 if isinstance(loss_config.loss, list):

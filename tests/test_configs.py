@@ -16,6 +16,7 @@ from src.config import (
     TargetLossConfig,
     apply_run_id_overrides,
 )
+from src.config_io import load_config as load_resolved_config
 from src.datasets.postprocessing.hazard import DEFAULT_FI_CAP, DEFAULT_SCALE_TO
 from src.utils import AVAILABLE_METRICS, build_single_loss
 
@@ -25,6 +26,11 @@ ROS_CONFIG = Path("configs/ros_spatial_weather.yaml")
 MULTI_OUTPUT_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
 HAZARD_EVAL_CONFIG = Path("configs/hazard_eval_spatial_weather.yaml")
 HAZARD_MODEL_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
+SPREAD_OPPORTUNITY_CONFIG = Path("configs/context_models/unet_512_crop_256_spread_opportunity_q3.yaml")
+MECHANISTIC_V21_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v21_512_crop_256_firesize_q3.yaml")
+MECHANISTIC_V21_PILOT_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v21_512_crop_256_firesize_q3_pilot.yaml")
+MECHANISTIC_V3_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v3_512_crop_256_spread_opportunity_q3.yaml")
+MECHANISTIC_V3_PILOT_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v3_512_crop_256_spread_opportunity_q3_pilot.yaml")
 COMMON_INPUT_PIPELINE_CONFIGS = [BP_CONFIG, FI_CONFIG, ROS_CONFIG]
 
 WEATHER_FEATURES = {
@@ -91,6 +97,75 @@ def test_common_input_pipeline_configs_reference_supported_losses_and_metrics():
             build_single_loss(loss_name, huber_beta=config.optimizer.huber_beta)
         for metric_name in config.metrics:
             assert metric_name in AVAILABLE_METRICS
+
+
+def test_spread_opportunity_context_unet_is_conventional_minmax_ablation():
+    config = load_resolved_config(SPREAD_OPPORTUNITY_CONFIG)
+    sources = {source.name: source.params for source in config.data.input_sources}
+    grid = sources["grid"]
+    spread = sources["spatialized_spread_opportunity"]
+
+    assert config.model.architecture == "auto"
+    assert config.data.root_dir.endswith("data_samples_v4_context_512_crop_256")
+    assert config.data.batch_size == 8
+    assert config.training.gradient_accumulation_steps == 8
+    assert isinstance(grid, GridParams)
+    assert grid.target_config("bp").out_norm == "min_max"
+    assert isinstance(spread, SpatializedTabularParams)
+    assert spread.feature_names_list == [
+        "NORM_TOTAL_BURN_HOURS_Q10",
+        "NORM_TOTAL_BURN_HOURS_Q50",
+        "NORM_TOTAL_BURN_HOURS_Q90",
+    ]
+    assert spread.hex_id_col == "hex_id"
+    assert spread.quantiles is None
+    assert spread.missing_value_strategy == "raise"
+
+
+@pytest.mark.parametrize(
+    ("config_path", "architecture"),
+    [
+        (MECHANISTIC_V21_CONFIG, "mechanistic_propagation_v21"),
+        (MECHANISTIC_V3_CONFIG, "mechanistic_propagation_v3"),
+    ],
+)
+def test_stabilized_mechanistic_configs_resolve(config_path, architecture):
+    config = load_resolved_config(config_path)
+
+    assert config.model.architecture == architecture
+    assert config.optimizer.lr == pytest.approx(3.0e-4)
+    assert config.optimizer.parameter_lr_scales["raw_ignition_scale"] == pytest.approx(0.1)
+    assert config.optimizer.parameter_lr_scales["raw_bp_scale"] == pytest.approx(0.1)
+    assert config.optimizer.parameter_lr_scales["bp_local_calibration"] == pytest.approx(0.25)
+    assert config.training.gradient_clip_norm == pytest.approx(1.0)
+    assert config.evaluation.best_ckpt_metrics == ["mean/ccc"]
+    assert config.evaluation.best_ckpt_metrics_mode == ["max"]
+
+
+def test_mechanistic_v3_resolves_scenario_budget_contract():
+    config = load_resolved_config(MECHANISTIC_V3_CONFIG)
+    spread = next(source.params for source in config.data.input_sources if source.name == "spatialized_spread_opportunity")
+
+    assert isinstance(spread, SpatializedTabularParams)
+    assert spread.feature_names_list == [
+        "NORM_TOTAL_BURN_HOURS_Q10",
+        "NORM_TOTAL_BURN_HOURS_Q50",
+        "NORM_TOTAL_BURN_HOURS_Q90",
+        "SCENARIO_FALLBACK",
+    ]
+    assert config.model.propagation_budget_min_hours == pytest.approx(1.0)
+    assert config.model.propagation_budget_max_hours == pytest.approx(140.0)
+    assert config.model.propagation_budget_hours_per_step == pytest.approx(2.0)
+    assert config.model.propagation_budget_temperature_hours == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize("config_path", [MECHANISTIC_V21_PILOT_CONFIG, MECHANISTIC_V3_PILOT_CONFIG])
+def test_mechanistic_pilot_configs_inherit_five_epoch_recipes(config_path):
+    config = load_resolved_config(config_path)
+
+    assert config.training.max_epochs == 5
+    assert config.training.gradient_clip_norm == pytest.approx(1.0)
+    assert config.evaluation.best_ckpt_metrics == ["mean/ccc"]
 
 
 def test_bp_common_input_pipeline_keeps_its_training_recipe():
@@ -231,6 +306,16 @@ def test_multi_output_config_rejects_unnamespaced_checkpoint_metric():
     with MULTI_OUTPUT_CONFIG.open() as f:
         raw_config = yaml.safe_load(f)
     raw_config["evaluation"]["best_ckpt_metrics"] = ["spearman"]
+
+    with pytest.raises(ValidationError, match="namespaced metric keys"):
+        Config(**raw_config)
+
+
+def test_multi_output_config_rejects_mean_ccc_when_ccc_is_not_computed():
+    with MULTI_OUTPUT_CONFIG.open() as f:
+        raw_config = yaml.safe_load(f)
+    raw_config["metrics"] = [metric for metric in raw_config["metrics"] if metric != "ccc"]
+    raw_config["evaluation"]["best_ckpt_metrics"] = ["mean/ccc"]
 
     with pytest.raises(ValidationError, match="namespaced metric keys"):
         Config(**raw_config)

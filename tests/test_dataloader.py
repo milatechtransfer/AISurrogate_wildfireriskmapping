@@ -24,7 +24,12 @@ from src.datasets.sources import GridSource, SpatializedTabularSource, TabularSo
 from src.datasets.sources.spatialized_tabular import _NO_HEX_ID
 from src.datasets.sources.tabular import _NO_HEX_ID as _TABULAR_NO_HEX_ID
 from src.datasets.transforms import get_transforms, setup_augmentations
-from src.datasets.utils import get_dataset_dimensions, get_dataset_spatial_feature_names
+from src.datasets.utils import (
+    get_data_source_class,
+    get_data_source_param_class,
+    get_dataset_dimensions,
+    get_dataset_spatial_feature_names,
+)
 
 
 @pytest.fixture
@@ -614,6 +619,11 @@ def test_spatialized_fire_size_can_rasterize_empirical_quantiles(temp_data_dir):
     assert source.input_dim() == 3
     assert source.output_feature_names() == ["size_q25", "size_q50", "size_q75"]
     assert sample[:, 0, 0].tolist() == pytest.approx([30.0, 50.0, 75.0])
+
+
+def test_spread_opportunity_uses_spatialized_tabular_source():
+    assert get_data_source_class("spatialized_spread_opportunity") is SpatializedTabularSource
+    assert get_data_source_param_class("spatialized_spread_opportunity") is SpatializedTabularParams
 
 
 def test_build_dataset_can_include_patch_metadata(temp_data_dir, monkeypatch):

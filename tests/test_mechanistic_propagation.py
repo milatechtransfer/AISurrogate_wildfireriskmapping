@@ -3,7 +3,11 @@ import torch
 
 from src.config import ModelConfig
 from src.models.factory import build_model, resolve_model_architecture
-from src.models.mechanistic_propagation import DifferentiableFirePropagation, MechanisticFirePropagationUNet
+from src.models.mechanistic_propagation import (
+    DifferentiableFirePropagation,
+    DifferentiableTimeBudgetPropagation,
+    MechanisticFirePropagationUNet,
+)
 
 
 def _mechanistic_model(
@@ -11,11 +15,20 @@ def _mechanistic_model(
     architecture: str = "mechanistic_propagation",
     fire_size_names: list[str] | None = None,
 ) -> MechanisticFirePropagationUNet:
-    fire_size_names = fire_size_names or [
-        "spatialized_fire_size/LOG_SIZE_HA_q10",
-        "spatialized_fire_size/LOG_SIZE_HA_q50",
-        "spatialized_fire_size/LOG_SIZE_HA_q90",
-    ]
+    if fire_size_names is None:
+        fire_size_names = (
+            [
+                "spatialized_spread_opportunity/NORM_TOTAL_BURN_HOURS_Q10",
+                "spatialized_spread_opportunity/NORM_TOTAL_BURN_HOURS_Q50",
+                "spatialized_spread_opportunity/NORM_TOTAL_BURN_HOURS_Q90",
+            ]
+            if architecture == "mechanistic_propagation_v3"
+            else [
+                "spatialized_fire_size/LOG_SIZE_HA_q10",
+                "spatialized_fire_size/LOG_SIZE_HA_q50",
+                "spatialized_fire_size/LOG_SIZE_HA_q90",
+            ]
+        )
     spatial_input_names = [
         "grid/ignition_grid_human",
         "grid/ignition_grid_lightning",
@@ -29,6 +42,8 @@ def _mechanistic_model(
         spatial_input_names=spatial_input_names,
         propagation_base_channels=8,
         propagation_steps=steps,
+        propagation_budget_min_hours=1.0,
+        propagation_budget_max_hours=140.0,
     )
     model = build_model(
         model_config=config,
@@ -93,6 +108,35 @@ def test_percentile_spacing_weights_quantile_survival():
     survival = propagation._survival_probability(quantiles, step=1)
 
     assert survival.item() == pytest.approx(0.7)
+
+
+def test_time_budget_cohorts_allow_more_reach_for_longer_budgets():
+    propagation = DifferentiableTimeBudgetPropagation(
+        steps=3,
+        hours_per_step=2.0,
+        temperature_hours=0.25,
+        quantile_levels=[0.1, 0.5, 0.9],
+    )
+    seed = torch.zeros(1, 1, 9, 9)
+    seed[..., 4, 4] = 0.5
+    transmission = torch.full((1, 8, 9, 9), 0.8)
+    burnability = torch.ones_like(seed)
+
+    short_reach = propagation(
+        seed,
+        transmission,
+        torch.full((1, 3, 9, 9), 1.0),
+        burnability,
+    )
+    long_reach = propagation(
+        seed,
+        transmission,
+        torch.full((1, 3, 9, 9), 20.0),
+        burnability,
+    )
+
+    assert propagation.cohort_weights.flatten().tolist() == pytest.approx([0.3, 0.4, 0.3])
+    assert long_reach.sum() > short_reach.sum()
 
 
 def test_mean_fire_size_channel_is_supported():
@@ -165,3 +209,39 @@ def test_mechanistic_model_has_finite_gradients():
 
     assert resolve_model_architecture(model_config=ModelConfig(architecture="mechanistic_propagation_v2")) == "mechanistic_propagation_v2"
     assert all(parameter.grad is None or torch.isfinite(parameter.grad).all() for parameter in model.parameters())
+
+
+def test_v21_behavior_losses_do_not_update_propagation_parameters():
+    model = _mechanistic_model(architecture="mechanistic_propagation_v21")
+    spatial = torch.zeros(1, 6, 64, 64)
+    spatial[:, 0, 32, 32] = 0.2
+    spatial[:, 3:] = 4.0
+    fuel_curve = torch.ones(1, 4, 64, 64)
+
+    predictions = model(spatial, {"fuel_curve": fuel_curve})
+    predictions[:, 1:].square().mean().backward()
+
+    propagation_gradients = [
+        model.directional_transmission.weight.grad,
+        model.raw_ignition_scale.grad,
+        model.propagation.raw_area_multiplier.grad,
+    ]
+    assert all(gradient is None or not torch.count_nonzero(gradient) for gradient in propagation_gradients)
+
+
+def test_v3_uses_normalized_spread_opportunity_quantiles():
+    model = _mechanistic_model(architecture="mechanistic_propagation_v3")
+    spatial = torch.zeros(1, 6, 64, 64)
+    spatial[:, 0, 32, 32] = 0.2
+    spatial[:, 3] = 0.0
+    spatial[:, 4] = 0.5
+    spatial[:, 5] = 1.0
+    fuel_curve = torch.ones(1, 4, 64, 64)
+
+    predictions = model(spatial, {"fuel_curve": fuel_curve})
+
+    assert resolve_model_architecture(ModelConfig(architecture="mechanistic_propagation_v3")) == "mechanistic_propagation_v3"
+    assert isinstance(model.propagation, DifferentiableTimeBudgetPropagation)
+    assert model.budget_quantile_levels == [0.1, 0.5, 0.9]
+    assert predictions.shape == (1, 3, 64, 64)
+    assert torch.isfinite(predictions).all()

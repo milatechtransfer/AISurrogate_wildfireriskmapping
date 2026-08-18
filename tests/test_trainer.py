@@ -573,6 +573,35 @@ def test_checkpoint_comparison_rejects_nonfinite_metrics():
     assert not Trainer._are_metrics_better([0.6, float("nan")], [], ["max", "max"])
 
 
+def test_trainer_adds_mean_ccc_for_multi_target_results(dummy_config):
+    trainer = Trainer(dummy_config, spatial_input_channels=SPATIAL_CHANNELS)
+    trainer._target_names = ["bp", "fi", "ros"]
+    results = {"bp/ccc": 0.3, "fi/ccc": 0.6, "ros/ccc": 0.9}
+
+    trainer._add_derived_metrics(results)
+
+    assert results["mean/ccc"] == pytest.approx(0.6)
+
+
+def test_optimizer_parameter_lr_scales_create_distinct_group(tmp_path):
+    config = _make_config(
+        tmp_path,
+        optimizer_config=OptimizerConfig(
+            loss="mse",
+            name="Adam",
+            lr=1.0e-3,
+            parameter_lr_scales={"out_conv": 0.1},
+        ),
+    )
+
+    trainer = Trainer(config, spatial_input_channels=SPATIAL_CHANNELS)
+
+    assert sorted(group["lr"] for group in trainer.optimizer.param_groups) == pytest.approx([1.0e-4, 1.0e-3])
+    out_parameters = set(trainer.model.out_conv.parameters())
+    scaled_group = next(group for group in trainer.optimizer.param_groups if group["lr"] == pytest.approx(1.0e-4))
+    assert set(scaled_group["params"]) == out_parameters
+
+
 def test_validate_return_predictions(dummy_config, dummy_data):
     trainer = Trainer(dummy_config, spatial_input_channels=SPATIAL_CHANNELS)
     patch_trainer(trainer)

@@ -74,6 +74,18 @@ class Paths:
     def ignition_distribution_table(self, hex_id: int | str) -> Path:
         return self.tabular_dir / f"hex{hex_id}_IgnitionDistribution.csv"
 
+    def spread_event_days_table(self, hex_id: int | str) -> Path:
+        return self.tabular_dir / f"hex{hex_id}_SpreadEventDays.csv"
+
+    def daily_burning_hours_table(self, hex_id: int | str) -> Path:
+        return self.tabular_dir / f"hex{hex_id}_DailyBurningHours.csv"
+
+    def scenario_distributions_table(self, hex_id: int | str) -> Path:
+        matches = sorted(self.tabular_dir.glob(f"hex{hex_id}_ScenarioDistributions*FINAL.csv"))
+        if len(matches) != 1:
+            raise ValueError(f"Expected exactly one scenario-distribution table for hex{hex_id}, found {len(matches)}: {matches}")
+        return matches[0]
+
     def seasons_greenup_table(self, hex_id: int | str) -> Path:
         return self.tabular_dir / f"hex{hex_id}_GreenUp.csv"
 

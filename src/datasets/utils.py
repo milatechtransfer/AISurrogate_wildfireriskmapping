@@ -6,9 +6,20 @@ import torch
 
 from data_preparation.spatial.utils import FUEL_GROUP_MAP
 
-SPATIALIZED_TABULAR_SOURCE_NAMES = {"spatialized_weather", "spatialized_fire_size"}
+SPATIALIZED_TABULAR_SOURCE_NAMES = {
+    "spatialized_weather",
+    "spatialized_fire_size",
+    "spatialized_spread_opportunity",
+}
 TABULAR_SOURCE_NAMES = {"tabular_weather", "tabular_fire_size"}
-AVAILABLE_DATA_SOURCES = ["grid", "tabular_weather", "tabular_fire_size", "spatialized_weather", "spatialized_fire_size"]
+AVAILABLE_DATA_SOURCES = [
+    "grid",
+    "tabular_weather",
+    "tabular_fire_size",
+    "spatialized_weather",
+    "spatialized_fire_size",
+    "spatialized_spread_opportunity",
+]
 MAX_FUEL_GRID = float(max(FUEL_GROUP_MAP.values()))
 
 
