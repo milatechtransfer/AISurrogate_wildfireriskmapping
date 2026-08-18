@@ -229,7 +229,7 @@ class SpatializedTabularSource(DataSource):
                     )
             else:
                 fill_value = self.global_fill
-        elif self.missing_value_strategy == "zero":
+        elif self.missing_value_strategy in {"zero", "raise"}:
             fill_value = np.zeros(self._feature_dim(), dtype=np.float32)
         else:
             fill_value = np.full(self._feature_dim(), np.nan, dtype=np.float32)

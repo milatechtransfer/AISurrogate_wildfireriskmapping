@@ -401,7 +401,7 @@ def test_spatialized_tabular_raise_ignores_nodata_pixels(temp_data_dir):
     sample = source.get_sample({"file_path": os.path.join(tmpdir, "sample_0.npy")})
 
     assert torch.isfinite(sample[:, 0, 0]).all()
-    assert torch.isnan(sample[:, 1, 1]).all()
+    assert torch.count_nonzero(sample[:, 1, 1]) == 0
 
 
 def test_spatialized_tabular_raise_reports_unmatched_positive_zone(temp_data_dir):
