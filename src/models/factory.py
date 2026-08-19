@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from src.config import ModelConfig
 from src.models.mechanistic_propagation import MechanisticFirePropagationUNet
+from src.models.mechanistic_travel_time import MechanisticTravelTimeUNet
 from src.models.unet import BaselineUNet, MultiSourceUNet
 
 BASELINE_UNET_NAMES = {"baseline_unet", "baseline", "unet"}
@@ -22,6 +23,11 @@ MECHANISTIC_PROPAGATION_V3_NAMES = {
     "mechanistic_propagation_v3",
     "fire_propagation_v3",
     "scenario_propagation_v3",
+}
+MECHANISTIC_TRAVEL_TIME_V4_NAMES = {
+    "mechanistic_travel_time_v4",
+    "travel_time_propagation_v4",
+    "mechanistic_propagation_v4",
 }
 
 
@@ -100,6 +106,22 @@ def build_model(
             target_names=target_names,
         )
 
+    if architecture in MECHANISTIC_TRAVEL_TIME_V4_NAMES:
+        if auxiliary_requested:
+            raise ValueError("Mechanistic travel-time propagation supports spatial inputs and early-fused iROS only.")
+        if target_names is None:
+            raise ValueError("target_names are required for mechanistic travel-time propagation.")
+        return MechanisticTravelTimeUNet(
+            input_channels=spatial_input_channels,
+            spatial_input_names=model_config.spatial_input_names,
+            model_config=model_config,
+            fuel_curve_input_dim=fuel_curve_input_dim,
+            fuel_curve_embed_dim=fuel_curve_embed_dim,
+            fuel_curve_mean=fuel_curve_mean,
+            fuel_curve_std=fuel_curve_std,
+            target_names=target_names,
+        )
+
     mechanistic_names = (
         MECHANISTIC_PROPAGATION_NAMES
         | MECHANISTIC_PROPAGATION_V2_NAMES
@@ -138,6 +160,7 @@ def build_model(
         | MECHANISTIC_PROPAGATION_V2_NAMES
         | MECHANISTIC_PROPAGATION_V21_NAMES
         | MECHANISTIC_PROPAGATION_V3_NAMES
+        | MECHANISTIC_TRAVEL_TIME_V4_NAMES
         | {"auto"}
     )
     raise ValueError(f"Unknown model architecture '{model_config.architecture}'. Supported values: {supported}")

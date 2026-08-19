@@ -31,6 +31,7 @@ MECHANISTIC_V21_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v21_5
 MECHANISTIC_V21_PILOT_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v21_512_crop_256_firesize_q3_pilot.yaml")
 MECHANISTIC_V3_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v3_512_crop_256_spread_opportunity_q3.yaml")
 MECHANISTIC_V3_PILOT_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v3_512_crop_256_spread_opportunity_q3_pilot.yaml")
+MECHANISTIC_V4_CONFIG = Path("configs/mechanistic/mechanistic_travel_time_v4_512_crop_256_spread_opportunity_q3.yaml")
 COMMON_INPUT_PIPELINE_CONFIGS = [BP_CONFIG, FI_CONFIG, ROS_CONFIG]
 
 WEATHER_FEATURES = {
@@ -157,6 +158,28 @@ def test_mechanistic_v3_resolves_scenario_budget_contract():
     assert config.model.propagation_budget_max_hours == pytest.approx(140.0)
     assert config.model.propagation_budget_hours_per_step == pytest.approx(2.0)
     assert config.model.propagation_budget_temperature_hours == pytest.approx(2.0)
+
+
+def test_mechanistic_v4_resolves_warm_started_travel_time_contract():
+    config = load_resolved_config(MECHANISTIC_V4_CONFIG)
+    spread = next(source.params for source in config.data.input_sources if source.name == "spatialized_spread_opportunity")
+
+    assert config.model.architecture == "mechanistic_travel_time_v4"
+    assert config.model.propagation_downsample_factor == 16
+    assert config.model.propagation_steps == 32
+    assert config.model.propagation_budget_min_hours == pytest.approx(1.0)
+    assert config.model.propagation_budget_max_hours == pytest.approx(140.0)
+    assert config.training.max_epochs == 10
+    assert config.training.freeze_pretrained_epochs == 1
+    assert config.training.initial_checkpoint is not None
+    assert config.optimizer.parameter_lr_scales["encoder"] == pytest.approx(0.1)
+    assert config.evaluation.best_ckpt_metrics == ["mean/ccc"]
+    assert isinstance(spread, SpatializedTabularParams)
+    assert spread.feature_names_list == [
+        "NORM_TOTAL_BURN_HOURS_Q10",
+        "NORM_TOTAL_BURN_HOURS_Q50",
+        "NORM_TOTAL_BURN_HOURS_Q90",
+    ]
 
 
 @pytest.mark.parametrize("config_path", [MECHANISTIC_V21_PILOT_CONFIG, MECHANISTIC_V3_PILOT_CONFIG])

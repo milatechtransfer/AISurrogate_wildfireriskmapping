@@ -44,7 +44,7 @@ class ModelConfig(BaseModel):
 
     # Mechanistic fire propagation
     propagation_base_channels: int = Field(default=24, gt=0)
-    propagation_downsample_factor: Literal[4, 8] = 8
+    propagation_downsample_factor: Literal[4, 8, 16] = 8
     propagation_steps: int = Field(default=24, gt=0)
     propagation_cell_size_m: float = Field(default=100.0, gt=0.0)
     propagation_survival_sharpness: float = Field(default=6.0, gt=0.0)
@@ -59,6 +59,25 @@ class ModelConfig(BaseModel):
     propagation_budget_temperature_hours: float = Field(default=2.0, gt=0.0)
     propagation_budget_min_hours: float = Field(default=0.0, ge=0.0)
     propagation_budget_max_hours: float = Field(default=1.0, gt=0.0)
+    propagation_isi_bins: list[float] = Field(
+        default_factory=lambda: [1e-6, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0]
+    )
+    propagation_isi_mean: float = 0.0
+    propagation_isi_std: float = Field(default=1.0, gt=0.0)
+    propagation_wind_x_mean: float = 0.0
+    propagation_wind_x_std: float = Field(default=1.0, gt=0.0)
+    propagation_wind_y_mean: float = 0.0
+    propagation_wind_y_std: float = Field(default=1.0, gt=0.0)
+    propagation_wind_direction_is_from: bool = True
+    propagation_wind_anisotropy: float = Field(default=0.6931471805599453, ge=0.0)
+    propagation_wind_half_saturation_kmh: float = Field(default=10.0, gt=0.0)
+    propagation_elevation_min_m: float = 0.0
+    propagation_elevation_max_m: float = 1.0
+    propagation_slope_coefficient: float = Field(default=3.0, ge=0.0)
+    propagation_max_abs_grade: float = Field(default=0.5, gt=0.0)
+    propagation_min_ros_m_per_min: float = Field(default=0.05, gt=0.0)
+    propagation_speed_correction_log_limit: float = Field(default=0.6931471805599453, ge=0.0)
+    propagation_max_bp_logit_correction: float = Field(default=2.0, gt=0.0)
 
     @model_validator(mode="after")
     def validate_propagation_area_multiplier(self) -> "ModelConfig":
@@ -68,6 +87,12 @@ class ModelConfig(BaseModel):
             raise ValueError("propagation_initial_ignition_scale must be below propagation_max_ignition_scale.")
         if self.propagation_budget_max_hours <= self.propagation_budget_min_hours:
             raise ValueError("propagation_budget_max_hours must exceed propagation_budget_min_hours.")
+        if len(self.propagation_isi_bins) < 2:
+            raise ValueError("propagation_isi_bins must contain at least two values.")
+        if any(right <= left for left, right in zip(self.propagation_isi_bins, self.propagation_isi_bins[1:], strict=False)):
+            raise ValueError("propagation_isi_bins must be strictly increasing.")
+        if self.propagation_elevation_max_m <= self.propagation_elevation_min_m:
+            raise ValueError("propagation_elevation_max_m must exceed propagation_elevation_min_m.")
         return self
 
     # specific to auxiliary model
@@ -127,6 +152,8 @@ class TrainingConfig(BaseModel):
     log_every_n_epoch: int = 1
     gradient_accumulation_steps: int = Field(default=1, gt=0)
     gradient_clip_norm: float | None = Field(default=None, gt=0.0)
+    initial_checkpoint: str | None = None
+    freeze_pretrained_epochs: int = Field(default=0, ge=0)
 
 
 class EvaluationConfig(BaseModel):

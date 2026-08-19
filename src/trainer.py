@@ -3,6 +3,7 @@ import logging
 import os
 import random
 import time
+from collections.abc import Mapping
 from typing import Any, Literal, cast, overload
 
 import numpy as np
@@ -134,6 +135,7 @@ class Trainer:
             target_names=self._target_names,
         )
 
+        self._load_initial_checkpoint()
         self.model.to(self.device)
 
         # Get and log number of model params.
@@ -153,6 +155,7 @@ class Trainer:
         self.optimizer = OptimizerClass(self._optimizer_parameter_groups(), **opt_params)
 
         self.global_step = 0
+        self._pretrained_frozen: bool | None = None
 
         # MPS-only memory diagnostic populated by validate()/test(); not a loss/metric,
         # so it is kept out of the results dict and exposed separately to avoid leaking
@@ -163,6 +166,45 @@ class Trainer:
         self._validate_and_load_metrics()
 
         self._configure_metric_target_transform()
+
+    def _load_initial_checkpoint(self) -> None:
+        configured_path = self.config.training.initial_checkpoint
+        if configured_path is None:
+            return
+        checkpoint_path = os.path.expanduser(os.path.expandvars(configured_path))
+        if "$" in checkpoint_path:
+            raise ValueError(f"training.initial_checkpoint contains an unresolved environment variable: {configured_path}")
+        last_path = os.path.join(self.save_dir, "last.pth")
+        if os.path.exists(last_path):
+            print(f"[Warm Start] Existing {last_path} will be resumed; skipping initial checkpoint.")
+            return
+        if not os.path.isfile(checkpoint_path):
+            raise FileNotFoundError(f"training.initial_checkpoint does not exist: {checkpoint_path}")
+
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        state_dict = checkpoint.get("model_state")
+        if not isinstance(state_dict, Mapping):
+            raise ValueError(f"Initial checkpoint {checkpoint_path} does not contain a model_state mapping.")
+        custom_loader = getattr(self.model, "load_pretrained_unet_state_dict", None)
+        if custom_loader is None:
+            self.model.load_state_dict(state_dict)
+            report = {"loaded": len(state_dict), "new": 0}
+        else:
+            report = custom_loader(state_dict, checkpoint.get("config"))
+        print(f"[Warm Start] Loaded {report['loaded']} U-Net tensors from {checkpoint_path}; initialized {report['new']} new v4 tensors.")
+
+    def _configure_pretrained_freeze(self, epoch: int) -> None:
+        freeze_method = getattr(self.model, "set_pretrained_frozen", None)
+        if freeze_method is None:
+            if self.config.training.freeze_pretrained_epochs:
+                raise ValueError("freeze_pretrained_epochs requires a model that supports pretrained-module freezing.")
+            return
+        frozen = epoch <= self.config.training.freeze_pretrained_epochs
+        freeze_method(frozen)
+        if frozen != self._pretrained_frozen:
+            state = "frozen" if frozen else "trainable"
+            print(f"[Warm Start] Pretrained U-Net modules are {state} for epoch {epoch}.")
+            self._pretrained_frozen = frozen
 
     def _optimizer_parameter_groups(self):
         lr_scales = self.config.optimizer.parameter_lr_scales
@@ -787,6 +829,7 @@ class Trainer:
         start_epoch = self._maybe_resume(lr_scheduler)
 
         for epoch in range(start_epoch, num_epochs + 1):
+            self._configure_pretrained_freeze(epoch)
             start = time.time()
             train_res = self.train_epoch(train_loader, lr_scheduler=lr_scheduler, lr_scheduler_type=lr_scheduler_type)
             elapsed = time.time() - start

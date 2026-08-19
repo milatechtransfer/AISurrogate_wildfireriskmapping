@@ -164,7 +164,7 @@ class BaselineUNet(UNetBase):
         )
         return decoder
 
-    def forward(self, x: torch.Tensor, x_auxiliary: dict[str, torch.Tensor] | None = None) -> torch.Tensor:
+    def forward_features(self, x: torch.Tensor, x_auxiliary: dict[str, torch.Tensor] | None = None) -> torch.Tensor:
         if self.fuel_curve_encoder is not None and x_auxiliary is not None and "fuel_curve" in x_auxiliary:
             fuel_curve_emb = self.fuel_curve_encoder(x_auxiliary["fuel_curve"])  # (B, fuel_curve_embed_dim, H, W)
             x = torch.cat([x, fuel_curve_emb], dim=1)  # (B, C + fuel_curve_embed_dim, H, W)
@@ -172,8 +172,10 @@ class BaselineUNet(UNetBase):
         if self.use_coordconv:
             x = append_coord_channels(x)
         x = self.bottleneck(x)
-        x = self.decoder(x, skip_connections)
-        return self._project_output(x)
+        return self.decoder(x, skip_connections)
+
+    def forward(self, x: torch.Tensor, x_auxiliary: dict[str, torch.Tensor] | None = None) -> torch.Tensor:
+        return self._project_output(self.forward_features(x, x_auxiliary))
 
 
 class MultiSourceUNet(UNetBase):
