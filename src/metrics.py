@@ -265,6 +265,7 @@ def compute_auc_iou(
     k_values: tuple[float, float] = (0.01, 0.99),
     steps: int = 99,
     eps: float = 1e-8,
+    threshold_chunk_size: int = 4,
 ) -> torch.Tensor:
     """
     Computes the Area Under the Curve (AUC) for IoU for a specified continuous TopK perc. range.
@@ -272,6 +273,7 @@ def compute_auc_iou(
     Args:
         k_values (tuple[float, float]): Tuple (min_k, max_k) defining the continuous range for eval.
         steps (int): Number of points to evaluate within the continuous range.
+        threshold_chunk_size (int): Number of TopK thresholds binarized together.
     """
     batch_size = preds.size(0)
     flat_preds = preds.reshape(batch_size, -1)
@@ -289,27 +291,32 @@ def compute_auc_iou(
         raise ValueError("k_values must satisfy min_k < max_k.")
     if not isinstance(steps, int) or steps < 2:
         raise ValueError("steps must be an integer greater than or equal to 2.")
+    if not isinstance(threshold_chunk_size, int) or threshold_chunk_size < 1:
+        raise ValueError("threshold_chunk_size must be a positive integer.")
 
     k_tensor = torch.linspace(min_k, max_k, steps=steps, device=preds.device)
     percentiles = 1.0 - k_tensor
 
     aucs = []
 
+    def compute_iou_curve(p: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        p_thresh = _topk_thresholds(p, percentiles)
+        t_thresh = _topk_thresholds(t, percentiles)
+        iou_chunks = []
+        for start in range(0, steps, threshold_chunk_size):
+            stop = min(start + threshold_chunk_size, steps)
+            p_bin = p.unsqueeze(0) >= p_thresh[start:stop].unsqueeze(1)
+            t_bin = t.unsqueeze(0) >= t_thresh[start:stop].unsqueeze(1)
+            intersection = (p_bin & t_bin).sum(dim=1).float()
+            union = (p_bin | t_bin).sum(dim=1).float()
+            iou_chunks.append(intersection / (union + eps))
+        return torch.cat(iou_chunks)
+
     if mask is None:
         for i in range(batch_size):
             p = flat_preds[i]
             t = flat_targets[i]
-
-            p_thresh = _topk_thresholds(p, percentiles)
-            t_thresh = _topk_thresholds(t, percentiles)
-
-            p_bin = p.unsqueeze(0) >= p_thresh.unsqueeze(1)
-            t_bin = t.unsqueeze(0) >= t_thresh.unsqueeze(1)
-
-            intersection = (p_bin & t_bin).sum(dim=1).float()
-            union = (p_bin | t_bin).sum(dim=1).float()
-
-            ious = intersection / (union + eps)
+            ious = compute_iou_curve(p, t)
 
             auc = torch.trapz(ious, k_tensor)
             max_area = k_tensor[-1] - k_tensor[0]
@@ -326,17 +333,7 @@ def compute_auc_iou(
 
             p_valid = flat_preds[i][sample_valid_mask]
             t_valid = flat_targets[i][sample_valid_mask]
-
-            p_thresh = _topk_thresholds(p_valid, percentiles)
-            t_thresh = _topk_thresholds(t_valid, percentiles)
-
-            p_bin = p_valid.unsqueeze(0) >= p_thresh.unsqueeze(1)
-            t_bin = t_valid.unsqueeze(0) >= t_thresh.unsqueeze(1)
-
-            intersection = (p_bin & t_bin).sum(dim=1).float()
-            union = (p_bin | t_bin).sum(dim=1).float()
-
-            ious = intersection / (union + eps)
+            ious = compute_iou_curve(p_valid, t_valid)
 
             auc = torch.trapz(ious, k_tensor)
             max_area = k_tensor[-1] - k_tensor[0]

@@ -283,6 +283,29 @@ def test_auc_iou_handles_large_flat_tensors():
     assert torch.isclose(auc, torch.tensor(1.0))
 
 
+def test_auc_iou_chunking_matches_vectorized_result(dummy_data, dummy_mask):
+    preds, targets = dummy_data
+
+    chunked = compute_auc_iou(
+        preds,
+        targets,
+        mask=dummy_mask,
+        k_values=(0.01, 0.99),
+        steps=17,
+        threshold_chunk_size=2,
+    )
+    vectorized = compute_auc_iou(
+        preds,
+        targets,
+        mask=dummy_mask,
+        k_values=(0.01, 0.99),
+        steps=17,
+        threshold_chunk_size=17,
+    )
+
+    assert torch.equal(chunked, vectorized)
+
+
 def test_auc_iou_invalid_k_values(dummy_data):
     preds, targets = dummy_data
 
@@ -291,6 +314,9 @@ def test_auc_iou_invalid_k_values(dummy_data):
 
     with pytest.raises(ValueError, match="k_values must be a tuple"):
         compute_auc_iou(preds, targets, k_values=[0.01, 0.10])  # type: ignore
+
+    with pytest.raises(ValueError, match="threshold_chunk_size"):
+        compute_auc_iou(preds, targets, threshold_chunk_size=0)
 
 
 def test_ccc_perfect_agreement():
