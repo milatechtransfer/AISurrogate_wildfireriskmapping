@@ -53,6 +53,13 @@ class ModelConfig(BaseModel):
     propagation_logit_eps: float = Field(default=1e-6, gt=0.0, lt=0.5)
     propagation_initial_ignition_scale: float = Field(default=0.05, gt=0.0)
     propagation_max_ignition_scale: float = Field(default=1.0, gt=0.0)
+    propagation_ignition_mode: Literal["legacy_intensity", "probability_mass"] = "legacy_intensity"
+    propagation_ignition_probability_mass_scale: float = Field(default=1_000_000.0, gt=0.0)
+    propagation_count_log_mean_min: float = 0.0
+    propagation_count_log_mean_max: float = 1.0
+    propagation_scenario_mode: Literal["burn_hours", "fire_size"] = "burn_hours"
+    propagation_fire_size_log_min: float = 0.0
+    propagation_fire_size_log_max: float = 1.0
     propagation_initial_bp_scale: float = Field(default=0.1, gt=0.0)
     propagation_max_local_log_calibration: float = Field(default=0.6931471805599453, ge=0.0)
     propagation_budget_hours_per_step: float = Field(default=2.0, gt=0.0)
@@ -85,6 +92,10 @@ class ModelConfig(BaseModel):
             raise ValueError("propagation_max_area_multiplier must exceed propagation_min_area_multiplier.")
         if self.propagation_initial_ignition_scale >= self.propagation_max_ignition_scale:
             raise ValueError("propagation_initial_ignition_scale must be below propagation_max_ignition_scale.")
+        if self.propagation_count_log_mean_max <= self.propagation_count_log_mean_min:
+            raise ValueError("propagation_count_log_mean_max must exceed propagation_count_log_mean_min.")
+        if self.propagation_fire_size_log_max <= self.propagation_fire_size_log_min:
+            raise ValueError("propagation_fire_size_log_max must exceed propagation_fire_size_log_min.")
         if self.propagation_budget_max_hours <= self.propagation_budget_min_hours:
             raise ValueError("propagation_budget_max_hours must exceed propagation_budget_min_hours.")
         if len(self.propagation_isi_bins) < 2:
@@ -356,6 +367,8 @@ class DataPrepConfig(BaseModel):
     target_crop_h: int | None = Field(default=None, gt=0)
     target_crop_w: int | None = Field(default=None, gt=0)
     overlap_ratio: float = Field(default=0.2, ge=0.0, lt=1.0)
+    ignition_weighting: Literal["max", "distribution", "probability_mass"] = "distribution"
+    fuel_representation: Literal["raw", "group"] = "raw"
 
     @model_validator(mode="after")
     def validate_target_crop(self) -> "DataPrepConfig":
@@ -419,6 +432,9 @@ class Config(BaseModel):
         if len(target_names) > 1:
             valid_checkpoint_metrics = {"loss"}
             valid_checkpoint_metrics.update(f"{target_name}/{metric_name}" for target_name in target_names for metric_name in self.metrics)
+            valid_checkpoint_metrics.update(
+                f"hex/{target_name}/{metric_name}" for target_name in [*target_names, "mean"] for metric_name in self.metrics
+            )
             if "ccc" in self.metrics:
                 valid_checkpoint_metrics.add("mean/ccc")
             for target_name, loss_config in self.optimizer.target_losses.items():

@@ -660,6 +660,11 @@ def test_spread_opportunity_uses_spatialized_tabular_source():
     assert get_data_source_param_class("spatialized_spread_opportunity") is SpatializedTabularParams
 
 
+def test_ignition_count_uses_spatialized_tabular_source():
+    assert get_data_source_class("spatialized_ignition_count") is SpatializedTabularSource
+    assert get_data_source_param_class("spatialized_ignition_count") is SpatializedTabularParams
+
+
 def test_build_dataset_can_include_patch_metadata(temp_data_dir, monkeypatch):
     tmpdir, train_csv, _, _, _, _, _, _ = temp_data_dir
     monkeypatch.setattr("src.datasets.sources.grids.get_range_output_cached", lambda *_args, **_kwargs: (1.0, 0.0))

@@ -1,0 +1,86 @@
+extends: "../context_models/unet_compact_512_crop_256_firesize_q3_ignition_count.yaml"
+
+save_dir: "experiments/mechanistic/mechanistic_travel_time_compact_512_crop_256_firesize_q3_ignition_count"
+
+model:
+  architecture: "mechanistic_travel_time_v4"
+  propagation_base_channels: 24
+  propagation_downsample_factor: 16
+  propagation_steps: 32
+  propagation_cell_size_m: 100.0
+  propagation_ignition_mode: "probability_mass"
+  propagation_ignition_probability_mass_scale: 1000000.0
+  propagation_count_log_mean_min: 0.7347688552507647
+  propagation_count_log_mean_max: 3.336054233329951
+  propagation_scenario_mode: "fire_size"
+  propagation_fire_size_log_min: 0.0
+  propagation_fire_size_log_max: 6.021189712683533
+  propagation_budget_temperature_hours: 4.0
+  propagation_isi_bins:
+    - 0.000001
+    - 5.0
+    - 10.0
+    - 15.0
+    - 20.0
+    - 25.0
+    - 30.0
+    - 35.0
+    - 40.0
+    - 45.0
+    - 50.0
+    - 55.0
+    - 60.0
+    - 65.0
+    - 70.0
+    - 75.0
+    - 80.0
+    - 85.0
+  propagation_isi_mean: 9.826072859968734
+  propagation_isi_std: 4.01967409023783
+  propagation_wind_x_mean: -2.170149045552503
+  propagation_wind_x_std: 8.174554161877042
+  propagation_wind_y_mean: -3.1121948890535416
+  propagation_wind_y_std: 7.663523056556529
+  propagation_wind_direction_is_from: true
+  propagation_wind_anisotropy: 0.6931471805599453
+  propagation_wind_half_saturation_kmh: 10.0
+  propagation_elevation_min_m: -245.0
+  propagation_elevation_max_m: 5932.0
+  propagation_slope_coefficient: 3.0
+  propagation_max_abs_grade: 0.5
+  propagation_min_ros_m_per_min: 0.05
+  propagation_speed_correction_log_limit: 0.6931471805599453
+  propagation_max_bp_logit_correction: 2.0
+
+optimizer:
+  lr: 3.0e-4
+
+lr_scheduler:
+  warmup_epochs: 1
+
+training:
+  max_epochs: 10
+  gradient_accumulation_steps: 4
+  gradient_clip_norm: 1.0
+  freeze_pretrained_epochs: 10
+  initial_checkpoint: "${SCENARIO_UNET_CHECKPOINT}"
+
+logger:
+  experiment_name: "mechanistic_travel_time_compact_512_crop_256_firesize_q3_ignition_count"
+  tags:
+    - "mechanistic_travel_time_v4"
+    - "architecture=unet_compact"
+    - "warm_start=compact_count_unet"
+    - "backbone=frozen"
+    - "ignition_spatial=exact_probability_mass_per_million"
+    - "ignition_seed=poisson_mean_count_times_location_mass"
+    - "ignition_count_cv=neural_backbone_only"
+    - "scenario_control=fire_size_q10_q50_q90"
+    - "fire_size_to_budget=equivalent_radius_over_local_ros"
+    - "mechanistic_target=bp_only"
+    - "travel_grid=32x32"
+    - "propagation_steps=32"
+    - "best_ckpt=stitched_validation_hex_mean_ccc"
+    - "input_patch=512"
+    - "target_crop=256"
+    - "effective_batch=64"

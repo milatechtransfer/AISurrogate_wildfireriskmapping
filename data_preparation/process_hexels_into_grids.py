@@ -230,7 +230,11 @@ def main():
         "--ignition_weighting",
         choices=IGNITION_WEIGHTING_CHOICES,
         default="distribution",
-        help="'distribution' (default) for zone-area-weighted 2-channel ignition or 'max' for the original max-aggregation (1 channel).",
+        help=(
+            "'distribution' for legacy zone-area-weighted 2-channel ignition, "
+            "'probability_mass' for exact per-ignition Human/Lightning spatial mass, "
+            "or 'max' for the original max aggregation."
+        ),
     )
     parser.add_argument(
         "--fuel_grid_representation",

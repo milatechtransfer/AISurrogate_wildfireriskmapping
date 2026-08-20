@@ -10,6 +10,7 @@ SPATIALIZED_TABULAR_SOURCE_NAMES = {
     "spatialized_weather",
     "spatialized_fire_size",
     "spatialized_spread_opportunity",
+    "spatialized_ignition_count",
 }
 TABULAR_SOURCE_NAMES = {"tabular_weather", "tabular_fire_size"}
 AVAILABLE_DATA_SOURCES = [
@@ -19,6 +20,7 @@ AVAILABLE_DATA_SOURCES = [
     "spatialized_weather",
     "spatialized_fire_size",
     "spatialized_spread_opportunity",
+    "spatialized_ignition_count",
 ]
 MAX_FUEL_GRID = float(max(FUEL_GROUP_MAP.values()))
 

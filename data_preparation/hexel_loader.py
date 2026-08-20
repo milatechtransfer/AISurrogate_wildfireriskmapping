@@ -6,10 +6,17 @@ import os
 import numpy as np
 
 from data_preparation.paths import Paths, normalize_mask_scope
-from data_preparation.spatial import NODATA, load_fuel_grid, load_ignition_grid, load_ignition_grid_weighted, load_spatial_raster
+from data_preparation.spatial import (
+    NODATA,
+    load_fuel_grid,
+    load_ignition_grid,
+    load_ignition_grid_probability_mass,
+    load_ignition_grid_weighted,
+    load_spatial_raster,
+)
 from data_preparation.utils import feature_names, feature_names_weighted_ignition
 
-IGNITION_WEIGHTING_CHOICES = ("max", "distribution")
+IGNITION_WEIGHTING_CHOICES = ("max", "distribution", "probability_mass")
 FUEL_GRID_CHOICES = ("raw", "group")
 
 
@@ -48,8 +55,9 @@ def load_spatial_features_per_hexel(
     root_dir: Root directory containing all hexels.
     hex_id: Hexel id to load.
     modelling_approach: 1 for joint season-cause modelling, 2 for separate season-cause modelling.
-    ignition_weighting: "distribution" (default) for zone-area-weighted blending (2 channels:
-        human + lightning), or "max" for the original max-aggregation (1 channel).
+    ignition_weighting: "distribution" for legacy zone-area-weighted blending,
+        "probability_mass" for exact BurnP3+ per-ignition spatial mass
+        (both produce Human + Lightning channels), or "max" for one max channel.
     Returns:
         all_features: np.ndarray of shape (N, H, W, num_features)
         all_masks: np.ndarray of shape (N, H, W)
@@ -61,7 +69,7 @@ def load_spatial_features_per_hexel(
     if fuel_representation not in FUEL_GRID_CHOICES:
         raise ValueError(f"fuel_representation must be one of {FUEL_GRID_CHOICES}, got {fuel_representation!r}.")
 
-    use_distribution = ignition_weighting == "distribution"
+    use_two_channel_ignition = ignition_weighting in {"distribution", "probability_mass"}
 
     def stack_sample(
         fuel_grid: np.ma.MaskedArray,
@@ -77,7 +85,7 @@ def load_spatial_features_per_hexel(
         ignition_grid may be (H, W) for the max-aggregation path or
         (H, W, 2) for the distribution-weighted path.
         """
-        if use_distribution:
+        if use_two_channel_ignition:
             # ignition_grid is (H, W, 2) — split into two separate (H, W, 1) channels
             # so that generate_feature_channel_map maps each to its own name
             ign_features_list = [ignition_grid[:, :, 0:1], ignition_grid[:, :, 1:2]]
@@ -95,7 +103,7 @@ def load_spatial_features_per_hexel(
         ]
 
         if not os.path.exists(feature_channel_map_path):
-            names = feature_names_weighted_ignition if use_distribution else feature_names
+            names = feature_names_weighted_ignition if use_two_channel_ignition else feature_names
             generate_feature_channel_map(features_list, feature_channel_map_path, names=names)
 
         fuel_mask = np.ma.getmaskarray(fuel_grid)
@@ -130,8 +138,16 @@ def load_spatial_features_per_hexel(
 
     if modelling_approach == 1:
         # input
-        if use_distribution:
+        if ignition_weighting == "distribution":
             ignition_grid = load_ignition_grid_weighted(
+                root_dir=root_dir,
+                hex_id=hex_id,
+                firezones_grid=firezones_grid,
+                reference_profile=reference_profile,
+                mask_scope=scope,
+            )
+        elif ignition_weighting == "probability_mass":
+            ignition_grid = load_ignition_grid_probability_mass(
                 root_dir=root_dir,
                 hex_id=hex_id,
                 firezones_grid=firezones_grid,

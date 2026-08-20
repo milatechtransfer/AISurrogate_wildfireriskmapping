@@ -15,6 +15,8 @@ from data_preparation.spatial.utils import (
 
 logger = logging.getLogger(__name__)
 
+IGNITION_PROBABILITY_MASS_SCALE = 1_000_000.0
+
 
 def load_ignition_grid(
     root_dir: str,
@@ -60,6 +62,143 @@ _csv_cause_to_letter = {label: letter for letter, label in fire_cause_label_mapp
 # matches e.g. "hex02_ignGrid_H_s3.tif" or "hex100_ignGrid_H_Spring.tif"
 # Season token is any non-dot sequence after the cause letter.
 _IGN_GRID_PATTERN = re.compile(r"_ignGrid_([A-Z])_([^.]+)\.tif$")
+
+
+def build_ignition_probability_mass_channels(
+    *,
+    grids: dict[tuple[str, str], np.ma.MaskedArray],
+    distribution_frame: pd.DataFrame,
+    firezones_grid: np.ma.MaskedArray,
+    zone_name_to_id: dict[str, int],
+    scale: float = IGNITION_PROBABILITY_MASS_SCALE,
+) -> np.ma.MaskedArray:
+    """Build cause-specific location mass for one BurnP3+-sampled ignition."""
+    if scale <= 0.0:
+        raise ValueError(f"Ignition probability-mass scale must be positive, got {scale}.")
+    if not grids:
+        raise ValueError("At least one ignition grid is required.")
+
+    frame = distribution_frame.copy()
+    frame.columns = [str(column).strip() for column in frame.columns]
+    required_columns = {"Season", "Cause", "FireZone", "RelativeLikelihood"}
+    missing_columns = required_columns - set(frame.columns)
+    if missing_columns:
+        raise ValueError(f"Ignition-distribution table is missing columns: {sorted(missing_columns)}")
+    frame["RelativeLikelihood"] = pd.to_numeric(frame["RelativeLikelihood"], errors="raise")
+    if (frame["RelativeLikelihood"] < 0.0).any():
+        raise ValueError("Ignition-distribution table contains negative relative likelihoods.")
+
+    ref = next(iter(grids.values()))
+    shape = ref.shape
+    if firezones_grid.shape != shape or any(grid.shape != shape for grid in grids.values()):
+        raise ValueError("Ignition grids and fire-zone grid must share one spatial shape.")
+
+    zone_data = np.ma.getdata(firezones_grid)
+    landscape_mask = np.ma.getmaskarray(firezones_grid).copy()
+    for grid in grids.values():
+        landscape_mask |= np.ma.getmaskarray(grid)
+
+    components: list[tuple[float, str, tuple[str, str], int, float]] = []
+    for _, row in frame.iterrows():
+        likelihood = float(row["RelativeLikelihood"])
+        if likelihood <= 0.0:
+            continue
+        season = str(row["Season"]).strip()
+        cause_label = str(row["Cause"]).strip()
+        zone_name = str(row["FireZone"]).strip()
+        cause_letter = _csv_cause_to_letter.get(cause_label)
+        zone_id = zone_name_to_id.get(zone_name)
+        if cause_letter is None or not season or zone_id is None:
+            logger.warning(
+                "Dropping unresolved ignition category season=%r, cause=%r, firezone=%r.",
+                season,
+                cause_label,
+                zone_name,
+            )
+            continue
+        category_grid = grids.get((cause_letter, season))
+        if category_grid is None:
+            logger.warning("Dropping ignition category with no grid: cause=%s, season=%s.", cause_letter, season)
+            continue
+
+        values = np.asarray(np.ma.getdata(category_grid))
+        grid_mask = np.ma.getmaskarray(category_grid)
+        if np.any(values[~grid_mask] < 0.0):
+            raise ValueError(f"Ignition grid {(cause_letter, season)} contains negative values.")
+        valid = (~landscape_mask) & (zone_data == zone_id) & np.isfinite(values) & (values > 0.0)
+        spatial_total = float(values[valid].sum(dtype=np.float64))
+        if spatial_total <= 0.0:
+            logger.warning(
+                "Dropping ignition category with no positive spatial mass: cause=%s, season=%s, firezone=%s.",
+                cause_letter,
+                season,
+                zone_name,
+            )
+            continue
+        components.append((likelihood, cause_letter, (cause_letter, season), zone_id, spatial_total))
+
+    total_likelihood = sum(likelihood for likelihood, _, _, _, _ in components)
+    if total_likelihood <= 0.0:
+        raise ValueError("No valid positive-likelihood ignition categories remain after spatial validation.")
+
+    cause_channels = {cause_letter: np.zeros(shape, dtype=np.float64) for cause_letter in fire_cause_mapping.values()}
+    for likelihood, cause_letter, grid_key, zone_id, spatial_total in components:
+        values = np.asarray(np.ma.getdata(grids[grid_key]))
+        valid = (~landscape_mask) & (zone_data == zone_id) & np.isfinite(values) & (values > 0.0)
+        cause_channels[cause_letter][valid] += (likelihood / total_likelihood) * values[valid] / spatial_total
+
+    total_mass = sum(float(channel.sum()) for channel in cause_channels.values())
+    if not np.isclose(total_mass, 1.0, rtol=1e-6, atol=1e-8):
+        raise RuntimeError(f"Per-ignition spatial mass must sum to one, got {total_mass}.")
+
+    stacked = np.stack(
+        [cause_channels[cause_letter] * scale for cause_letter in fire_cause_mapping.values()],
+        axis=-1,
+    ).astype(np.float32)
+    return np.ma.array(stacked, mask=np.broadcast_to(landscape_mask[:, :, None], stacked.shape))
+
+
+def load_ignition_grid_probability_mass(
+    root_dir: str,
+    hex_id: str,
+    firezones_grid: np.ma.MaskedArray,
+    reference_profile: dict[str, Any] | None = None,
+    mask_scope: str = "actual",
+) -> np.ma.MaskedArray:
+    """Load Human/Lightning location mass per million sampled ignitions."""
+    all_paths = Paths(hex_id=hex_id, root_dir=root_dir)
+    ign_dir = all_paths.ignition_prob_dir()
+    mask_path = all_paths.mask_grid(hex_id=hex_id, mask_scope=mask_scope)
+
+    grids: dict[tuple[str, str], np.ma.MaskedArray] = {}
+    known_causes = set(fire_cause_mapping.values())
+    if ign_dir.is_dir():
+        for fname in sorted(os.listdir(ign_dir)):
+            match = _IGN_GRID_PATTERN.search(fname)
+            if match is None or match.group(1) not in known_causes:
+                continue
+            cause_letter, season = match.group(1), match.group(2)
+            raster, _ = load_spatial_raster(
+                path=ign_dir / fname,
+                mask_path=mask_path,
+                reference_profile=reference_profile,
+            )
+            grids[(cause_letter, season)] = raster
+    if not grids:
+        raise FileNotFoundError(f"No ignition TIFs found in {ign_dir} for hex{hex_id}")
+
+    firezones_frame = pd.read_csv(all_paths.firezones_table(hex_id=hex_id))
+    firezones_frame.columns = [str(column).strip() for column in firezones_frame.columns]
+    if not {"Name", "ID"} <= set(firezones_frame.columns):
+        raise ValueError(f"Fire-zone table must contain Name and ID columns: {list(firezones_frame.columns)}")
+    zone_name_to_id = {str(row["Name"]).strip(): int(row["ID"]) for _, row in firezones_frame.iterrows() if str(row["Name"]).strip()}
+    distribution_frame = pd.read_csv(all_paths.ignition_distribution_table(hex_id=hex_id))
+    return build_ignition_probability_mass_channels(
+        grids=grids,
+        distribution_frame=distribution_frame,
+        firezones_grid=firezones_grid,
+        zone_name_to_id=zone_name_to_id,
+    )
 
 
 def load_ignition_grid_weighted(
@@ -123,7 +262,7 @@ def load_ignition_grid_weighted(
     total_valid = zone_ids_valid.size
     if total_valid > 0:
         unique_ids, counts = np.unique(zone_ids_valid, return_counts=True)
-        for zid, cnt in zip(unique_ids, counts):
+        for zid, cnt in zip(unique_ids, counts, strict=True):
             area_frac[int(zid)] = cnt / total_valid
 
     # ── 3. Load zone name → ID mapping from FireZones.csv ────────────────────

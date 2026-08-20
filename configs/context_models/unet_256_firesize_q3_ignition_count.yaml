@@ -1,0 +1,31 @@
+extends: "unet_512_crop_256_firesize_q3_ignition_count.yaml"
+
+save_dir: "experiments/context_models/unet_256_firesize_q3_ignition_count"
+
+training:
+  gradient_accumulation_steps: 1
+
+data:
+  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4"
+  batch_size: 64
+  num_workers: 2
+
+data_prep:
+  win_h: 256
+  win_w: 256
+  target_crop_h: null
+  target_crop_w: null
+
+logger:
+  experiment_name: "unet_256_firesize_q3_ignition_count"
+  tags:
+    - "ignition_count_conditioning"
+    - "architecture=unet_full"
+    - "ignition_spatial=legacy_distribution"
+    - "ignition_count=normalized_log_mean_plus_cv"
+    - "fire_size=q10_q50_q90"
+    - "best_ckpt=stitched_validation_hex_mean_ccc"
+    - "input_patch=256"
+    - "target_crop=256"
+    - "effective_batch=64"
+    - "context_comparison=256_to_256"

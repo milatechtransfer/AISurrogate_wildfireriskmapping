@@ -29,6 +29,62 @@ from src.utils import AVAILABLE_METRICS, build_single_loss, set_device
 logger = logging.getLogger(__name__)
 
 
+def validate_mechanistic_normalization_params(config: Config, resolved_architecture: str) -> None:
+    """Ensure mechanistic denormalization constants match the dataset artifacts."""
+    if resolved_architecture != "mechanistic_travel_time_v4":
+        return
+
+    checks: list[tuple[str, dict[str, tuple[str, float]]]] = []
+    if config.model.propagation_ignition_mode == "probability_mass":
+        checks.append(
+            (
+                "ignition_count_norm_params.json",
+                {
+                    "log1p_mean_minimum": (
+                        "model.propagation_count_log_mean_min",
+                        config.model.propagation_count_log_mean_min,
+                    ),
+                    "log1p_mean_maximum": (
+                        "model.propagation_count_log_mean_max",
+                        config.model.propagation_count_log_mean_max,
+                    ),
+                },
+            )
+        )
+    if config.model.propagation_scenario_mode == "fire_size":
+        checks.append(
+            (
+                "fire_size_norm_params.json",
+                {
+                    "log_size_min": (
+                        "model.propagation_fire_size_log_min",
+                        config.model.propagation_fire_size_log_min,
+                    ),
+                    "log_size_max": (
+                        "model.propagation_fire_size_log_max",
+                        config.model.propagation_fire_size_log_max,
+                    ),
+                },
+            )
+        )
+
+    for filename, expected_values in checks:
+        path = os.path.join(config.data.root_dir, filename)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Mechanistic normalization metadata does not exist: {path}")
+        with open(path) as handle:
+            payload = json.load(handle)
+        for json_key, (config_name, configured_value) in expected_values.items():
+            if json_key not in payload:
+                raise ValueError(f"Mechanistic normalization metadata {path} is missing {json_key!r}.")
+            artifact_value = float(payload[json_key])
+            if not np.isclose(configured_value, artifact_value, rtol=1e-9, atol=1e-12):
+                raise ValueError(
+                    f"{config_name}={configured_value} does not match {path}:{json_key}={artifact_value}. "
+                    "Update the config or regenerate the matching normalization artifact."
+                )
+
+
 class Trainer:
     def __init__(
         self,
@@ -87,6 +143,7 @@ class Trainer:
         self.best_ckpt_modes = list(self.config.evaluation.best_ckpt_metrics_mode)
         if len(self.best_ckpt_metrics) != len(self.best_ckpt_modes):
             raise ValueError("Number of best_ckpt_metric and best_ckpt_metric_mode must match!")
+        self._stitched_best_ckpt_metrics = self._validate_stitched_best_ckpt_metrics()
         self._best_metric_list: list[float] = []
 
     def _load_previous_experiment_key(self) -> str | None:
@@ -124,6 +181,7 @@ class Trainer:
         self.auxiliary = "auxiliary" in self.config.model.input_branches
 
         resolved_architecture = resolve_model_architecture(self.config.model)
+        validate_mechanistic_normalization_params(self.config, resolved_architecture)
         print(f"[Trainer] Model architecture: {self.config.model.architecture} -> {resolved_architecture}")
         print(f"[Trainer] Spatial Channels: {self.spatial_input_channels}, Auxiliary Dim: {self.auxiliary_input_dims}")
 
@@ -587,6 +645,72 @@ class Trainer:
         if len(ccc_keys) > 1 and all(key in results and np.isfinite(results[key]) for key in ccc_keys):
             results["mean/ccc"] = float(np.mean([results[key] for key in ccc_keys]))
 
+    def _validate_stitched_best_ckpt_metrics(self) -> list[str]:
+        stitched_metrics = [name for name in self.best_ckpt_metrics if name.startswith("hex/")]
+        for name in stitched_metrics:
+            parts = name.split("/")
+            if len(parts) != 3:
+                raise ValueError(
+                    f"Stitched checkpoint metric {name!r} must use 'hex/<target-or-mean>/<metric>', for example 'hex/mean/ccc'."
+                )
+            _, target_name, metric_name = parts
+            if target_name != "mean" and target_name not in self._target_names:
+                raise ValueError(
+                    f"Stitched checkpoint metric {name!r} references unknown target {target_name!r}; "
+                    f"configured targets are {self._target_names}."
+                )
+            if metric_name not in AVAILABLE_METRICS:
+                raise ValueError(
+                    f"Stitched checkpoint metric {name!r} references unknown metric {metric_name!r}; "
+                    f"available metrics are {sorted(AVAILABLE_METRICS)}."
+                )
+        return stitched_metrics
+
+    def _compute_stitched_validation_metrics(
+        self,
+        predictions: np.ndarray,
+        loader: DataLoader,
+    ) -> dict[str, float]:
+        """Stitch predictions already produced by validation and compute requested hex metrics."""
+        if not self._stitched_best_ckpt_metrics:
+            return {}
+        dataset = loader.dataset
+        metadata = getattr(dataset, "metadata", None)
+        if metadata is None:
+            raise ValueError("Stitched validation checkpoint selection requires dataset patch metadata.")
+
+        requested_metric_names = sorted({name.rsplit("/", 1)[1] for name in self._stitched_best_ckpt_metrics})
+        metric_functions = {name: AVAILABLE_METRICS[name] for name in requested_metric_names}
+        out_norm = self._grid_params.resolved_targets()[0].out_norm if self._grid_params is not None else "none"
+
+        from src.datasets.postprocessing.utils import evaluate_and_visualize_hexels
+
+        raw_metrics = evaluate_and_visualize_hexels(
+            test_predictions=predictions,
+            config=self.config,
+            out_norm=out_norm,
+            device="cpu",
+            metric_functions=metric_functions,
+            save_artifacts=False,
+            save_plots=False,
+            split_csv=self.config.data.val_split,
+            test_metadata=metadata,
+        )
+
+        results: dict[str, float] = {}
+        multi_target = len(self._target_names) > 1
+        for metric_name in requested_metric_names:
+            target_values = []
+            for target_name in self._target_names:
+                raw_key = f"all/{target_name}_{metric_name}" if multi_target else f"all/{metric_name}"
+                value = float(raw_metrics.get(raw_key, float("nan")))
+                results[f"hex/{target_name}/{metric_name}"] = value
+                target_values.append(value)
+            results[f"hex/mean/{metric_name}"] = (
+                float(np.mean(target_values)) if target_values and all(np.isfinite(value) for value in target_values) else float("nan")
+            )
+        return results
+
     # Supports any LRScheduler object and metric-based ReduceLROnPlateau schedulers
     def train_epoch(
         self, loader: DataLoader, lr_scheduler: LRScheduler | ReduceLROnPlateau | None = None, lr_scheduler_type: str | None = None
@@ -834,7 +958,17 @@ class Trainer:
             train_res = self.train_epoch(train_loader, lr_scheduler=lr_scheduler, lr_scheduler_type=lr_scheduler_type)
             elapsed = time.time() - start
 
-            val_result = self.validate(val_loader) if val_loader is not None else None
+            val_result = None
+            if val_loader is not None:
+                if self._stitched_best_ckpt_metrics:
+                    val_result_with_predictions = self.validate(val_loader, return_predictions=True)
+                    if not isinstance(val_result_with_predictions, tuple):
+                        raise RuntimeError("Validation predictions were requested but not returned.")
+                    val_result, val_predictions = val_result_with_predictions
+                    val_result.update(self._compute_stitched_validation_metrics(val_predictions, val_loader))
+                    del val_predictions
+                else:
+                    val_result = self.validate(val_loader)
             if isinstance(val_result, tuple):
                 val_result = val_result[0]
 

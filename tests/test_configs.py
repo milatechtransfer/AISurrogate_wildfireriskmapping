@@ -32,6 +32,10 @@ MECHANISTIC_V21_PILOT_CONFIG = Path("configs/mechanistic/mechanistic_propagation
 MECHANISTIC_V3_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v3_512_crop_256_spread_opportunity_q3.yaml")
 MECHANISTIC_V3_PILOT_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v3_512_crop_256_spread_opportunity_q3_pilot.yaml")
 MECHANISTIC_V4_CONFIG = Path("configs/mechanistic/mechanistic_travel_time_v4_512_crop_256_spread_opportunity_q3.yaml")
+COUNT_UNET_CONFIG = Path("configs/context_models/unet_512_crop_256_firesize_q3_ignition_count.yaml")
+COUNT_UNET_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3_ignition_count.yaml")
+COMPACT_COUNT_UNET_CONFIG = Path("configs/context_models/unet_compact_512_crop_256_firesize_q3_ignition_count.yaml")
+COMPACT_COUNT_MECHANISTIC_CONFIG = Path("configs/mechanistic/mechanistic_travel_time_compact_512_crop_256_firesize_q3_ignition_count.yaml")
 COMMON_INPUT_PIPELINE_CONFIGS = [BP_CONFIG, FI_CONFIG, ROS_CONFIG]
 
 WEATHER_FEATURES = {
@@ -121,6 +125,37 @@ def test_spread_opportunity_context_unet_is_conventional_minmax_ablation():
     assert spread.hex_id_col == "hex_id"
     assert spread.quantiles is None
     assert spread.missing_value_strategy == "raise"
+
+
+def test_count_conditioned_configs_resolve_shared_feature_contract():
+    full = load_resolved_config(COUNT_UNET_CONFIG)
+    full_256 = load_resolved_config(COUNT_UNET_256_CONFIG)
+    compact = load_resolved_config(COMPACT_COUNT_UNET_CONFIG)
+    mechanistic = load_resolved_config(COMPACT_COUNT_MECHANISTIC_CONFIG)
+
+    for config in (full, full_256, compact, mechanistic):
+        count = next(source.params for source in config.data.input_sources if source.name == "spatialized_ignition_count")
+        assert isinstance(count, SpatializedTabularParams)
+        assert count.feature_names_list == [
+            "NORM_LOG1P_IGNITION_COUNT_MEAN",
+            "NORM_IGNITION_COUNT_CV",
+        ]
+        assert count.hex_id_col == "hex_id"
+        assert count.missing_value_strategy == "raise"
+        assert config.evaluation.best_ckpt_metrics == ["hex/mean/ccc"]
+
+    assert full.model.hidden_features == [64, 128, 256, 512]
+    assert full_256.model.hidden_features == [64, 128, 256, 512]
+    assert full_256.data.batch_size == 64
+    assert full_256.training.gradient_accumulation_steps == 1
+    assert full_256.data_prep.resolved_target_crop() == (256, 256)
+    assert not full_256.data_prep.context_crop_enabled
+    assert compact.model.hidden_features == [32, 64, 128, 256]
+    assert compact.data_prep.ignition_weighting == "probability_mass"
+    assert mechanistic.model.architecture == "mechanistic_travel_time_v4"
+    assert mechanistic.model.propagation_ignition_mode == "probability_mass"
+    assert mechanistic.model.propagation_scenario_mode == "fire_size"
+    assert mechanistic.training.freeze_pretrained_epochs == mechanistic.training.max_epochs
 
 
 @pytest.mark.parametrize(
@@ -332,6 +367,16 @@ def test_multi_output_config_rejects_unnamespaced_checkpoint_metric():
 
     with pytest.raises(ValidationError, match="namespaced metric keys"):
         Config(**raw_config)
+
+
+def test_multi_output_config_accepts_stitched_hex_checkpoint_metric():
+    with MULTI_OUTPUT_CONFIG.open() as f:
+        raw_config = yaml.safe_load(f)
+    raw_config["evaluation"]["best_ckpt_metrics"] = ["hex/mean/ccc"]
+
+    config = Config(**raw_config)
+
+    assert config.evaluation.best_ckpt_metrics == ["hex/mean/ccc"]
 
 
 def test_multi_output_config_rejects_mean_ccc_when_ccc_is_not_computed():

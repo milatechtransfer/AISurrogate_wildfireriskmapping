@@ -21,7 +21,7 @@ from src.config import (
     TrainingConfig,
 )
 from src.losses import MultiTaskLoss
-from src.trainer import Trainer
+from src.trainer import Trainer, validate_mechanistic_normalization_params
 
 SPATIAL_CHANNELS = 1
 WEATHER_FEATS = 5
@@ -181,6 +181,77 @@ def _make_config(
         ),
         metrics=["mse", "spearman"],
     )
+
+
+def test_stitched_validation_metrics_are_mapped_for_checkpoint_selection(tmp_path, monkeypatch):
+    grid_params = GridParams(
+        feature_names_list=["dummy_feat"],
+        targets=[
+            TargetConfig(name="bp", out_norm="min_max"),
+            TargetConfig(name="fi", out_norm="log"),
+            TargetConfig(name="ros", out_norm="log"),
+        ],
+    )
+    config = _make_config(
+        tmp_path,
+        grid_params=grid_params,
+        num_classes=3,
+        output_head="bp_behavior",
+        optimizer_config=OptimizerConfig(
+            target_losses={
+                "bp": TargetLossConfig(loss="kl"),
+                "fi": TargetLossConfig(loss="huber"),
+                "ros": TargetLossConfig(loss="huber"),
+            }
+        ),
+    )
+    config.evaluation.best_ckpt_metrics = ["hex/mean/ccc"]
+    config.data.val_split = "validation.csv"
+    trainer = Trainer(config, spatial_input_channels=1)
+    dataset = MultiTargetGridDataset(size=1)
+    dataset.metadata = [{"hex_id": 1}]
+    loader = DataLoader(dataset, batch_size=1)
+    captured = {}
+
+    def fake_evaluate(**kwargs):
+        captured.update(kwargs)
+        return {
+            "all/bp_ccc": 0.9,
+            "all/fi_ccc": 0.6,
+            "all/ros_ccc": 0.3,
+        }
+
+    monkeypatch.setattr("src.datasets.postprocessing.utils.evaluate_and_visualize_hexels", fake_evaluate)
+    results = trainer._compute_stitched_validation_metrics(np.zeros((1, 3, 32, 32), dtype=np.float32), loader)
+
+    assert results["hex/bp/ccc"] == pytest.approx(0.9)
+    assert results["hex/fi/ccc"] == pytest.approx(0.6)
+    assert results["hex/ros/ccc"] == pytest.approx(0.3)
+    assert results["hex/mean/ccc"] == pytest.approx(0.6)
+    assert captured["save_artifacts"] is False
+    assert captured["save_plots"] is False
+    assert captured["split_csv"] == "validation.csv"
+    assert captured["test_metadata"] == dataset.metadata
+
+
+def test_mechanistic_normalization_constants_must_match_dataset_artifacts(tmp_path):
+    config = _make_config(tmp_path)
+    config.model.architecture = "mechanistic_travel_time_v4"
+    config.model.propagation_ignition_mode = "probability_mass"
+    config.model.propagation_scenario_mode = "fire_size"
+    config.model.propagation_count_log_mean_min = 0.5
+    config.model.propagation_count_log_mean_max = 2.5
+    config.model.propagation_fire_size_log_min = 0.0
+    config.model.propagation_fire_size_log_max = 6.0
+    config.data.root_dir = str(tmp_path)
+    (tmp_path / "ignition_count_norm_params.json").write_text('{"log1p_mean_minimum": 0.5, "log1p_mean_maximum": 2.5}\n')
+    (tmp_path / "fire_size_norm_params.json").write_text('{"log_size_min": 0.0, "log_size_max": 6.0}\n')
+
+    validate_mechanistic_normalization_params(config, "mechanistic_travel_time_v4")
+
+    config.model.propagation_fire_size_log_max = 5.0
+    with pytest.raises(ValueError, match="propagation_fire_size_log_max"):
+        validate_mechanistic_normalization_params(config, "mechanistic_travel_time_v4")
 
 
 @pytest.fixture

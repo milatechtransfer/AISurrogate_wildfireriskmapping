@@ -6,6 +6,7 @@ from src.models.factory import build_model, resolve_model_architecture
 from src.models.mechanistic_travel_time import (
     DifferentiableTravelTimePropagation,
     MechanisticTravelTimeUNet,
+    probability_mass_seed_probability,
 )
 
 SPATIAL_NAMES = [
@@ -95,6 +96,63 @@ def test_longer_source_budget_reaches_farther():
     assert long.sum() > short.sum()
 
 
+def test_larger_fire_size_creates_longer_equivalent_travel_budget():
+    propagation = DifferentiableTravelTimePropagation(
+        steps=2,
+        coarse_cell_size_m=600.0,
+        budget_temperature_hours=1.0,
+        quantile_levels=[0.5],
+        min_ros_m_per_min=0.01,
+        scenario_mode="fire_size",
+    )
+    seed = torch.zeros(1, 1, 7, 7)
+    seed[..., 3, 3] = 0.1
+    speed = torch.full((1, 8, 7, 7), 10.0)
+    burnability = torch.ones_like(seed)
+
+    small, _ = propagation(seed, speed, torch.full((1, 1, 7, 7), 1.0), burnability)
+    large, _ = propagation(seed, speed, torch.full((1, 1, 7, 7), 4.0), burnability)
+
+    assert large.sum() > small.sum()
+    assert propagation.diagnostic_metrics()["area_multiplier"] == pytest.approx(1.0)
+
+
+def test_probability_mass_seed_uses_coarse_mass_sum_and_mean_count():
+    scaled_mass = torch.full((1, 1, 2, 2), 250_000.0)
+    normalized_log_mean = torch.zeros_like(scaled_mass)
+
+    seed, coarse_mass = probability_mass_seed_probability(
+        scaled_location_mass=scaled_mass,
+        normalized_log_mean_count=normalized_log_mean,
+        downsample_factor=2,
+        probability_mass_scale=1_000_000.0,
+        log_mean_minimum=torch.log(torch.tensor(3.0)).item(),
+        log_mean_maximum=torch.log(torch.tensor(5.0)).item(),
+    )
+
+    assert coarse_mass.item() == pytest.approx(1.0)
+    assert seed.item() == pytest.approx(1.0 - torch.exp(torch.tensor(-2.0)).item())
+
+
+def test_probability_mass_seed_does_not_dilute_count_at_boundaries():
+    scaled_mass = torch.zeros(1, 1, 2, 2)
+    scaled_mass[..., 0, 0] = 1_000_000.0
+    normalized_log_mean = torch.zeros_like(scaled_mass)
+    normalized_log_mean[..., 0, 0] = 1.0
+
+    seed, coarse_mass = probability_mass_seed_probability(
+        scaled_location_mass=scaled_mass,
+        normalized_log_mean_count=normalized_log_mean,
+        downsample_factor=2,
+        probability_mass_scale=1_000_000.0,
+        log_mean_minimum=torch.log(torch.tensor(2.0)).item(),
+        log_mean_maximum=torch.log(torch.tensor(5.0)).item(),
+    )
+
+    assert coarse_mass.item() == pytest.approx(1.0)
+    assert seed.item() == pytest.approx(1.0 - torch.exp(torch.tensor(-4.0)).item())
+
+
 def test_zero_initialized_v4_exactly_matches_pretrained_unet():
     baseline = _build("unet")
     v4 = _build("mechanistic_travel_time_v4")
@@ -150,7 +208,7 @@ def test_meteorological_west_wind_produces_eastward_fastest_spread():
     spatial[:, v4.wind_x_index] = -10.0
     fuel_curve = torch.full((1, 4, 32, 32), 10.0)
     decoded = torch.zeros(1, 8, 32, 32)
-    normalized_budget = torch.zeros(1, 3, 2, 2)
+    normalized_scenario = torch.zeros(1, 3, 2, 2)
     coarse_burnability = torch.ones(1, 1, 2, 2)
     coarse_ignition = torch.ones(1, 1, 2, 2)
 
@@ -158,7 +216,7 @@ def test_meteorological_west_wind_produces_eastward_fastest_spread():
         x=spatial,
         fuel_curve=fuel_curve,
         decoded_features=decoded,
-        normalized_budget=normalized_budget,
+        normalized_scenario=normalized_scenario,
         coarse_burnability=coarse_burnability,
         coarse_ignition=coarse_ignition,
     )

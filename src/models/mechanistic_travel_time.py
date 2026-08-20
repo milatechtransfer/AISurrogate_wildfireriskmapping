@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 import torch
 import torch.nn as nn
@@ -30,6 +30,45 @@ def _shift(values: torch.Tensor, row_offset: int, col_offset: int, fill_value: f
     return torch.where(valid, shifted, shifted.new_full((), fill_value))
 
 
+def probability_mass_seed_probability(
+    *,
+    scaled_location_mass: torch.Tensor,
+    normalized_log_mean_count: torch.Tensor,
+    downsample_factor: int,
+    probability_mass_scale: float,
+    log_mean_minimum: float,
+    log_mean_maximum: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Convert absolute location mass and mean ignition count into coarse Poisson seed probability."""
+    if scaled_location_mass.shape[1] != 1 or normalized_log_mean_count.shape[1] != 1:
+        raise ValueError("Location mass and normalized count mean must each contain one channel.")
+    if scaled_location_mass.shape[-2:] != normalized_log_mean_count.shape[-2:]:
+        raise ValueError("Location mass and normalized count mean must have the same spatial shape.")
+    if probability_mass_scale <= 0.0:
+        raise ValueError(f"probability_mass_scale must be positive, got {probability_mass_scale}.")
+
+    pooling_area = float(downsample_factor**2)
+    coarse_location_mass = (
+        F.avg_pool2d(
+            scaled_location_mass.clamp_min(0.0) / probability_mass_scale,
+            kernel_size=downsample_factor,
+            stride=downsample_factor,
+        )
+        * pooling_area
+    )
+    log_mean = log_mean_minimum + normalized_log_mean_count * (log_mean_maximum - log_mean_minimum)
+    mean_count = torch.expm1(log_mean).clamp_min(0.0)
+    expected_ignitions = (
+        F.avg_pool2d(
+            scaled_location_mass.clamp_min(0.0) / probability_mass_scale * mean_count,
+            kernel_size=downsample_factor,
+            stride=downsample_factor,
+        )
+        * pooling_area
+    )
+    return -torch.expm1(-expected_ignitions), coarse_location_mass
+
+
 class DifferentiableTravelTimePropagation(nn.Module):
     """Max-plus propagation of ignition log-odds and source-cell time budgets."""
 
@@ -52,12 +91,24 @@ class DifferentiableTravelTimePropagation(nn.Module):
         budget_temperature_hours: float,
         quantile_levels: list[float],
         min_ros_m_per_min: float,
+        scenario_mode: Literal["burn_hours", "fire_size"] = "burn_hours",
+        min_area_multiplier: float = 0.05,
+        max_area_multiplier: float = 20.0,
     ):
         super().__init__()
         self.steps = steps
         self.coarse_cell_size_m = coarse_cell_size_m
         self.budget_temperature_hours = budget_temperature_hours
         self.min_ros_m_per_min = min_ros_m_per_min
+        self.scenario_mode = scenario_mode
+        self.min_area_multiplier = min_area_multiplier
+        self.max_area_multiplier = max_area_multiplier
+        if scenario_mode == "fire_size":
+            initial_fraction = (1.0 - min_area_multiplier) / (max_area_multiplier - min_area_multiplier)
+            initial_fraction = min(max(initial_fraction, 1e-6), 1.0 - 1e-6)
+            self.raw_area_multiplier = nn.Parameter(torch.tensor(math.log(initial_fraction / (1.0 - initial_fraction))))
+        else:
+            self.register_parameter("raw_area_multiplier", None)
         self.cohort_weights: torch.Tensor
         self.register_buffer("cohort_weights", _quantile_mass_weights(quantile_levels), persistent=False)
         edge_lengths = [
@@ -67,19 +118,40 @@ class DifferentiableTravelTimePropagation(nn.Module):
         self.register_buffer("edge_lengths_m", torch.tensor(edge_lengths).view(1, 8, 1, 1), persistent=False)
         self._last_cap_hit_rate = torch.tensor(0.0)
 
+    @property
+    def area_multiplier(self) -> torch.Tensor | None:
+        if self.raw_area_multiplier is None:
+            return None
+        fraction = torch.sigmoid(self.raw_area_multiplier)
+        return self.min_area_multiplier + (self.max_area_multiplier - self.min_area_multiplier) * fraction
+
+    def _fire_size_budget_hours(
+        self,
+        fire_size_log10_ha_quantiles: torch.Tensor,
+        directional_speed_m_per_min: torch.Tensor,
+    ) -> torch.Tensor:
+        """Convert desired area to a source-carried equivalent radial travel budget."""
+        area_multiplier = self.area_multiplier
+        if area_multiplier is None:
+            raise RuntimeError("Fire-size budget requested without an area multiplier.")
+        fire_size_ha = (torch.pow(10.0, fire_size_log10_ha_quantiles) - 1.0).clamp_min(0.0)
+        equivalent_radius_m = torch.sqrt(fire_size_ha * 10_000.0 / (math.pi * area_multiplier))
+        reference_speed = torch.exp(torch.log(directional_speed_m_per_min.clamp_min(self.min_ros_m_per_min)).mean(dim=1, keepdim=True))
+        return equivalent_radius_m / (60.0 * reference_speed)
+
     def forward(
         self,
         seed_probability: torch.Tensor,
         directional_speed_m_per_min: torch.Tensor,
-        budget_hours_quantiles: torch.Tensor,
+        scenario_quantiles: torch.Tensor,
         burnability: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if directional_speed_m_per_min.shape[1] != len(self.DIRECTIONS):
             raise ValueError(f"Expected 8 directional speed channels, got {directional_speed_m_per_min.shape}.")
-        if budget_hours_quantiles.shape[1] != self.cohort_weights.shape[1]:
+        if scenario_quantiles.shape[1] != self.cohort_weights.shape[1]:
             raise ValueError(
-                "Spread-opportunity channel count does not match configured percentile levels: "
-                f"{budget_hours_quantiles.shape[1]} versus {self.cohort_weights.shape[1]}."
+                "Scenario channel count does not match configured percentile levels: "
+                f"{scenario_quantiles.shape[1]} versus {self.cohort_weights.shape[1]}."
             )
         if seed_probability.shape[1] != 1 or burnability.shape[1] != 1:
             raise ValueError("seed_probability and burnability must each contain one channel.")
@@ -87,6 +159,10 @@ class DifferentiableTravelTimePropagation(nn.Module):
         temperature = self.budget_temperature_hours
         seed = seed_probability.clamp(0.0, 1.0)
         seed_log_odds = torch.logit(seed.clamp(1e-6, 1.0 - 1e-6))
+        if self.scenario_mode == "burn_hours":
+            budget_hours_quantiles = scenario_quantiles
+        else:
+            budget_hours_quantiles = self._fire_size_budget_hours(scenario_quantiles, directional_speed_m_per_min)
         initial_scores = seed_log_odds + budget_hours_quantiles / temperature
         valid_seed = (seed > 0.0) & (burnability > 0.0)
         negative_sentinel = -1.0e4
@@ -132,7 +208,11 @@ class DifferentiableTravelTimePropagation(nn.Module):
         return mixture_reach, quantile_reach
 
     def diagnostic_metrics(self) -> dict[str, float]:
-        return {"cap_hit_rate": float(self._last_cap_hit_rate.cpu())}
+        metrics = {"cap_hit_rate": float(self._last_cap_hit_rate.cpu())}
+        area_multiplier = self.area_multiplier
+        if area_multiplier is not None:
+            metrics["area_multiplier"] = float(area_multiplier.detach().cpu())
+        return metrics
 
 
 class MechanisticTravelTimeUNet(BaselineUNet):
@@ -199,29 +279,45 @@ class MechanisticTravelTimeUNet(BaselineUNet):
         self.target_names = normalized_targets
         self.bp_target_index = self.target_names.index("bp")
         self.ignition_indices = self._indices_with_suffix(("ignition_grid_human", "ignition_grid_lightning"))
+        self.ignition_mode = model_config.propagation_ignition_mode
+        self.count_log_mean_index = (
+            self._single_index("NORM_LOG1P_IGNITION_COUNT_MEAN") if self.ignition_mode == "probability_mass" else None
+        )
         self.elevation_index = self._single_index("elevation_grid")
         self.isi_index = self._single_index("InitialSpreadIndex")
         self.wind_x_index = self._single_index("wind_x")
         self.wind_y_index = self._single_index("wind_y")
-        budget_prefix = "spatialized_spread_opportunity/NORM_TOTAL_BURN_HOURS_Q"
-        budget_channels = []
+        self.scenario_mode = model_config.propagation_scenario_mode
+        scenario_prefix = (
+            "spatialized_spread_opportunity/NORM_TOTAL_BURN_HOURS_Q"
+            if self.scenario_mode == "burn_hours"
+            else "spatialized_fire_size/NORM_LOG_SIZE_HA_q"
+        )
+        scenario_channels = []
         for index, name in enumerate(self.spatial_input_names):
-            if name.startswith(budget_prefix):
-                label = name.removeprefix(budget_prefix)
+            if name.startswith(scenario_prefix):
+                label = name.removeprefix(scenario_prefix)
                 if not label.isdigit():
-                    raise ValueError(f"Could not parse spread-opportunity percentile from channel {name!r}.")
-                budget_channels.append((float(label) / 100.0, index))
-        budget_channels.sort()
-        if not budget_channels:
-            raise ValueError("Mechanistic travel-time propagation requires normalized total-burning-hour quantiles.")
-        self.budget_quantile_levels = [level for level, _ in budget_channels]
-        self.budget_indices = [index for _, index in budget_channels]
+                    raise ValueError(f"Could not parse scenario percentile from channel {name!r}.")
+                scenario_channels.append((float(label) / 100.0, index))
+        scenario_channels.sort()
+        if not scenario_channels:
+            raise ValueError(
+                f"Mechanistic travel-time propagation in {self.scenario_mode!r} mode requires channels prefixed by {scenario_prefix!r}."
+            )
+        self.scenario_quantile_levels = [level for level, _ in scenario_channels]
+        self.scenario_indices = [index for _, index in scenario_channels]
 
         self.downsample_factor = model_config.propagation_downsample_factor
         self.coarse_cell_size_m = model_config.propagation_cell_size_m * self.downsample_factor
         self.budget_min_hours = model_config.propagation_budget_min_hours
         self.budget_max_hours = model_config.propagation_budget_max_hours
+        self.fire_size_log_min = model_config.propagation_fire_size_log_min
+        self.fire_size_log_max = model_config.propagation_fire_size_log_max
         self.ignition_scale = model_config.propagation_initial_ignition_scale
+        self.ignition_probability_mass_scale = model_config.propagation_ignition_probability_mass_scale
+        self.count_log_mean_minimum = model_config.propagation_count_log_mean_min
+        self.count_log_mean_maximum = model_config.propagation_count_log_mean_max
         self.isi_mean = model_config.propagation_isi_mean
         self.isi_std = model_config.propagation_isi_std
         self.wind_x_mean = model_config.propagation_wind_x_mean
@@ -251,13 +347,16 @@ class MechanisticTravelTimeUNet(BaselineUNet):
             steps=model_config.propagation_steps,
             coarse_cell_size_m=self.coarse_cell_size_m,
             budget_temperature_hours=model_config.propagation_budget_temperature_hours,
-            quantile_levels=self.budget_quantile_levels,
+            quantile_levels=self.scenario_quantile_levels,
             min_ros_m_per_min=self.min_ros_m_per_min,
+            scenario_mode=self.scenario_mode,
+            min_area_multiplier=model_config.propagation_min_area_multiplier,
+            max_area_multiplier=model_config.propagation_max_area_multiplier,
         )
 
         decoder_channels = model_config.hidden_features[0]
         branch_channels = model_config.propagation_base_channels
-        physics_channels = 6 + len(self.budget_indices)
+        physics_channels = 6 + len(self.scenario_indices)
         speed_correction_output = nn.Conv2d(branch_channels, 8, kernel_size=1)
         self.speed_correction = nn.Sequential(
             nn.Conv2d(decoder_channels + physics_channels, branch_channels, kernel_size=3, padding=1, bias=False),
@@ -270,7 +369,7 @@ class MechanisticTravelTimeUNet(BaselineUNet):
             nn.init.zeros_(speed_correction_output.bias)
 
         residual_channels = max(8, branch_channels // 2)
-        mechanistic_channels = 1 + len(self.budget_indices)
+        mechanistic_channels = 1 + len(self.scenario_indices)
         self.bp_residual_features = nn.Sequential(
             nn.Conv2d(decoder_channels + mechanistic_channels, residual_channels, kernel_size=1),
             nn.SiLU(),
@@ -338,7 +437,7 @@ class MechanisticTravelTimeUNet(BaselineUNet):
         x: torch.Tensor,
         fuel_curve: torch.Tensor,
         decoded_features: torch.Tensor,
-        normalized_budget: torch.Tensor,
+        normalized_scenario: torch.Tensor,
         coarse_burnability: torch.Tensor,
         coarse_ignition: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -386,7 +485,7 @@ class MechanisticTravelTimeUNet(BaselineUNet):
                 coarse_wind_x / 20.0,
                 coarse_wind_y / 20.0,
                 self._weighted_pool(elevation_norm, fine_burnability, coarse_burnability),
-                normalized_budget,
+                normalized_scenario,
                 coarse_burnability,
                 coarse_ignition,
             ],
@@ -464,27 +563,42 @@ class MechanisticTravelTimeUNet(BaselineUNet):
         fine_burnability = (fuel_curve.amax(dim=1, keepdim=True) > 0.0).to(x.dtype)
         coarse_burnability = self._pool(fine_burnability)
         ignition = x[:, self.ignition_indices].clamp_min(0.0).sum(dim=1, keepdim=True)
-        coarse_ignition = self._pool(ignition)
-        seed_probability = 1.0 - torch.exp(-self.ignition_scale * coarse_ignition)
-        normalized_budget = self._weighted_pool(
-            x[:, self.budget_indices],
+        if self.ignition_mode == "probability_mass":
+            if self.count_log_mean_index is None:
+                raise RuntimeError("Probability-mass ignition mode requires a resolved normalized mean-count channel.")
+            seed_probability, coarse_ignition = probability_mass_seed_probability(
+                scaled_location_mass=ignition,
+                normalized_log_mean_count=x[:, self.count_log_mean_index : self.count_log_mean_index + 1],
+                downsample_factor=self.downsample_factor,
+                probability_mass_scale=self.ignition_probability_mass_scale,
+                log_mean_minimum=self.count_log_mean_minimum,
+                log_mean_maximum=self.count_log_mean_maximum,
+            )
+        else:
+            coarse_ignition = self._pool(ignition)
+            seed_probability = 1.0 - torch.exp(-self.ignition_scale * coarse_ignition)
+        normalized_scenario = self._weighted_pool(
+            x[:, self.scenario_indices],
             fine_burnability,
             coarse_burnability,
         ).clamp(0.0, 1.0)
-        budget_hours = self.budget_min_hours + normalized_budget * (self.budget_max_hours - self.budget_min_hours)
+        if self.scenario_mode == "burn_hours":
+            scenario_quantiles = self.budget_min_hours + normalized_scenario * (self.budget_max_hours - self.budget_min_hours)
+        else:
+            scenario_quantiles = self.fire_size_log_min + normalized_scenario * (self.fire_size_log_max - self.fire_size_log_min)
 
         directional_speed, base_speed, wind_speed, _, log_speed_correction = self._directional_speed(
             x=x,
             fuel_curve=fuel_curve,
             decoded_features=decoded_features,
-            normalized_budget=normalized_budget,
+            normalized_scenario=normalized_scenario,
             coarse_burnability=coarse_burnability,
             coarse_ignition=coarse_ignition,
         )
         mixture_reach, quantile_reach = self.travel_time_propagation(
             seed_probability=seed_probability,
             directional_speed_m_per_min=directional_speed,
-            budget_hours_quantiles=budget_hours,
+            scenario_quantiles=scenario_quantiles,
             burnability=coarse_burnability,
         )
         mechanistic_features = torch.cat([mixture_reach, quantile_reach], dim=1)
