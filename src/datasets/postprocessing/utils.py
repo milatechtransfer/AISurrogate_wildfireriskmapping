@@ -11,8 +11,6 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
-
-logger = logging.getLogger(__name__)
 import torch
 from rasterio.features import geometry_mask
 from rasterio.profiles import Profile
@@ -530,6 +528,7 @@ def get_target_postprocessing_settings(config: Config, out_norm: str) -> list[Ta
                 allowed_hex_ids=train_hex_ids,
                 raw_data_dir=raw_data_dir,
                 scenario_name=config.data_prep.scenario_name,
+                norm_stats_filename=config.data.norm_stats_filename,
             )
             max_target_val, min_target_val = apply_bp_nodata_zero_range(
                 target_name=target.name,
@@ -545,6 +544,7 @@ def get_target_postprocessing_settings(config: Config, out_norm: str) -> list[Ta
                 allowed_hex_ids=train_hex_ids,
                 raw_data_dir=raw_data_dir,
                 scenario_name=config.data_prep.scenario_name,
+                norm_stats_filename=config.data.norm_stats_filename,
             )
         settings.append(
             TargetPostprocessingSettings(

@@ -359,15 +359,17 @@ def get_range_elevation_cached(
     root_dir: str,
     allowed_hex_ids: Collection[int] | None = None,
     raw_data_dir: str | None = None,
+    norm_stats_filename: str = NORM_STATS_JSON,
 ) -> tuple[float, float]:
-    """Return (max, min) for elevation, reading from ``dataset_norm_stats.json`` if available.
+    """Return (max, min) for elevation, reading from ``norm_stats_filename`` (default
+    ``dataset_norm_stats.json``) if available.
 
     Falls back to scanning raw rasters via ``get_range_elevation``.  ``raw_data_dir`` is the
     raster tree location used for the fallback scan; defaults to ``root_dir`` if not provided.
     """
     import json as _json
 
-    cache_path = os.path.join(root_dir, NORM_STATS_JSON)
+    cache_path = os.path.join(root_dir, norm_stats_filename)
     if os.path.exists(cache_path):
         with open(cache_path) as f:
             cached = _json.load(f)
@@ -435,20 +437,22 @@ def get_output_log_stats_cached(
     allowed_hex_ids: Collection[int] | None = None,
     raw_data_dir: str | None = None,
     scenario_name: str | None = None,
+    norm_stats_filename: str = NORM_STATS_JSON,
 ) -> tuple[float, float]:
     """
     Return log1p mean/std for a target, reading from a cached JSON file if available.
     Falls back to scanning raw rasters via get_output_log_stats.
 
-    The cached JSON (``dataset_norm_stats.json``) is the canonical, train-only artifact
-    produced by ``compute_dataset_normalization_stats`` / ``write_dataset_norm_stats``. The fallback scan honours allowed_hex_ids
+    The cached JSON (``norm_stats_filename``, default ``dataset_norm_stats.json``) is the
+    canonical, train-only artifact produced by ``compute_dataset_normalization_stats`` /
+    ``write_dataset_norm_stats``. The fallback scan honours allowed_hex_ids
     (and an explicit raw_data_dir holding the per-hex rasters) so it stays train-only too.
     ``scenario_name`` is forwarded to the fallback scan for datasets where output rasters
     live in a scenario subdirectory.
     """
     import json as _json
 
-    cache_path = os.path.join(root_dir, NORM_STATS_JSON)
+    cache_path = os.path.join(root_dir, norm_stats_filename)
     if os.path.exists(cache_path):
         with open(cache_path) as f:
             cached = _json.load(f)
@@ -468,8 +472,10 @@ def get_range_output_cached(
     allowed_hex_ids: Collection[int] | None = None,
     raw_data_dir: str | None = None,
     scenario_name: str | None = None,
+    norm_stats_filename: str = NORM_STATS_JSON,
 ) -> tuple[float, float]:
-    """Return (max, min) for a target, reading from ``dataset_norm_stats.json`` if available.
+    """Return (max, min) for a target, reading from ``norm_stats_filename`` (default
+    ``dataset_norm_stats.json``) if available.
 
     Falls back to scanning raw rasters via ``get_range_output``.  ``raw_data_dir`` is the
     raster tree location used for the fallback scan; defaults to ``root_dir`` if not provided.
@@ -479,7 +485,7 @@ def get_range_output_cached(
     """
     import json as _json
 
-    cache_path = os.path.join(root_dir, NORM_STATS_JSON)
+    cache_path = os.path.join(root_dir, norm_stats_filename)
     if os.path.exists(cache_path):
         with open(cache_path) as f:
             cached = _json.load(f)

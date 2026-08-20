@@ -628,11 +628,11 @@ def test_build_dataset_passes_raw_data_dir_to_grid_source(temp_data_dir, monkeyp
     raw_data_dir = "/network/raw/source"
     seen = {}
 
-    def fake_get_range_output(root_dir, output_type, allowed_hex_ids=None, raw_data_dir=None):
+    def fake_get_range_output(root_dir, output_type, allowed_hex_ids=None, raw_data_dir=None, **_kwargs):
         seen["output"] = {"root_dir": root_dir, "raw_data_dir": raw_data_dir, "output_type": output_type}
         return 1.0, 0.0
 
-    def fake_get_range_elevation(root_dir, allowed_hex_ids=None, raw_data_dir=None):
+    def fake_get_range_elevation(root_dir, allowed_hex_ids=None, raw_data_dir=None, **_kwargs):
         seen["elevation"] = {"root_dir": root_dir, "raw_data_dir": raw_data_dir}
         return 1000.0, 0.0
 
@@ -663,6 +663,47 @@ def test_build_dataset_passes_raw_data_dir_to_grid_source(temp_data_dir, monkeyp
     assert seen["output"]["raw_data_dir"] == raw_data_dir
     assert seen["output"]["output_type"] == "fire_burn_probability"
     assert seen["elevation"]["raw_data_dir"] == raw_data_dir
+
+
+def test_build_dataset_passes_custom_norm_stats_filename_to_grid_source(temp_data_dir, monkeypatch):
+    tmpdir, train_csv, _, _, _, _, _, _ = temp_data_dir
+    seen = {}
+
+    def fake_get_range_output(root_dir, output_type, allowed_hex_ids=None, raw_data_dir=None, norm_stats_filename=None, **_kwargs):
+        seen["output_norm_stats_filename"] = norm_stats_filename
+        return 1.0, 0.0
+
+    def fake_get_range_elevation(root_dir, allowed_hex_ids=None, raw_data_dir=None, norm_stats_filename=None, **_kwargs):
+        seen["elevation_norm_stats_filename"] = norm_stats_filename
+        return 1000.0, 0.0
+
+    monkeypatch.setattr("src.datasets.sources.grids.get_range_output_cached", fake_get_range_output)
+    monkeypatch.setattr("src.datasets.sources.grids.get_range_elevation_cached", fake_get_range_elevation)
+
+    config = DataConfig(
+        root_dir=tmpdir,
+        raw_data_dir=tmpdir,
+        train_split=train_csv,
+        val_split="val.csv",
+        test_split="test.csv",
+        norm_stats_filename="custom_norm_stats.json",
+        input_sources=[
+            DataSourceConfig(
+                name="grid",
+                params=GridParams(
+                    feature_names_list=["ignition_grid", "fuel_grid", "elevation_grid"],
+                    out_norm="min_max",
+                    fuel_feats_encoding="ordinal",
+                ),
+            )
+        ],
+    )
+
+    ds = build_dataset(config=config, csv_name=train_csv, modelling_approach="1")
+
+    assert ds.sources["grid"].norm_stats_filename == "custom_norm_stats.json"
+    assert seen["output_norm_stats_filename"] == "custom_norm_stats.json"
+    assert seen["elevation_norm_stats_filename"] == "custom_norm_stats.json"
 
 
 def test_get_test_dataloader_forwards_modelling_approach(temp_data_dir, monkeypatch):

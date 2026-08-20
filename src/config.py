@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from data_preparation.spatial.utils import NORM_STATS_JSON
 from src.datasets.postprocessing.hazard import (
     DEFAULT_FI_CAP,
     DEFAULT_HAZARD_BIN_THRESHOLDS,
@@ -92,6 +93,17 @@ class SchedulerConfig(BaseModel):
 class TrainingConfig(BaseModel):
     max_epochs: int = 50
     log_every_n_epoch: int = 1
+    # Path to a checkpoint (e.g. a previous run's best.pth) to warm-start model weights
+    # from when starting a *new* run (fresh optimizer/scheduler/epoch/best-metric state).
+    # Unlike resuming from last.pth (for SLURM preemption continuity of the same run),
+    # this is intended for fine-tuning on a different dataset/config. Ignored if this
+    # run's own save_dir already has a last.pth to resume from.
+    warm_start_checkpoint: str | None = None
+    # Names of top-level model submodules (e.g. "encoder", "bottleneck") to freeze:
+    # their parameters are excluded from the optimizer and kept in eval() mode
+    # (so BatchNorm running stats/dropout don't drift) for the whole run. Useful when
+    # fine-tuning only the decoder/output heads on a small dataset.
+    freeze_modules: list[str] = []
 
 
 class EvaluationConfig(BaseModel):
@@ -268,6 +280,9 @@ class DataConfig(BaseModel):
     filename_col: str = "filename"
     valid_mask_threshold: float = 0.01
     include_patch_metadata: bool = False
+    # Filename (relative to root_dir) of the cached normalization-stats JSON produced by
+    # data_preparation.compute_dataset_normalization_stats / write_dataset_norm_stats.
+    norm_stats_filename: str = NORM_STATS_JSON
 
     input_sources: list[DataSourceConfig]
 
