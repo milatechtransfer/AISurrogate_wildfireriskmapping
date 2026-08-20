@@ -33,6 +33,7 @@ MECHANISTIC_V3_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v3_512
 MECHANISTIC_V3_PILOT_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v3_512_crop_256_spread_opportunity_q3_pilot.yaml")
 MECHANISTIC_V4_CONFIG = Path("configs/mechanistic/mechanistic_travel_time_v4_512_crop_256_spread_opportunity_q3.yaml")
 COUNT_UNET_CONFIG = Path("configs/context_models/unet_512_crop_256_firesize_q3_ignition_count.yaml")
+FIRE_SIZE_UNET_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3.yaml")
 COUNT_UNET_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3_ignition_count.yaml")
 COMPACT_COUNT_UNET_CONFIG = Path("configs/context_models/unet_compact_512_crop_256_firesize_q3_ignition_count.yaml")
 COMPACT_COUNT_MECHANISTIC_CONFIG = Path("configs/mechanistic/mechanistic_travel_time_compact_512_crop_256_firesize_q3_ignition_count.yaml")
@@ -156,6 +157,23 @@ def test_count_conditioned_configs_resolve_shared_feature_contract():
     assert mechanistic.model.propagation_ignition_mode == "probability_mass"
     assert mechanistic.model.propagation_scenario_mode == "fire_size"
     assert mechanistic.training.freeze_pretrained_epochs == mechanistic.training.max_epochs
+
+
+def test_256_fire_size_count_ablation_changes_only_count_source():
+    baseline = load_resolved_config(FIRE_SIZE_UNET_256_CONFIG)
+    count_conditioned = load_resolved_config(COUNT_UNET_256_CONFIG)
+
+    baseline_sources = [source.name for source in baseline.data.input_sources]
+    count_sources = [source.name for source in count_conditioned.data.input_sources]
+
+    assert baseline_sources == ["grid", "spatialized_weather", "spatialized_fire_size"]
+    assert count_sources == [*baseline_sources, "spatialized_ignition_count"]
+    assert baseline.model == count_conditioned.model
+    assert baseline.optimizer == count_conditioned.optimizer
+    assert baseline.training == count_conditioned.training
+    assert baseline.evaluation == count_conditioned.evaluation
+    assert baseline.data.root_dir == count_conditioned.data.root_dir
+    assert baseline.data_prep == count_conditioned.data_prep
 
 
 @pytest.mark.parametrize(
