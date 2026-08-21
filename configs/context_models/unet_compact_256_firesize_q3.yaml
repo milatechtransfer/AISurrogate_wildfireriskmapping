@@ -1,0 +1,21 @@
+extends: "unet_256_firesize_q3.yaml"
+
+save_dir: "experiments/context_models/unet_compact_256_firesize_q3"
+
+model:
+  hidden_features: [32, 64, 128, 256]
+
+logger:
+  experiment_name: "unet_compact_256_firesize_q3"
+  tags:
+    - "fire_size_ablation"
+    - "architecture=unet_compact"
+    - "hidden_features=32_64_128_256"
+    - "ignition_spatial=legacy_distribution"
+    - "ignition_count=none"
+    - "fire_size=q10_q50_q90"
+    - "best_ckpt=stitched_validation_hex_mean_ccc"
+    - "input_patch=256"
+    - "target_crop=256"
+    - "effective_batch=64"
+    - "context_comparison=256_to_256"

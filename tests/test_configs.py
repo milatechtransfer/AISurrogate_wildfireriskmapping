@@ -35,8 +35,11 @@ MECHANISTIC_V4_CONFIG = Path("configs/mechanistic/mechanistic_travel_time_v4_512
 COUNT_UNET_CONFIG = Path("configs/context_models/unet_512_crop_256_firesize_q3_ignition_count.yaml")
 FIRE_SIZE_UNET_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3.yaml")
 COUNT_UNET_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3_ignition_count.yaml")
+COMPACT_FIRE_SIZE_UNET_256_CONFIG = Path("configs/context_models/unet_compact_256_firesize_q3.yaml")
+COMPACT_FIRE_SIZE_UNET_512_CONFIG = Path("configs/context_models/unet_compact_512_crop_256_firesize_q3.yaml")
 COMPACT_COUNT_UNET_CONFIG = Path("configs/context_models/unet_compact_512_crop_256_firesize_q3_ignition_count.yaml")
 COMPACT_COUNT_MECHANISTIC_CONFIG = Path("configs/mechanistic/mechanistic_travel_time_compact_512_crop_256_firesize_q3_ignition_count.yaml")
+COMPACT_FIRE_SIZE_MECHANISTIC_CONFIG = Path("configs/mechanistic/mechanistic_travel_time_compact_512_crop_256_firesize_q3.yaml")
 COMMON_INPUT_PIPELINE_CONFIGS = [BP_CONFIG, FI_CONFIG, ROS_CONFIG]
 
 WEATHER_FEATURES = {
@@ -174,6 +177,29 @@ def test_256_fire_size_count_ablation_changes_only_count_source():
     assert baseline.evaluation == count_conditioned.evaluation
     assert baseline.data.root_dir == count_conditioned.data.root_dir
     assert baseline.data_prep == count_conditioned.data_prep
+
+
+def test_compact_fire_size_configs_drop_count_and_preserve_geometry():
+    compact_256 = load_resolved_config(COMPACT_FIRE_SIZE_UNET_256_CONFIG)
+    compact_512 = load_resolved_config(COMPACT_FIRE_SIZE_UNET_512_CONFIG)
+    mechanistic = load_resolved_config(COMPACT_FIRE_SIZE_MECHANISTIC_CONFIG)
+
+    for config in (compact_256, compact_512, mechanistic):
+        assert config.model.hidden_features == [32, 64, 128, 256]
+        assert "spatialized_ignition_count" not in [source.name for source in config.data.input_sources]
+        fire_size = next(source.params for source in config.data.input_sources if source.name == "spatialized_fire_size")
+        assert isinstance(fire_size, SpatializedTabularParams)
+        assert fire_size.quantiles == [0.1, 0.5, 0.9]
+
+    assert compact_256.data_prep.resolved_target_crop() == (256, 256)
+    assert not compact_256.data_prep.context_crop_enabled
+    assert compact_256.data.batch_size * compact_256.training.gradient_accumulation_steps == 64
+    assert compact_512.data_prep.resolved_target_crop() == (256, 256)
+    assert compact_512.data_prep.context_crop_enabled
+    assert compact_512.data.batch_size * compact_512.training.gradient_accumulation_steps == 64
+    assert mechanistic.model.propagation_ignition_mode == "legacy_intensity"
+    assert mechanistic.model.propagation_scenario_mode == "fire_size"
+    assert mechanistic.training.freeze_pretrained_epochs == mechanistic.training.max_epochs
 
 
 @pytest.mark.parametrize(
