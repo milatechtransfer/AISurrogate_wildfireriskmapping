@@ -135,7 +135,8 @@ class DifferentiableTravelTimePropagation(nn.Module):
         if area_multiplier is None:
             raise RuntimeError("Fire-size budget requested without an area multiplier.")
         fire_size_ha = (torch.pow(10.0, fire_size_log10_ha_quantiles) - 1.0).clamp_min(0.0)
-        equivalent_radius_m = torch.sqrt(fire_size_ha * 10_000.0 / (math.pi * area_multiplier))
+        radius_squared_m2 = fire_size_ha * 10_000.0 / (math.pi * area_multiplier)
+        equivalent_radius_m = torch.sqrt(radius_squared_m2 + 1e-6) - 1e-3
         reference_speed = torch.exp(torch.log(directional_speed_m_per_min.clamp_min(self.min_ros_m_per_min)).mean(dim=1, keepdim=True))
         return equivalent_radius_m / (60.0 * reference_speed)
 

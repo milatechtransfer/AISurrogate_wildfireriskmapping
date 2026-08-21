@@ -17,7 +17,7 @@ from data_preparation.spatial.utils import NORM_STATS_JSON, get_output_log_stats
 from src.config import Config, GridParams
 from src.datasets.context_crop import centered_crop_slices, validate_context_crop_metadata
 from src.datasets.fuel_utils import FUEL_CURVE_ENCODINGS
-from src.datasets.targets import activate_target_predictions, get_target_specs
+from src.datasets.targets import TargetName, activate_target_predictions, get_target_specs
 from src.datasets.utils import apply_bp_nodata_zero_range, get_dataset_spatial_feature_names, get_fuel_curve_normalization_stats
 from src.logger import CometLogger
 from src.losses import MultiTaskLoss, WeightedLoss
@@ -31,11 +31,17 @@ logger = logging.getLogger(__name__)
 
 def validate_mechanistic_normalization_params(config: Config, resolved_architecture: str) -> None:
     """Ensure mechanistic denormalization constants match the dataset artifacts."""
-    if resolved_architecture != "mechanistic_travel_time_v4":
+    travel_time_architectures = {
+        "mechanistic_travel_time_v4",
+        "travel_time_propagation_v4",
+        "mechanistic_propagation_v4",
+    }
+    interpretable_architectures = {"interpretable_mechanistic", "physical_mechanistic"}
+    if resolved_architecture not in travel_time_architectures | interpretable_architectures:
         return
 
     checks: list[tuple[str, dict[str, tuple[str, float]]]] = []
-    if config.model.propagation_ignition_mode == "probability_mass":
+    if resolved_architecture in travel_time_architectures and config.model.propagation_ignition_mode == "probability_mass":
         checks.append(
             (
                 "ignition_count_norm_params.json",
@@ -67,6 +73,79 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
                 },
             )
         )
+
+    if resolved_architecture in interpretable_architectures:
+        grid_params = next(
+            (source.params for source in config.data.input_sources if source.name == "grid" and isinstance(source.params, GridParams)),
+            None,
+        )
+        if grid_params is None:
+            raise ValueError("Interpretable mechanism requires a configured grid data source.")
+        targets_by_name = {target.name: target for target in grid_params.resolved_targets()}
+        expected_norms: dict[TargetName, str] = {"bp": "none", "fi": "log_standard", "ros": "log_standard"}
+        for target_name, expected_norm in expected_norms.items():
+            target = targets_by_name.get(target_name)
+            if target is None:
+                raise ValueError(f"Interpretable mechanism requires a {target_name!r} grid target.")
+            if target.out_norm != expected_norm:
+                raise ValueError(f"Interpretable mechanism requires {target_name}.out_norm={expected_norm!r}, got {target.out_norm!r}.")
+
+        path = os.path.join(config.data.root_dir, NORM_STATS_JSON)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Mechanistic normalization metadata does not exist: {path}")
+        with open(path) as handle:
+            payload = json.load(handle)
+        target_checks = {
+            ("fire_intensity", "log_mean"): (
+                "model.interpretable_fi_log_mean",
+                config.model.interpretable_fi_log_mean,
+            ),
+            ("fire_intensity", "log_std"): (
+                "model.interpretable_fi_log_std",
+                config.model.interpretable_fi_log_std,
+            ),
+            ("fire_ros", "log_mean"): (
+                "model.interpretable_ros_log_mean",
+                config.model.interpretable_ros_log_mean,
+            ),
+            ("fire_ros", "log_std"): (
+                "model.interpretable_ros_log_std",
+                config.model.interpretable_ros_log_std,
+            ),
+        }
+        for (artifact_target_name, stat_name), (config_name, configured_value) in target_checks.items():
+            try:
+                artifact_value = float(payload[artifact_target_name][stat_name])
+            except KeyError as exc:
+                raise ValueError(f"Mechanistic normalization metadata {path} is missing {artifact_target_name}.{stat_name}.") from exc
+            if not np.isclose(configured_value, artifact_value, rtol=1e-9, atol=1e-12):
+                raise ValueError(
+                    f"{config_name}={configured_value} does not match "
+                    f"{path}:{artifact_target_name}.{stat_name}={artifact_value}. "
+                    "Update the config or regenerate the matching normalization artifact."
+                )
+        configured_target_stats: dict[TargetName, tuple[float, float]] = {
+            "fi": (
+                config.model.interpretable_fi_log_mean,
+                config.model.interpretable_fi_log_std,
+            ),
+            "ros": (
+                config.model.interpretable_ros_log_mean,
+                config.model.interpretable_ros_log_std,
+            ),
+        }
+        for target_name, (model_mean, model_std) in configured_target_stats.items():
+            target = targets_by_name[target_name]
+            if target.log_mean is None or target.log_std is None:
+                continue
+            if not np.isclose(model_mean, target.log_mean, rtol=1e-9, atol=1e-12):
+                raise ValueError(
+                    f"model.interpretable_{target_name}_log_mean={model_mean} does not match the grid target log_mean={target.log_mean}."
+                )
+            if not np.isclose(model_std, target.log_std, rtol=1e-9, atol=1e-12):
+                raise ValueError(
+                    f"model.interpretable_{target_name}_log_std={model_std} does not match the grid target log_std={target.log_std}."
+                )
 
     for filename, expected_values in checks:
         path = os.path.join(config.data.root_dir, filename)

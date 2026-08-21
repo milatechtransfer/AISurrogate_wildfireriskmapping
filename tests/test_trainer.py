@@ -254,6 +254,54 @@ def test_mechanistic_normalization_constants_must_match_dataset_artifacts(tmp_pa
         validate_mechanistic_normalization_params(config, "mechanistic_travel_time_v4")
 
 
+def test_interpretable_normalization_constants_must_match_behavior_targets(tmp_path):
+    grid_params = GridParams(
+        feature_names_list=["dummy_feat"],
+        targets=[
+            TargetConfig(name="bp", out_norm="none"),
+            TargetConfig(name="fi", out_norm="log_standard", log_mean=7.0, log_std=1.2),
+            TargetConfig(name="ros", out_norm="log_standard", log_mean=2.0, log_std=0.5),
+        ],
+    )
+    config = _make_config(
+        tmp_path,
+        grid_params=grid_params,
+        num_classes=3,
+        output_head="bp_behavior",
+        optimizer_config=OptimizerConfig(
+            target_losses={
+                "bp": TargetLossConfig(loss="kl"),
+                "fi": TargetLossConfig(loss="huber"),
+                "ros": TargetLossConfig(loss="huber"),
+            }
+        ),
+    )
+    config.model.architecture = "interpretable_mechanistic"
+    config.model.propagation_scenario_mode = "fire_size"
+    config.model.propagation_fire_size_log_min = 0.0
+    config.model.propagation_fire_size_log_max = 6.0
+    config.model.interpretable_fi_log_mean = 7.0
+    config.model.interpretable_fi_log_std = 1.2
+    config.model.interpretable_ros_log_mean = 2.0
+    config.model.interpretable_ros_log_std = 0.5
+    config.data.root_dir = str(tmp_path)
+    (tmp_path / "fire_size_norm_params.json").write_text('{"log_size_min": 0.0, "log_size_max": 6.0}\n')
+    (tmp_path / "dataset_norm_stats.json").write_text(
+        '{"fire_intensity": {"log_mean": 7.0, "log_std": 1.2}, "fire_ros": {"log_mean": 2.0, "log_std": 0.5}}\n'
+    )
+
+    validate_mechanistic_normalization_params(config, "interpretable_mechanistic")
+
+    config.model.interpretable_ros_log_std = 0.6
+    with pytest.raises(ValueError, match="interpretable_ros_log_std"):
+        validate_mechanistic_normalization_params(config, "interpretable_mechanistic")
+
+    config.model.interpretable_ros_log_std = 0.5
+    grid_params.targets[2].log_std = 0.6
+    with pytest.raises(ValueError, match="grid target log_std"):
+        validate_mechanistic_normalization_params(config, "interpretable_mechanistic")
+
+
 @pytest.fixture
 def dummy_config(tmp_path):
     return _make_config(tmp_path)

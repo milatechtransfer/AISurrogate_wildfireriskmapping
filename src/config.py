@@ -86,6 +86,19 @@ class ModelConfig(BaseModel):
     propagation_speed_correction_log_limit: float = Field(default=0.6931471805599453, ge=0.0)
     propagation_max_bp_logit_correction: float = Field(default=2.0, gt=0.0)
 
+    # Mechanism-dominant physical baseline
+    interpretable_initial_ignition_rate: float = Field(default=8.0, gt=0.0)
+    interpretable_min_ignition_rate: float = Field(default=0.05, gt=0.0)
+    interpretable_max_ignition_rate: float = Field(default=64.0, gt=0.0)
+    interpretable_initial_bp_hazard_scale: float = Field(default=1.0, gt=0.0)
+    interpretable_min_bp_hazard_scale: float = Field(default=0.05, gt=0.0)
+    interpretable_max_bp_hazard_scale: float = Field(default=20.0, gt=0.0)
+    interpretable_behavior_log_scale_limit: float = Field(default=0.6931471805599453, ge=0.0)
+    interpretable_fi_log_mean: float = 0.0
+    interpretable_fi_log_std: float = Field(default=1.0, gt=0.0)
+    interpretable_ros_log_mean: float = 0.0
+    interpretable_ros_log_std: float = Field(default=1.0, gt=0.0)
+
     @model_validator(mode="after")
     def validate_propagation_area_multiplier(self) -> "ModelConfig":
         if self.propagation_max_area_multiplier <= self.propagation_min_area_multiplier:
@@ -104,6 +117,18 @@ class ModelConfig(BaseModel):
             raise ValueError("propagation_isi_bins must be strictly increasing.")
         if self.propagation_elevation_max_m <= self.propagation_elevation_min_m:
             raise ValueError("propagation_elevation_max_m must exceed propagation_elevation_min_m.")
+        if not (self.interpretable_min_ignition_rate < self.interpretable_initial_ignition_rate < self.interpretable_max_ignition_rate):
+            raise ValueError(
+                "interpretable_initial_ignition_rate must be strictly between "
+                "interpretable_min_ignition_rate and interpretable_max_ignition_rate."
+            )
+        if not (
+            self.interpretable_min_bp_hazard_scale < self.interpretable_initial_bp_hazard_scale < self.interpretable_max_bp_hazard_scale
+        ):
+            raise ValueError(
+                "interpretable_initial_bp_hazard_scale must be strictly between "
+                "interpretable_min_bp_hazard_scale and interpretable_max_bp_hazard_scale."
+            )
         return self
 
     # specific to auxiliary model

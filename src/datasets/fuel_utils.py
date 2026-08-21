@@ -8,7 +8,8 @@ from data_preparation.utils import find_hex_ids
 
 # Fuel encoding modes that use a per-pixel curve vector (as opposed to scalar
 # or one-hot encodings).  Add new curve-based feature names here.
-FUEL_CURVE_ENCODINGS: frozenset[str] = frozenset({"iROS", "HFI"})
+COMBINED_ROS_HFI_ENCODING = "iROS_HFI"
+FUEL_CURVE_ENCODINGS: frozenset[str] = frozenset({"iROS", "HFI", COMBINED_ROS_HFI_ENCODING})
 
 # Single CSV produced by compute_vector_values_national.R containing all fuel curve columns.
 _FUEL_CURVES_CSV = "fbp_curves_national_fuel.csv"
@@ -207,8 +208,7 @@ def _read_hex_season_weights(
 
     if "Season" not in distribution_df.columns:
         raise ValueError(
-            f"Ignition distribution CSV is missing a 'Season' column: {distribution_path}. "
-            f"Found columns: {list(distribution_df.columns)}"
+            f"Ignition distribution CSV is missing a 'Season' column: {distribution_path}. Found columns: {list(distribution_df.columns)}"
         )
 
     distribution_df["Season"] = distribution_df["Season"].astype(str).str.strip()
@@ -422,11 +422,37 @@ def build_fuel_curve_lookup(
         Root directory of hexel data.
 
     feature_name
-        Curve feature to load.  Must be a key in ``_FEATURE_CSV``
-        (e.g. ``"iROS"`` or ``"HFI"``).
+        Curve feature to load, including ``"iROS"``, ``"HFI"``, or the
+        concatenated ``"iROS_HFI"`` encoding.
     """
+    if feature_name == COMBINED_ROS_HFI_ENCODING:
+        ros_lookup = build_fuel_curve_lookup(
+            root_dir=root_dir,
+            raw_data_dir=raw_data_dir,
+            code_col=code_col,
+            season_col=season_col,
+            isi_col=isi_col,
+            feature_name="iROS",
+        )
+        hfi_lookup = build_fuel_curve_lookup(
+            root_dir=root_dir,
+            raw_data_dir=raw_data_dir,
+            code_col=code_col,
+            season_col=season_col,
+            isi_col=isi_col,
+            feature_name="HFI",
+        )
+        if ros_lookup.keys() != hfi_lookup.keys():
+            missing_ros = sorted(hfi_lookup.keys() - ros_lookup.keys())
+            missing_hfi = sorted(ros_lookup.keys() - hfi_lookup.keys())
+            raise ValueError(
+                "ROS and HFI curve lookups do not contain the same fuel/hex keys: "
+                f"missing_ros={missing_ros[:10]}, missing_hfi={missing_hfi[:10]}."
+            )
+        return {key: np.concatenate((ros_lookup[key], hfi_lookup[key])).astype(np.float32, copy=False) for key in ros_lookup}
+
     if feature_name not in _FEATURE_CSV:
-        raise ValueError(f"Unknown feature_name={feature_name!r}. Supported values: {sorted(_FEATURE_CSV)}")
+        raise ValueError(f"Unknown feature_name={feature_name!r}. Supported values: {sorted(FUEL_CURVE_ENCODINGS)}")
 
     csv_filename, feature_col = _FEATURE_CSV[feature_name]
 
@@ -554,8 +580,7 @@ def compute_fuel_curve_norm_stats(
 
     if not vectors:
         raise ValueError(
-            f"No fuel curve vectors found for feature_name={feature_name!r}. "
-            "Check root_dir and raw_data_dir point to the correct dataset."
+            f"No fuel curve vectors found for feature_name={feature_name!r}. Check root_dir and raw_data_dir point to the correct dataset."
         )
 
     log_vecs = np.log1p(np.clip(np.stack(vectors, axis=0), 0, None))
