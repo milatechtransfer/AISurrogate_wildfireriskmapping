@@ -301,6 +301,22 @@ def test_interpretable_normalization_constants_must_match_behavior_targets(tmp_p
     with pytest.raises(ValueError, match="grid target log_std"):
         validate_mechanistic_normalization_params(config, "interpretable_mechanistic")
 
+    grid_params.targets[2].log_std = 0.5
+    config.model.architecture = "interpretable_mechanistic_v2"
+    config.model.propagation_count_log_mean_min = 0.5
+    config.model.propagation_count_log_mean_max = 2.5
+    config.model.propagation_count_cv_min = 0.4
+    config.model.propagation_count_cv_max = 1.4
+    (tmp_path / "ignition_count_norm_params.json").write_text(
+        '{"log1p_mean_minimum": 0.5, "log1p_mean_maximum": 2.5, "cv_minimum": 0.4, "cv_maximum": 1.4}\n'
+    )
+
+    validate_mechanistic_normalization_params(config, "interpretable_mechanistic_v2")
+
+    config.model.propagation_count_cv_max = 1.5
+    with pytest.raises(ValueError, match="propagation_count_cv_max"):
+        validate_mechanistic_normalization_params(config, "interpretable_mechanistic_v2")
+
 
 @pytest.fixture
 def dummy_config(tmp_path):

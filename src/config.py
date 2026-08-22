@@ -57,6 +57,8 @@ class ModelConfig(BaseModel):
     propagation_ignition_probability_mass_scale: float = Field(default=1_000_000.0, gt=0.0)
     propagation_count_log_mean_min: float = 0.0
     propagation_count_log_mean_max: float = 1.0
+    propagation_count_cv_min: float = 0.0
+    propagation_count_cv_max: float = 1.0
     propagation_scenario_mode: Literal["burn_hours", "fire_size"] = "burn_hours"
     propagation_fire_size_log_min: float = 0.0
     propagation_fire_size_log_max: float = 1.0
@@ -98,6 +100,12 @@ class ModelConfig(BaseModel):
     interpretable_fi_log_std: float = Field(default=1.0, gt=0.0)
     interpretable_ros_log_mean: float = 0.0
     interpretable_ros_log_std: float = Field(default=1.0, gt=0.0)
+    interpretable_initial_per_fire_reach_scale: float = Field(default=1.0, gt=0.0)
+    interpretable_min_per_fire_reach_scale: float = Field(default=0.1, gt=0.0)
+    interpretable_max_per_fire_reach_scale: float = Field(default=10.0, gt=0.0)
+    interpretable_source_grid_size: int = Field(default=4, gt=0, le=8)
+    interpretable_behavior_log_slope_min: float = Field(default=0.5, gt=0.0)
+    interpretable_behavior_log_slope_max: float = Field(default=1.5, gt=0.0)
 
     @model_validator(mode="after")
     def validate_propagation_area_multiplier(self) -> "ModelConfig":
@@ -107,6 +115,8 @@ class ModelConfig(BaseModel):
             raise ValueError("propagation_initial_ignition_scale must be below propagation_max_ignition_scale.")
         if self.propagation_count_log_mean_max <= self.propagation_count_log_mean_min:
             raise ValueError("propagation_count_log_mean_max must exceed propagation_count_log_mean_min.")
+        if self.propagation_count_cv_max <= self.propagation_count_cv_min:
+            raise ValueError("propagation_count_cv_max must exceed propagation_count_cv_min.")
         if self.propagation_fire_size_log_max <= self.propagation_fire_size_log_min:
             raise ValueError("propagation_fire_size_log_max must exceed propagation_fire_size_log_min.")
         if self.propagation_budget_max_hours <= self.propagation_budget_min_hours:
@@ -129,6 +139,17 @@ class ModelConfig(BaseModel):
                 "interpretable_initial_bp_hazard_scale must be strictly between "
                 "interpretable_min_bp_hazard_scale and interpretable_max_bp_hazard_scale."
             )
+        if not (
+            self.interpretable_min_per_fire_reach_scale
+            < self.interpretable_initial_per_fire_reach_scale
+            < self.interpretable_max_per_fire_reach_scale
+        ):
+            raise ValueError(
+                "interpretable_initial_per_fire_reach_scale must be strictly between "
+                "interpretable_min_per_fire_reach_scale and interpretable_max_per_fire_reach_scale."
+            )
+        if self.interpretable_behavior_log_slope_max <= self.interpretable_behavior_log_slope_min:
+            raise ValueError("interpretable_behavior_log_slope_max must exceed interpretable_behavior_log_slope_min.")
         return self
 
     # specific to auxiliary model

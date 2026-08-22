@@ -31,6 +31,11 @@ requeue_before_timeout() {
 }
 trap requeue_before_timeout USR1
 
-python -m src.train --config="$CONFIG" &
+train_args=(--config="$CONFIG")
+if [[ "${SKIP_FINAL_HEXEL_ARTIFACTS:-0}" == "1" ]]; then
+    train_args+=(--no_log_test_predicted_hexels --no_log_val_predicted_hexels)
+fi
+
+python -m src.train "${train_args[@]}" &
 train_pid=$!
 wait "$train_pid"

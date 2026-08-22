@@ -37,24 +37,41 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
         "mechanistic_propagation_v4",
     }
     interpretable_architectures = {"interpretable_mechanistic", "physical_mechanistic"}
-    if resolved_architecture not in travel_time_architectures | interpretable_architectures:
+    interpretable_v2_architectures = {"interpretable_mechanistic_v2", "physical_mechanistic_v2"}
+    if resolved_architecture not in travel_time_architectures | interpretable_architectures | interpretable_v2_architectures:
         return
 
     checks: list[tuple[str, dict[str, tuple[str, float]]]] = []
-    if resolved_architecture in travel_time_architectures and config.model.propagation_ignition_mode == "probability_mass":
+    if (
+        resolved_architecture in travel_time_architectures and config.model.propagation_ignition_mode == "probability_mass"
+    ) or resolved_architecture in interpretable_v2_architectures:
+        count_checks = {
+            "log1p_mean_minimum": (
+                "model.propagation_count_log_mean_min",
+                config.model.propagation_count_log_mean_min,
+            ),
+            "log1p_mean_maximum": (
+                "model.propagation_count_log_mean_max",
+                config.model.propagation_count_log_mean_max,
+            ),
+        }
+        if resolved_architecture in interpretable_v2_architectures:
+            count_checks.update(
+                {
+                    "cv_minimum": (
+                        "model.propagation_count_cv_min",
+                        config.model.propagation_count_cv_min,
+                    ),
+                    "cv_maximum": (
+                        "model.propagation_count_cv_max",
+                        config.model.propagation_count_cv_max,
+                    ),
+                }
+            )
         checks.append(
             (
                 "ignition_count_norm_params.json",
-                {
-                    "log1p_mean_minimum": (
-                        "model.propagation_count_log_mean_min",
-                        config.model.propagation_count_log_mean_min,
-                    ),
-                    "log1p_mean_maximum": (
-                        "model.propagation_count_log_mean_max",
-                        config.model.propagation_count_log_mean_max,
-                    ),
-                },
+                count_checks,
             )
         )
     if config.model.propagation_scenario_mode == "fire_size":
@@ -74,7 +91,7 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
             )
         )
 
-    if resolved_architecture in interpretable_architectures:
+    if resolved_architecture in interpretable_architectures | interpretable_v2_architectures:
         grid_params = next(
             (source.params for source in config.data.input_sources if source.name == "grid" and isinstance(source.params, GridParams)),
             None,

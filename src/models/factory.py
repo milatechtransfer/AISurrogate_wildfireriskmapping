@@ -34,6 +34,10 @@ INTERPRETABLE_MECHANISTIC_NAMES = {
     "interpretable_mechanistic",
     "physical_mechanistic",
 }
+INTERPRETABLE_MECHANISTIC_V2_NAMES = {
+    "interpretable_mechanistic_v2",
+    "physical_mechanistic_v2",
+}
 
 
 def _normalize_architecture_name(name: str) -> str:
@@ -127,7 +131,7 @@ def build_model(
             target_names=target_names,
         )
 
-    if architecture in INTERPRETABLE_MECHANISTIC_NAMES:
+    if architecture in INTERPRETABLE_MECHANISTIC_NAMES | INTERPRETABLE_MECHANISTIC_V2_NAMES:
         if auxiliary_requested:
             raise ValueError("Interpretable mechanism supports spatial inputs and raw fuel curves only.")
         if target_names is None:
@@ -138,6 +142,7 @@ def build_model(
             model_config=model_config,
             fuel_curve_input_dim=fuel_curve_input_dim,
             target_names=target_names,
+            variant="v2" if architecture in INTERPRETABLE_MECHANISTIC_V2_NAMES else "v1",
         )
 
     mechanistic_names = (
@@ -180,6 +185,7 @@ def build_model(
         | MECHANISTIC_PROPAGATION_V3_NAMES
         | MECHANISTIC_TRAVEL_TIME_V4_NAMES
         | INTERPRETABLE_MECHANISTIC_NAMES
+        | INTERPRETABLE_MECHANISTIC_V2_NAMES
         | {"auto"}
     )
     raise ValueError(f"Unknown model architecture '{model_config.architecture}'. Supported values: {supported}")

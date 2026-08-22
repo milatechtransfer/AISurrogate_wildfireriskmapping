@@ -1,0 +1,137 @@
+extends: "interpretable_physics_512_crop_256_firesize_q3.yaml"
+
+save_dir: "experiments/mechanistic/interpretable_physics_v2_count_sources_512_crop_256_firesize_q3"
+
+model:
+  architecture: "interpretable_mechanistic_v2"
+  propagation_count_log_mean_min: 0.7347688552507647
+  propagation_count_log_mean_max: 3.336054233329951
+  propagation_count_cv_min: 0.37751471592829855
+  propagation_count_cv_max: 1.3789218959893028
+  interpretable_initial_per_fire_reach_scale: 0.25
+  interpretable_min_per_fire_reach_scale: 0.01
+  interpretable_max_per_fire_reach_scale: 10.0
+  interpretable_source_grid_size: 4
+  interpretable_behavior_log_slope_min: 0.5
+  interpretable_behavior_log_slope_max: 1.5
+
+optimizer:
+  name: "Adam"
+  lr: 5.0e-3
+  target_losses:
+    bp:
+      loss: ["kl", "ccc", "hex_mean_pairwise_rank", "hex_top10_pairwise_rank"]
+      loss_weights:
+        kl: 0.15
+        ccc: 0.45
+        hex_mean_pairwise_rank: 0.25
+        hex_top10_pairwise_rank: 0.15
+      task_weight: 0.60
+    fi:
+      loss: ["huber", "raw_pearson"]
+      loss_weights:
+        huber: 0.70
+        raw_pearson: 0.30
+      task_weight: 0.20
+    ros:
+      loss: ["huber", "raw_pearson"]
+      loss_weights:
+        huber: 0.70
+        raw_pearson: 0.30
+      task_weight: 0.20
+
+training:
+  max_epochs: 15
+
+data:
+  input_sources:
+    - name: "grid"
+      params:
+        feature_names_list: ["ignition_grid_human", "ignition_grid_lightning", "fuel_grid", "elevation_grid"]
+        targets:
+          - name: "bp"
+            out_norm: "none"
+          - name: "fi"
+            out_norm: "log_standard"
+            log_mean: 7.9690247380067625
+            log_std: 1.144906248575859
+          - name: "ros"
+            out_norm: "log_standard"
+            log_mean: 1.7871663060985448
+            log_std: 0.5520388934154877
+        fuel_feats_encoding: "iROS_HFI"
+        normalize_fuel_feats_ordinal: false
+        transforms_list: []
+        augmentation_prob: 0.0
+        terrain_derivatives: []
+        bp_nodata_as_zero: true
+
+    - name: "spatialized_weather"
+      params:
+        csv_name: "weather_table_processed.csv"
+        feature_names_list: ["InitialSpreadIndex", "wind_x", "wind_y"]
+        fire_weather_zone_id_col: "WeatherZone"
+        fire_weather_zone_selection_approach: "mode"
+        hex_id_col: "hex_id"
+        aggregation: "mean"
+        zone_channel_key: "firezones_grid"
+        missing_value_strategy: "global_mean"
+        include_missing_firezone_mask: false
+        shuffle_lut: false
+        shuffle_seed: 42
+        transforms_list: []
+        augmentation_prob: 0.0
+
+    - name: "spatialized_fire_size"
+      params:
+        csv_name: "df_fire_fru_processed.csv"
+        feature_names_list: ["NORM_LOG_SIZE_HA"]
+        fire_weather_zone_id_col: "GRIDCODE"
+        fire_weather_zone_selection_approach: "mode"
+        aggregation: "mean"
+        quantiles: [0.1, 0.5, 0.9]
+        zone_channel_key: "firezones_grid"
+        missing_value_strategy: "global_mean"
+        include_missing_firezone_mask: false
+        shuffle_lut: false
+        shuffle_seed: 42
+        transforms_list: []
+        augmentation_prob: 0.0
+
+    - name: "spatialized_ignition_count"
+      params:
+        csv_name: "ignition_count_processed.csv"
+        feature_names_list:
+          - "NORM_LOG1P_IGNITION_COUNT_MEAN"
+          - "NORM_IGNITION_COUNT_CV"
+        fire_weather_zone_id_col: "GRIDCODE"
+        fire_weather_zone_selection_approach: "mode"
+        hex_id_col: "hex_id"
+        aggregation: "mean"
+        zone_channel_key: "firezones_grid"
+        missing_value_strategy: "raise"
+        include_missing_firezone_mask: false
+        shuffle_lut: false
+        shuffle_seed: 42
+        transforms_list: []
+        augmentation_prob: 0.0
+
+logger:
+  experiment_name: "interpretable_physics_v2_count_sources_512_crop_256_firesize_q3"
+  tags:
+    - "mechanism_dominant_v2"
+    - "architecture=no_unet"
+    - "trainable_parameters=6"
+    - "ignition_spatial=exact_probability_mass"
+    - "ignition_count=mean_plus_cv_distribution"
+    - "count_aggregation=moment_matched_pgf"
+    - "propagation=stratified_source_cohorts"
+    - "propagation_budget=source_separable"
+    - "source_grid=4x4"
+    - "scenario_control=fire_size_q10_q50_q90"
+    - "ros=physical_iros_power_calibration"
+    - "fi=physical_hfi_power_calibration"
+    - "input_patch=512"
+    - "target_crop=256"
+    - "effective_batch=64"
+    - "best_ckpt=stitched_validation_hex_mean_ccc"
