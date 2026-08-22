@@ -32,6 +32,7 @@ MECHANISTIC_V21_PILOT_CONFIG = Path("configs/mechanistic/mechanistic_propagation
 MECHANISTIC_V3_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v3_512_crop_256_spread_opportunity_q3.yaml")
 MECHANISTIC_V3_PILOT_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v3_512_crop_256_spread_opportunity_q3_pilot.yaml")
 MECHANISTIC_V4_CONFIG = Path("configs/mechanistic/mechanistic_travel_time_v4_512_crop_256_spread_opportunity_q3.yaml")
+GRAY_BOX_PHYSICS_V3_CONFIG = Path("configs/mechanistic/gray_box_physics_v3_512_crop_256_firesize_q3.yaml")
 COUNT_UNET_CONFIG = Path("configs/context_models/unet_512_crop_256_firesize_q3_ignition_count.yaml")
 FIRE_SIZE_UNET_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3.yaml")
 COUNT_UNET_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3_ignition_count.yaml")
@@ -259,6 +260,29 @@ def test_mechanistic_v4_resolves_warm_started_travel_time_contract():
         "NORM_TOTAL_BURN_HOURS_Q50",
         "NORM_TOTAL_BURN_HOURS_Q90",
     ]
+
+
+def test_gray_box_physics_v3_resolves_bounded_field_contract():
+    config = load_resolved_config(GRAY_BOX_PHYSICS_V3_CONFIG)
+
+    assert config.model.architecture == "interpretable_mechanistic_v3"
+    assert config.model.interpretable_field_hidden_channels == 48
+    assert config.model.interpretable_source_grid_size == 4
+    assert config.model.interpretable_ignition_field_log_limit == pytest.approx(1.3862943611198906)
+    assert config.model.interpretable_ros_field_log_limit == pytest.approx(0.6931471805599453)
+    assert config.model.interpretable_fire_size_field_log_limit == pytest.approx(1.3862943611198906)
+    assert config.model.interpretable_reach_field_log_limit == pytest.approx(1.3862943611198906)
+    assert config.model.interpretable_consumption_field_log_limit == pytest.approx(0.6931471805599453)
+    assert config.model.interpretable_field_l2_weight == pytest.approx(5.0e-3)
+    assert config.model.interpretable_field_tv_weight == pytest.approx(5.0e-3)
+    assert config.optimizer.name == "AdamW"
+    assert config.optimizer.lr == pytest.approx(2.0e-3)
+    assert config.optimizer.parameter_lr_scales["raw_per_fire_reach_scale"] == pytest.approx(0.25)
+    assert config.optimizer.parameter_lr_scales["travel_time_propagation.raw_area_multiplier"] == pytest.approx(0.25)
+    assert config.training.gradient_clip_norm == pytest.approx(1.0)
+    assert config.evaluation.best_ckpt_metrics == ["hex/mean/ccc"]
+    assert config.data_prep.resolved_target_crop() == (256, 256)
+    assert "spatialized_ignition_count" in [source.name for source in config.data.input_sources]
 
 
 @pytest.mark.parametrize("config_path", [MECHANISTIC_V21_PILOT_CONFIG, MECHANISTIC_V3_PILOT_CONFIG])

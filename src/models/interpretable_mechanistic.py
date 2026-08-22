@@ -131,6 +131,7 @@ class SourceCohortTravelTimePropagation(DifferentiableTravelTimePropagation):
         directional_speed_m_per_min: torch.Tensor,
         fire_size_log10_ha_quantiles: torch.Tensor,
         burnability: torch.Tensor,
+        fire_size_multiplier: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if directional_speed_m_per_min.shape[1] != len(self.DIRECTIONS):
             raise ValueError(f"Expected 8 directional speed channels, got {directional_speed_m_per_min.shape}.")
@@ -141,13 +142,24 @@ class SourceCohortTravelTimePropagation(DifferentiableTravelTimePropagation):
             )
         if location_mass.shape[1] != 1 or burnability.shape[1] != 1:
             raise ValueError("location_mass and burnability must each contain one channel.")
+        if fire_size_multiplier is not None and (
+            fire_size_multiplier.shape[1] != 1 or fire_size_multiplier.shape[-2:] != location_mass.shape[-2:]
+        ):
+            raise ValueError(
+                "fire_size_multiplier must contain one channel and match the location-mass spatial shape, got "
+                f"{fire_size_multiplier.shape} versus {location_mass.shape}."
+            )
 
         location = location_mass.clamp(0.0, 1.0) * burnability
         batch_size, _, height, width = location.shape
         quantile_count = fire_size_log10_ha_quantiles.shape[1]
         source_indices, source_weights, raw_context_mass = self._source_cohorts(location)
 
-        budget_hours = self._fire_size_budget_hours(fire_size_log10_ha_quantiles, directional_speed_m_per_min)
+        effective_fire_size = fire_size_log10_ha_quantiles
+        if fire_size_multiplier is not None:
+            fire_size_ha = torch.expm1(math.log(10.0) * fire_size_log10_ha_quantiles).clamp_min(0.0)
+            effective_fire_size = torch.log1p(fire_size_ha * fire_size_multiplier.clamp_min(0.0)) / math.log(10.0)
+        budget_hours = self._fire_size_budget_hours(effective_fire_size, directional_speed_m_per_min)
         source_budgets = budget_hours.flatten(2).gather(
             dim=2,
             index=source_indices.unsqueeze(1).expand(-1, quantile_count, -1),
@@ -220,8 +232,43 @@ class SourceCohortTravelTimePropagation(DifferentiableTravelTimePropagation):
         return metrics
 
 
+class PhysicalParameterFieldNetwork(nn.Module):
+    """Predict bounded local corrections to named physical quantities."""
+
+    FIELD_NAMES = ("ignition", "ros", "fire_size", "reach", "consumption")
+
+    def __init__(self, *, input_channels: int, hidden_channels: int):
+        super().__init__()
+        normalization_groups = math.gcd(hidden_channels, 8)
+        self.features = nn.Sequential(
+            nn.Conv2d(input_channels, hidden_channels, kernel_size=3, padding=1),
+            nn.GroupNorm(normalization_groups, hidden_channels),
+            nn.SiLU(),
+            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=2, dilation=2),
+            nn.GroupNorm(normalization_groups, hidden_channels),
+            nn.SiLU(),
+            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=4, dilation=4),
+            nn.GroupNorm(normalization_groups, hidden_channels),
+            nn.SiLU(),
+            nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=8, dilation=8),
+            nn.GroupNorm(normalization_groups, hidden_channels),
+            nn.SiLU(),
+        )
+        self.head = nn.Conv2d(hidden_channels, len(self.FIELD_NAMES), kernel_size=1)
+        nn.init.zeros_(self.head.weight)
+        if self.head.bias is None:
+            raise RuntimeError("Physical parameter-field head must include a bias.")
+        nn.init.zeros_(self.head.bias)
+
+    def forward(self, features: torch.Tensor) -> dict[str, torch.Tensor]:
+        fields = self.head(self.features(features))
+        return {name: fields[:, index : index + 1] for index, name in enumerate(self.FIELD_NAMES)}
+
+
 class InterpretableMechanisticModel(nn.Module):
     """Mechanism-dominant BP, FI, and ROS model with named scalar parameters."""
+
+    FIELD_INPUT_CHANNELS = 15
 
     def __init__(
         self,
@@ -231,7 +278,7 @@ class InterpretableMechanisticModel(nn.Module):
         model_config: ModelConfig,
         fuel_curve_input_dim: int,
         target_names: list[str],
-        variant: Literal["v1", "v2"] = "v1",
+        variant: Literal["v1", "v2", "v3"] = "v1",
     ):
         super().__init__()
         if len(spatial_input_names) != input_channels:
@@ -289,10 +336,17 @@ class InterpretableMechanisticModel(nn.Module):
         self.max_per_fire_reach_scale = model_config.interpretable_max_per_fire_reach_scale
         self.behavior_log_slope_min = model_config.interpretable_behavior_log_slope_min
         self.behavior_log_slope_max = model_config.interpretable_behavior_log_slope_max
+        self.ignition_field_log_limit = model_config.interpretable_ignition_field_log_limit
+        self.ros_field_log_limit = model_config.interpretable_ros_field_log_limit
+        self.fire_size_field_log_limit = model_config.interpretable_fire_size_field_log_limit
+        self.reach_field_log_limit = model_config.interpretable_reach_field_log_limit
+        self.consumption_field_log_limit = model_config.interpretable_consumption_field_log_limit
+        self.field_l2_weight = model_config.interpretable_field_l2_weight
+        self.field_tv_weight = model_config.interpretable_field_tv_weight
 
         self.ignition_indices = self._indices_with_suffix(("ignition_grid_human", "ignition_grid_lightning"))
-        self.count_log_mean_index = self._single_index("NORM_LOG1P_IGNITION_COUNT_MEAN") if self.variant == "v2" else None
-        self.count_cv_index = self._single_index("NORM_IGNITION_COUNT_CV") if self.variant == "v2" else None
+        self.count_log_mean_index = self._single_index("NORM_LOG1P_IGNITION_COUNT_MEAN") if self.variant != "v1" else None
+        self.count_cv_index = self._single_index("NORM_IGNITION_COUNT_CV") if self.variant != "v1" else None
         self.elevation_index = self._single_index("elevation_grid")
         self.isi_index = self._single_index("InitialSpreadIndex")
         self.wind_x_index = self._single_index("wind_x")
@@ -322,7 +376,7 @@ class InterpretableMechanisticModel(nn.Module):
 
         coarse_cell_size_m = model_config.propagation_cell_size_m * self.downsample_factor
         self.travel_time_propagation: DifferentiableTravelTimePropagation
-        if self.variant == "v2":
+        if self.variant != "v1":
             self.travel_time_propagation = SourceCohortTravelTimePropagation(
                 source_grid_size=model_config.interpretable_source_grid_size,
                 steps=model_config.propagation_steps,
@@ -385,6 +439,16 @@ class InterpretableMechanisticModel(nn.Module):
             )
             self.raw_fi_log_slope = nn.Parameter(initial_slope.clone())
             self.raw_ros_log_slope = nn.Parameter(initial_slope.clone())
+        self.parameter_field_network = (
+            PhysicalParameterFieldNetwork(
+                input_channels=self.FIELD_INPUT_CHANNELS,
+                hidden_channels=model_config.interpretable_field_hidden_channels,
+            )
+            if self.variant == "v3"
+            else None
+        )
+        self._pending_regularization_loss: torch.Tensor | None = None
+        self._last_field_diagnostics: dict[str, torch.Tensor] = {}
         self._last_diagnostics: dict[str, torch.Tensor] = {}
 
     def _indices_with_suffix(self, suffixes: tuple[str, ...]) -> list[int]:
@@ -413,6 +477,129 @@ class InterpretableMechanisticModel(nn.Module):
         coarse_weights: torch.Tensor,
     ) -> torch.Tensor:
         return self._pool(values * fine_weights) / coarse_weights.clamp_min(1e-6)
+
+    def _parameter_field_features(
+        self,
+        *,
+        x: torch.Tensor,
+        ros_curve: torch.Tensor,
+        hfi_curve: torch.Tensor,
+        fine_base_hfi: torch.Tensor,
+        fine_burnability: torch.Tensor,
+        coarse_burnability: torch.Tensor,
+        coarse_support: torch.Tensor,
+        coarse_location_mass: torch.Tensor,
+        normalized_fire_size: torch.Tensor,
+        normalized_log_mean: torch.Tensor,
+        normalized_cv: torch.Tensor,
+        base_speed: torch.Tensor,
+    ) -> torch.Tensor:
+        context_mean_mass = coarse_location_mass.mean(dim=(-2, -1), keepdim=True)
+        relative_ignition_density = coarse_location_mass / context_mean_mass.clamp_min(1e-12)
+        relative_ignition_density = torch.log1p(relative_ignition_density).clamp_max(4.0) / 4.0
+        coarse_isi = self._weighted_pool(
+            x[:, self.isi_index : self.isi_index + 1],
+            fine_burnability,
+            coarse_burnability,
+        )
+        coarse_wind_x = self._weighted_pool(
+            x[:, self.wind_x_index : self.wind_x_index + 1],
+            fine_burnability,
+            coarse_burnability,
+        )
+        coarse_wind_y = self._weighted_pool(
+            x[:, self.wind_y_index : self.wind_y_index + 1],
+            fine_burnability,
+            coarse_burnability,
+        )
+        coarse_elevation = self._weighted_pool(
+            x[:, self.elevation_index : self.elevation_index + 1],
+            fine_burnability,
+            coarse_burnability,
+        )
+        coarse_base_hfi = self._weighted_pool(fine_base_hfi, fine_burnability, coarse_burnability)
+        coarse_max_ros = self._weighted_pool(ros_curve.amax(dim=1, keepdim=True), fine_burnability, coarse_burnability)
+        coarse_max_hfi = self._weighted_pool(hfi_curve.amax(dim=1, keepdim=True), fine_burnability, coarse_burnability)
+        coarse_ros_feature = (torch.log1p(base_speed.clamp_min(0.0)) - self.ros_log_mean) / self.ros_log_std
+        coarse_hfi_feature = (torch.log1p(coarse_base_hfi.clamp_min(0.0)) - self.fi_log_mean) / self.fi_log_std
+        coarse_max_ros_feature = (torch.log1p(coarse_max_ros.clamp_min(0.0)) - self.ros_log_mean) / self.ros_log_std
+        coarse_max_hfi_feature = (torch.log1p(coarse_max_hfi.clamp_min(0.0)) - self.fi_log_mean) / self.fi_log_std
+        features = torch.cat(
+            [
+                relative_ignition_density,
+                normalized_log_mean,
+                normalized_cv,
+                normalized_fire_size,
+                coarse_isi,
+                coarse_wind_x,
+                coarse_wind_y,
+                coarse_elevation,
+                coarse_ros_feature,
+                coarse_hfi_feature,
+                coarse_max_ros_feature,
+                coarse_max_hfi_feature,
+                coarse_burnability,
+            ],
+            dim=1,
+        )
+        if features.shape[1] != self.FIELD_INPUT_CHANNELS:
+            raise RuntimeError(f"Expected {self.FIELD_INPUT_CHANNELS} parameter-field features, got {features.shape}.")
+        return torch.nan_to_num(features, nan=0.0, posinf=8.0, neginf=-8.0).clamp(-8.0, 8.0) * coarse_support
+
+    def _bounded_parameter_fields(
+        self,
+        features: torch.Tensor,
+        coarse_support: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        if self.parameter_field_network is None:
+            raise RuntimeError("Local physical parameter fields are only defined for interpretable mechanism v3.")
+        raw_fields = self.parameter_field_network(features)
+        limits = {
+            "ignition": self.ignition_field_log_limit,
+            "ros": self.ros_field_log_limit,
+            "fire_size": self.fire_size_field_log_limit,
+            "reach": self.reach_field_log_limit,
+            "consumption": self.consumption_field_log_limit,
+        }
+        return {name: limit * torch.tanh(raw_fields[name]) * coarse_support for name, limit in limits.items()}
+
+    @staticmethod
+    def _redistribute_location_mass(
+        location_mass: torch.Tensor,
+        ignition_log_correction: torch.Tensor,
+        support: torch.Tensor,
+    ) -> torch.Tensor:
+        original_total = location_mass.sum(dim=(-2, -1), keepdim=True)
+        corrected = location_mass * torch.exp(ignition_log_correction) * support
+        corrected_total = corrected.sum(dim=(-2, -1), keepdim=True)
+        return corrected * original_total / corrected_total.clamp_min(1e-12)
+
+    def _set_parameter_field_regularization(
+        self,
+        fields: dict[str, torch.Tensor],
+        coarse_support: torch.Tensor,
+    ) -> None:
+        stacked = torch.cat([fields[name] for name in PhysicalParameterFieldNetwork.FIELD_NAMES], dim=1)
+        support_count = coarse_support.sum().clamp_min(1.0)
+        l2 = stacked.square().sum() / (support_count * stacked.shape[1])
+        horizontal_mask = coarse_support[..., :, 1:] * coarse_support[..., :, :-1]
+        vertical_mask = coarse_support[..., 1:, :] * coarse_support[..., :-1, :]
+        horizontal_tv = (stacked[..., :, 1:] - stacked[..., :, :-1]).abs() * horizontal_mask
+        vertical_tv = (stacked[..., 1:, :] - stacked[..., :-1, :]).abs() * vertical_mask
+        tv_denominator = ((horizontal_mask.sum() + vertical_mask.sum()) * stacked.shape[1]).clamp_min(1.0)
+        total_variation = (horizontal_tv.sum() + vertical_tv.sum()) / tv_denominator
+        self._pending_regularization_loss = self.field_l2_weight * l2 + self.field_tv_weight * total_variation
+        self._last_field_diagnostics = {
+            "field_l2": l2.detach(),
+            "field_total_variation": total_variation.detach(),
+            **{f"{name}_field_abs_mean": value.detach().abs().mean() for name, value in fields.items()},
+            **{f"{name}_field_abs_max": value.detach().abs().amax() for name, value in fields.items()},
+        }
+
+    def pop_regularization_loss(self) -> torch.Tensor | None:
+        regularization = self._pending_regularization_loss
+        self._pending_regularization_loss = None
+        return regularization
 
     @staticmethod
     def _neighbor(values: torch.Tensor, row_offset: int, col_offset: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -547,11 +734,13 @@ class InterpretableMechanisticModel(nn.Module):
                 }
             )
         metrics.update({name: float(value.cpu()) for name, value in self._last_diagnostics.items()})
+        metrics.update({name: float(value.cpu()) for name, value in self._last_field_diagnostics.items()})
         return metrics
 
     def forward(self, x: torch.Tensor, x_auxiliary: dict[str, torch.Tensor] | None = None) -> torch.Tensor:
         if x_auxiliary is None or "fuel_curve" not in x_auxiliary:
             raise ValueError("Interpretable mechanism requires a 'fuel_curve' tensor.")
+        self._pending_regularization_loss = None
         fuel_curve = x_auxiliary["fuel_curve"]
         if fuel_curve.shape[1] != 2 * self.curve_length:
             raise ValueError(f"Expected {2 * self.curve_length} concatenated iROS/HFI channels, got {fuel_curve.shape[1]}.")
@@ -581,27 +770,13 @@ class InterpretableMechanisticModel(nn.Module):
         ignition_mass = x[:, self.ignition_indices].clamp_min(0.0).sum(dim=1, keepdim=True)
         pooling_area = float(self.downsample_factor**2)
         coarse_location_mass = self._pool(ignition_mass * fine_burnability / self.ignition_probability_mass_scale) * pooling_area
-        if self.variant == "v1":
-            seed_probability = -torch.expm1(-self.effective_ignition_rate * coarse_location_mass)
-            mixture_reach, _ = self.travel_time_propagation(
-                seed_probability=seed_probability,
-                directional_speed_m_per_min=directional_speed,
-                scenario_quantiles=fire_size_log10_quantiles,
-                burnability=coarse_burnability,
-            )
-            coarse_bp = -torch.expm1(-self.bp_hazard_scale * mixture_reach)
-            mean_count = None
-        else:
+        mean_count = None
+        coefficient_of_variation = None
+        normalized_log_mean = None
+        normalized_cv = None
+        if self.variant != "v1":
             if self.count_log_mean_index is None or self.count_cv_index is None:
-                raise RuntimeError("Interpretable mechanism v2 requires resolved ignition-count mean and CV channels.")
-            if not isinstance(self.travel_time_propagation, SourceCohortTravelTimePropagation):
-                raise RuntimeError("Interpretable mechanism v2 has the wrong propagation module.")
-            per_fire_reach, _ = self.travel_time_propagation(
-                location_mass=coarse_location_mass,
-                directional_speed_m_per_min=directional_speed,
-                fire_size_log10_ha_quantiles=fire_size_log10_quantiles,
-                burnability=coarse_support,
-            )
+                raise RuntimeError("Count-aware interpretable mechanisms require resolved ignition-count mean and CV channels.")
             normalized_log_mean = self._weighted_pool(
                 x[:, self.count_log_mean_index : self.count_log_mean_index + 1],
                 fine_burnability,
@@ -617,13 +792,81 @@ class InterpretableMechanisticModel(nn.Module):
             coefficient_of_variation = (self.count_cv_minimum + normalized_cv * (self.count_cv_maximum - self.count_cv_minimum)).clamp_min(
                 0.0
             )
+
+        corrected_location_mass = coarse_location_mass
+        fire_size_multiplier = None
+        reach_scale: torch.Tensor | None = None
+        fine_ros_log_correction = None
+        fine_consumption_log_correction = None
+        if self.variant == "v3":
+            if normalized_log_mean is None or normalized_cv is None:
+                raise RuntimeError("Interpretable mechanism v3 requires ignition-count features.")
+            parameter_features = self._parameter_field_features(
+                x=x,
+                ros_curve=ros_curve,
+                hfi_curve=hfi_curve,
+                fine_base_hfi=fine_base_hfi,
+                fine_burnability=fine_burnability,
+                coarse_burnability=coarse_burnability,
+                coarse_support=coarse_support,
+                coarse_location_mass=coarse_location_mass,
+                normalized_fire_size=normalized_fire_size,
+                normalized_log_mean=normalized_log_mean,
+                normalized_cv=normalized_cv,
+                base_speed=base_speed,
+            )
+            parameter_fields = self._bounded_parameter_fields(parameter_features, coarse_support)
+            self._set_parameter_field_regularization(parameter_fields, coarse_support)
+            corrected_location_mass = self._redistribute_location_mass(
+                coarse_location_mass,
+                parameter_fields["ignition"],
+                coarse_support,
+            )
+            directional_speed = directional_speed * torch.exp(parameter_fields["ros"])
+            fire_size_multiplier = torch.exp(parameter_fields["fire_size"])
+            reach_scale = self.per_fire_reach_scale * torch.exp(parameter_fields["reach"])
+            fine_ros_log_correction = F.interpolate(
+                parameter_fields["ros"],
+                size=x.shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            )
+            fine_consumption_log_correction = F.interpolate(
+                parameter_fields["consumption"],
+                size=x.shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            )
+        if self.variant == "v1":
+            seed_probability = -torch.expm1(-self.effective_ignition_rate * coarse_location_mass)
+            mixture_reach, _ = self.travel_time_propagation(
+                seed_probability=seed_probability,
+                directional_speed_m_per_min=directional_speed,
+                scenario_quantiles=fire_size_log10_quantiles,
+                burnability=coarse_burnability,
+            )
+            coarse_bp = -torch.expm1(-self.bp_hazard_scale * mixture_reach)
+        else:
+            if not isinstance(self.travel_time_propagation, SourceCohortTravelTimePropagation):
+                raise RuntimeError("Count-aware interpretable mechanism has the wrong propagation module.")
+            if mean_count is None or coefficient_of_variation is None:
+                raise RuntimeError("Count-aware interpretable mechanism did not reconstruct the ignition-count distribution.")
+            per_fire_reach, _ = self.travel_time_propagation(
+                location_mass=corrected_location_mass,
+                directional_speed_m_per_min=directional_speed,
+                fire_size_log10_ha_quantiles=fire_size_log10_quantiles,
+                burnability=coarse_support,
+                fire_size_multiplier=fire_size_multiplier,
+            )
+            if reach_scale is None:
+                reach_scale = self.per_fire_reach_scale
             coarse_bp = count_distribution_burn_probability(
                 per_fire_reach=per_fire_reach,
                 mean_count=mean_count,
                 coefficient_of_variation=coefficient_of_variation,
-                per_fire_reach_scale=self.per_fire_reach_scale,
+                per_fire_reach_scale=reach_scale,
             )
-            seed_probability = coarse_location_mass
+            seed_probability = corrected_location_mass
             mixture_reach = per_fire_reach
         fine_bp = (F.interpolate(coarse_bp, size=x.shape[-2:], mode="bilinear", align_corners=False) * fine_burnability).clamp(
             1e-6, 1.0 - 1e-6
@@ -634,8 +877,13 @@ class InterpretableMechanisticModel(nn.Module):
             fi_log = torch.log1p(fine_base_hfi.clamp_min(0.0) * self.fi_scale)
             ros_log = torch.log1p(fine_base_ros.clamp_min(0.0) * self.ros_scale)
         else:
-            physical_fi_log = torch.log1p(fine_base_hfi.clamp_min(0.0))
-            physical_ros_log = torch.log1p(fine_base_ros.clamp_min(0.0))
+            corrected_fine_ros = fine_base_ros
+            corrected_fine_hfi = fine_base_hfi
+            if fine_ros_log_correction is not None and fine_consumption_log_correction is not None:
+                corrected_fine_ros = corrected_fine_ros * torch.exp(fine_ros_log_correction)
+                corrected_fine_hfi = corrected_fine_hfi * torch.exp(fine_ros_log_correction + fine_consumption_log_correction)
+            physical_fi_log = torch.log1p(corrected_fine_hfi.clamp_min(0.0))
+            physical_ros_log = torch.log1p(corrected_fine_ros.clamp_min(0.0))
             fi_log = self.fi_scale * physical_fi_log.clamp_min(1e-6).pow(self.fi_log_slope)
             ros_log = self.ros_scale * physical_ros_log.clamp_min(1e-6).pow(self.ros_log_slope)
             fi_log = torch.where(physical_fi_log > 0.0, fi_log, torch.zeros_like(fi_log))

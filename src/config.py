@@ -106,6 +106,14 @@ class ModelConfig(BaseModel):
     interpretable_source_grid_size: int = Field(default=4, gt=0, le=8)
     interpretable_behavior_log_slope_min: float = Field(default=0.5, gt=0.0)
     interpretable_behavior_log_slope_max: float = Field(default=1.5, gt=0.0)
+    interpretable_field_hidden_channels: int = Field(default=48, gt=0)
+    interpretable_ignition_field_log_limit: float = Field(default=1.3862943611198906, ge=0.0)
+    interpretable_ros_field_log_limit: float = Field(default=0.6931471805599453, ge=0.0)
+    interpretable_fire_size_field_log_limit: float = Field(default=1.3862943611198906, ge=0.0)
+    interpretable_reach_field_log_limit: float = Field(default=1.3862943611198906, ge=0.0)
+    interpretable_consumption_field_log_limit: float = Field(default=0.6931471805599453, ge=0.0)
+    interpretable_field_l2_weight: float = Field(default=5e-3, ge=0.0)
+    interpretable_field_tv_weight: float = Field(default=5e-3, ge=0.0)
 
     @model_validator(mode="after")
     def validate_propagation_area_multiplier(self) -> "ModelConfig":

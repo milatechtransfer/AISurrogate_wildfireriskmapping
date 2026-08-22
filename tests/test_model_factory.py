@@ -4,6 +4,7 @@ import torch
 from src.config import ModelConfig
 from src.models.factory import build_model, resolve_model_architecture
 from src.models.heads import BurnProbabilityBehaviorHead
+from src.models.interpretable_mechanistic import InterpretableMechanisticModel
 from src.models.unet import BaselineUNet, MultiSourceUNet
 
 
@@ -70,3 +71,44 @@ def test_bp_behavior_head_requires_bp_fi_and_ros():
 
     with pytest.raises(ValueError, match="requires exactly"):
         build_model(model_config=config, spatial_input_channels=3, target_names=["bp", "fi"])
+
+
+@pytest.mark.parametrize(
+    "architecture",
+    [
+        "interpretable_mechanistic_v3",
+        "physical_mechanistic_v3",
+        "gray_box_mechanistic",
+    ],
+)
+def test_build_model_accepts_gray_box_mechanistic_aliases(architecture: str) -> None:
+    spatial_input_names = [
+        "ignition_grid_human",
+        "ignition_grid_lightning",
+        "elevation_grid",
+        "InitialSpreadIndex",
+        "wind_x",
+        "wind_y",
+        "spatialized_fire_size/NORM_LOG_SIZE_HA_q10",
+        "spatialized_fire_size/NORM_LOG_SIZE_HA_q50",
+        "spatialized_fire_size/NORM_LOG_SIZE_HA_q90",
+        "NORM_LOG1P_IGNITION_COUNT_MEAN",
+        "NORM_IGNITION_COUNT_CV",
+    ]
+    config = ModelConfig(
+        architecture=architecture,
+        num_classes=3,
+        output_head="bp_behavior",
+        spatial_input_names=spatial_input_names,
+        propagation_scenario_mode="fire_size",
+    )
+
+    model = build_model(
+        model_config=config,
+        spatial_input_channels=len(spatial_input_names),
+        auxiliary_input_dims={"fuel_curve": 2 * len(config.propagation_isi_bins)},
+        target_names=["bp", "fi", "ros"],
+    )
+
+    assert isinstance(model, InterpretableMechanisticModel)
+    assert model.variant == "v3"

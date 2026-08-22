@@ -37,6 +37,22 @@ class DummyLoss(torch.nn.Module):
         return torch.tensor(1.0, requires_grad=True)
 
 
+class RegularizedDummyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.regularization_scale = torch.nn.Parameter(torch.tensor(0.5))
+        self._regularization_loss = None
+
+    def forward(self, inputs, auxiliary_data):
+        self._regularization_loss = self.regularization_scale.square()
+        return torch.zeros_like(inputs)
+
+    def pop_regularization_loss(self):
+        regularization_loss = self._regularization_loss
+        self._regularization_loss = None
+        return regularization_loss
+
+
 def dummy_metric(predictions, targets, masks):
     return torch.tensor(0.5)
 
@@ -312,10 +328,12 @@ def test_interpretable_normalization_constants_must_match_behavior_targets(tmp_p
     )
 
     validate_mechanistic_normalization_params(config, "interpretable_mechanistic_v2")
+    validate_mechanistic_normalization_params(config, "interpretable_mechanistic_v3")
+    validate_mechanistic_normalization_params(config, "gray_box_mechanistic")
 
     config.model.propagation_count_cv_max = 1.5
     with pytest.raises(ValueError, match="propagation_count_cv_max"):
-        validate_mechanistic_normalization_params(config, "interpretable_mechanistic_v2")
+        validate_mechanistic_normalization_params(config, "interpretable_mechanistic_v3")
 
 
 @pytest.fixture
@@ -449,6 +467,20 @@ def test_trainer_step(dummy_config, dummy_data):
     preds, loss, loss_parts, targets, masks = trainer._step(batch)
     assert preds.shape == targets.shape
     assert isinstance(loss, torch.Tensor)
+
+
+def test_trainer_adds_model_regularization_to_total_loss(dummy_config, dummy_data):
+    trainer = Trainer(dummy_config, spatial_input_channels=SPATIAL_CHANNELS)
+    trainer.model = RegularizedDummyModel().to(trainer.device)
+    trainer.loss_fn = DummyLoss()
+    batch = next(iter(dummy_data))
+
+    _, loss, loss_parts, _, _ = trainer._step(batch)
+
+    assert loss.item() == pytest.approx(1.25)
+    assert loss_parts is not None
+    assert loss_parts["model/field_regularization"].item() == pytest.approx(0.25)
+    assert trainer.model.pop_regularization_loss() is None
 
 
 def test_trainer_step_crops_predictions_targets_and_masks_to_center(tmp_path):

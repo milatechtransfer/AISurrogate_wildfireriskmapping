@@ -157,6 +157,19 @@ def _build_v2() -> InterpretableMechanisticModel:
     return model
 
 
+def _build_v3() -> InterpretableMechanisticModel:
+    config = _v2_config()
+    config.architecture = "interpretable_mechanistic_v3"
+    model = build_model(
+        model_config=config,
+        spatial_input_channels=len(SPATIAL_NAMES_V2),
+        auxiliary_input_dims={"fuel_curve": 6},
+        target_names=["bp", "fi", "ros"],
+    )
+    assert isinstance(model, InterpretableMechanisticModel)
+    return model
+
+
 def _v2_inputs(*, normalized_log_mean: float) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     base, auxiliary = _inputs()
     count_channels = torch.empty(1, 2, 16, 16)
@@ -284,3 +297,109 @@ def test_v2_fire_size_barriers_behavior_and_gradients_preserve_physics() -> None
     output.mean().backward()
     gradients = [parameter.grad for parameter in model.parameters()]
     assert all(gradient is not None and torch.isfinite(gradient).all() for gradient in gradients)
+
+
+def test_v3_zero_initialized_parameter_fields_reproduce_v2() -> None:
+    v2 = _build_v2()
+    v3 = _build_v3()
+    x, auxiliary = _v2_inputs(normalized_log_mean=0.5)
+
+    with torch.no_grad():
+        v2_output = v2(x, auxiliary)
+        v3_output = v3(x, auxiliary)
+
+    assert torch.allclose(v3_output, v2_output, atol=1e-6, rtol=1e-6)
+    regularization = v3.pop_regularization_loss()
+    assert regularization is not None
+    assert torch.equal(regularization, torch.zeros_like(regularization))
+    total_parameters, trainable_parameters = get_nbr_model_parameters(v3)
+    assert total_parameters == trainable_parameters
+    assert 60_000 < total_parameters < 100_000
+
+
+def test_v3_ignition_correction_preserves_mass_and_support() -> None:
+    location_mass = torch.tensor([[[[0.1, 0.2], [0.0, 0.3]]]])
+    correction = torch.tensor([[[[-1.0, 1.0], [2.0, -2.0]]]])
+    support = torch.tensor([[[[1.0, 1.0], [0.0, 1.0]]]])
+
+    corrected = InterpretableMechanisticModel._redistribute_location_mass(location_mass, correction, support)
+
+    assert torch.allclose(corrected.sum(dim=(-2, -1)), location_mass.sum(dim=(-2, -1)))
+    assert corrected[..., 1, 0].item() == 0.0
+    assert corrected[..., 0, 1] > location_mass[..., 0, 1]
+
+
+def test_v3_named_parameter_fields_have_bounded_physical_effects() -> None:
+    model = _build_v3()
+    assert model.parameter_field_network is not None
+    head_bias = model.parameter_field_network.head.bias
+    assert head_bias is not None
+    x, auxiliary = _v2_inputs(normalized_log_mean=0.5)
+
+    with torch.no_grad():
+        baseline = model(x, auxiliary)
+        head_bias[3] = 10.0
+        larger_reach = model(x, auxiliary)
+        head_bias.zero_()
+        head_bias[1] = 10.0
+        faster_ros = model(x, auxiliary)
+        head_bias.zero_()
+        head_bias[4] = 10.0
+        higher_consumption = model(x, auxiliary)
+
+    assert torch.sigmoid(larger_reach[:, 0]).sum() > torch.sigmoid(baseline[:, 0]).sum()
+    assert torch.all(faster_ros[:, 2] >= baseline[:, 2] - 1e-7)
+    assert faster_ros[:, 2].sum() > baseline[:, 2].sum()
+    assert torch.all(higher_consumption[:, 1] >= baseline[:, 1] - 1e-7)
+    assert higher_consumption[:, 1].sum() > baseline[:, 1].sum()
+    assert torch.allclose(higher_consumption[:, 2], baseline[:, 2], atol=1e-6, rtol=1e-6)
+
+    regularization = model.pop_regularization_loss()
+    assert regularization is not None
+    assert regularization > 0.0
+    diagnostics = model.diagnostic_metrics()
+    field_limits = {
+        "ignition": model.ignition_field_log_limit,
+        "ros": model.ros_field_log_limit,
+        "fire_size": model.fire_size_field_log_limit,
+        "reach": model.reach_field_log_limit,
+        "consumption": model.consumption_field_log_limit,
+    }
+    for name, limit in field_limits.items():
+        assert diagnostics[f"{name}_field_abs_max"] <= limit + 1e-6
+
+
+def test_v3_neutral_fields_preserve_fire_size_monotonicity_and_barriers() -> None:
+    model = _build_v3()
+    small_x, auxiliary = _v2_inputs(normalized_log_mean=0.5)
+    large_x, _ = _v2_inputs(normalized_log_mean=0.5)
+    small_x[:, 6:9] = 0.05
+    large_x[:, 6:9] = 0.95
+    blocked_curves = auxiliary["fuel_curve"].clone()
+    blocked_curves[:, :, :4, :4] = 0.0
+
+    with torch.no_grad():
+        small_bp = torch.sigmoid(model(small_x, auxiliary)[:, 0])
+        large_bp = torch.sigmoid(model(large_x, auxiliary)[:, 0])
+        blocked = model(large_x, {"fuel_curve": blocked_curves})
+
+    assert torch.all(large_bp >= small_bp - 1e-7)
+    assert large_bp.sum() > small_bp.sum()
+    assert torch.allclose(torch.sigmoid(blocked[:, 0, :4, :4]), torch.full((1, 4, 4), 1e-6), atol=1e-8)
+    assert torch.equal(blocked[:, 1:, :4, :4], torch.zeros_like(blocked[:, 1:, :4, :4]))
+
+
+def test_v3_parameter_network_receives_gradients_through_physics() -> None:
+    model = _build_v3()
+    assert model.parameter_field_network is not None
+    x, auxiliary = _v2_inputs(normalized_log_mean=0.5)
+
+    output = model(x, auxiliary)
+    regularization = model.pop_regularization_loss()
+    assert regularization is not None
+    (output.mean() + regularization).backward()
+
+    head_gradient = model.parameter_field_network.head.weight.grad
+    assert head_gradient is not None
+    assert torch.isfinite(head_gradient).all()
+    assert head_gradient.abs().sum() > 0.0

@@ -1,0 +1,50 @@
+extends: "interpretable_physics_v2_count_sources_512_crop_256_firesize_q3.yaml"
+
+save_dir: "experiments/mechanistic/gray_box_physics_v3_512_crop_256_firesize_q3"
+
+model:
+  architecture: "interpretable_mechanistic_v3"
+  interpretable_field_hidden_channels: 48
+  interpretable_ignition_field_log_limit: 1.3862943611198906
+  interpretable_ros_field_log_limit: 0.6931471805599453
+  interpretable_fire_size_field_log_limit: 1.3862943611198906
+  interpretable_reach_field_log_limit: 1.3862943611198906
+  interpretable_consumption_field_log_limit: 0.6931471805599453
+  interpretable_field_l2_weight: 5.0e-3
+  interpretable_field_tv_weight: 5.0e-3
+
+optimizer:
+  name: "AdamW"
+  lr: 2.0e-3
+  parameter_lr_scales:
+    raw_per_fire_reach_scale: 0.25
+    raw_fi_log_scale: 0.25
+    raw_ros_log_scale: 0.25
+    raw_fi_log_slope: 0.25
+    raw_ros_log_slope: 0.25
+    travel_time_propagation.raw_area_multiplier: 0.25
+
+logger:
+  experiment_name: "gray_box_physics_v3_512_crop_256_firesize_q3"
+  tags:
+    - "physics_first_gray_box_v3"
+    - "architecture=bounded_parameter_fields"
+    - "direct_output_head=none"
+    - "field_network=four_dilated_convs"
+    - "field_hidden_channels=48"
+    - "field_receptive_field=31_coarse_cells"
+    - "field_resolution=64x64"
+    - "field_ignition=mass_preserving"
+    - "field_ros_multiplier=bounded_2x"
+    - "field_fire_size_multiplier=bounded_4x"
+    - "field_reach_multiplier=bounded_4x"
+    - "field_consumption_multiplier=bounded_2x"
+    - "field_regularization=l2_plus_total_variation"
+    - "ignition_count=mean_plus_cv_distribution"
+    - "propagation=stratified_source_cohorts"
+    - "source_grid=4x4"
+    - "scenario_control=fire_size_q10_q50_q90"
+    - "input_patch=512"
+    - "target_crop=256"
+    - "effective_batch=64"
+    - "best_ckpt=stitched_validation_hex_mean_ccc"

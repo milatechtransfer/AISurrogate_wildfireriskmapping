@@ -38,13 +38,20 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
     }
     interpretable_architectures = {"interpretable_mechanistic", "physical_mechanistic"}
     interpretable_v2_architectures = {"interpretable_mechanistic_v2", "physical_mechanistic_v2"}
-    if resolved_architecture not in travel_time_architectures | interpretable_architectures | interpretable_v2_architectures:
+    interpretable_v3_architectures = {
+        "interpretable_mechanistic_v3",
+        "physical_mechanistic_v3",
+        "gray_box_mechanistic",
+    }
+    count_aware_interpretable_architectures = interpretable_v2_architectures | interpretable_v3_architectures
+    all_interpretable_architectures = interpretable_architectures | count_aware_interpretable_architectures
+    if resolved_architecture not in travel_time_architectures | all_interpretable_architectures:
         return
 
     checks: list[tuple[str, dict[str, tuple[str, float]]]] = []
     if (
         resolved_architecture in travel_time_architectures and config.model.propagation_ignition_mode == "probability_mass"
-    ) or resolved_architecture in interpretable_v2_architectures:
+    ) or resolved_architecture in count_aware_interpretable_architectures:
         count_checks = {
             "log1p_mean_minimum": (
                 "model.propagation_count_log_mean_min",
@@ -55,7 +62,7 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
                 config.model.propagation_count_log_mean_max,
             ),
         }
-        if resolved_architecture in interpretable_v2_architectures:
+        if resolved_architecture in count_aware_interpretable_architectures:
             count_checks.update(
                 {
                     "cv_minimum": (
@@ -91,7 +98,7 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
             )
         )
 
-    if resolved_architecture in interpretable_architectures | interpretable_v2_architectures:
+    if resolved_architecture in all_interpretable_architectures:
         grid_params = next(
             (source.params for source in config.data.input_sources if source.name == "grid" and isinstance(source.params, GridParams)),
             None,
@@ -688,6 +695,14 @@ class Trainer:
         else:
             total_loss = cast(torch.Tensor, loss_out)
             loss_parts = None
+
+        pop_regularization_loss = getattr(self.model, "pop_regularization_loss", None)
+        if pop_regularization_loss is not None:
+            regularization_loss = pop_regularization_loss()
+            if regularization_loss is not None:
+                total_loss = total_loss + regularization_loss
+                loss_parts = dict(loss_parts or {})
+                loss_parts["model/field_regularization"] = regularization_loss
 
         metric_predictions = activate_target_predictions(predictions, self._target_specs)
         return metric_predictions, total_loss, loss_parts, targets, masks
