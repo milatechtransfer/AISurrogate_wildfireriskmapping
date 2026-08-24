@@ -13,6 +13,7 @@ import rasterio
 from data_preparation.paths import Paths
 from data_preparation.spatial.fuel import load_fuel_grid
 from data_preparation.spatial.utils import load_spatial_raster
+from src.datasets.context_crop import centered_crop_slices
 from src.datasets.fuel_utils import normalize_hex_id
 from src.datasets.postprocessing.counterfactual.counterfactual_base import ScenarioConfig
 from src.datasets.postprocessing.counterfactual.counterfactual_fuel import FUEL_NODATA, apply_fuel_edit
@@ -126,6 +127,21 @@ class FuelCounterfactualTransform:
 
         for hex_id in sorted(normalized_hex_ids.unique()):
             hex_metadata = metadata.loc[normalized_hex_ids == hex_id].drop_duplicates(filename_col)
+            context_h = context_w = 0
+            geometry_columns = {"input_win_h", "input_win_w", "target_crop_h", "target_crop_w"}
+            if geometry_columns <= set(hex_metadata.columns):
+                geometry = hex_metadata[list(sorted(geometry_columns))].drop_duplicates()
+                if len(geometry) != 1:
+                    raise ValueError(f"Patch metadata for hex {hex_id} contains inconsistent context-crop geometry.")
+                geometry_row = geometry.iloc[0]
+                row_slice, col_slice = centered_crop_slices(
+                    int(geometry_row["input_win_h"]),
+                    int(geometry_row["input_win_w"]),
+                    int(geometry_row["target_crop_h"]),
+                    int(geometry_row["target_crop_w"]),
+                )
+                context_h = int(row_slice.start or 0)
+                context_w = int(col_slice.start or 0)
             paths = Paths(hex_id=hex_id, root_dir=raw_data_dir)
             # Reproject onto the elevation grid's reference profile, mirroring
             # load_spatial_features_per_hexel's patch-generation path. Without this,
@@ -151,7 +167,12 @@ class FuelCounterfactualTransform:
                 scenario_name=scenario.name,
                 params=params,
             )
-            edited_hexels[hex_id] = np.asarray(result.fuel, dtype=np.float32)
+            edited_hexels[hex_id] = np.pad(
+                np.asarray(result.fuel, dtype=np.float32),
+                ((context_h, context_h), (context_w, context_w)),
+                mode="constant",
+                constant_values=np.nan,
+            )
 
             for _, item in hex_metadata.iterrows():
                 key = Path(str(item[filename_col])).as_posix()

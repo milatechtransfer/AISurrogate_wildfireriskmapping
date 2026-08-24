@@ -38,6 +38,7 @@ from xgboost import XGBRegressor
 from data_preparation.paths import Paths
 from data_preparation.spatial.utils import get_output_log_stats_cached, get_range_output, read_split_hex_ids
 from src.config import Config, apply_run_id_overrides
+from src.datasets.context_crop import centered_crop_slices
 from src.datasets.dataset import get_test_dataloader, get_train_val_dataloader
 from src.datasets.postprocessing.stitch_hexel import stitch_windows
 from src.datasets.postprocessing.utils import calculate_hexel_metrics_pytorch, load_spatial_raster, load_target_grid_for_mask_scope
@@ -210,7 +211,14 @@ def combine_inputs(inputs_np: np.ndarray, fuel_curve_np: np.ndarray | None) -> n
 # ---------- Batch -> tabular rows ----------
 
 
-def tabularize_loader(loader, valid_mask_threshold, pixels_per_patch=None, rng=None, max_batches=0):
+def _crop_to_target(array: np.ndarray, target_crop: tuple[int, int] | None) -> np.ndarray:
+    if target_crop is None:
+        return array
+    row_slice, col_slice = centered_crop_slices(array.shape[-2], array.shape[-1], *target_crop)
+    return array[..., row_slice, col_slice]
+
+
+def tabularize_loader(loader, valid_mask_threshold, pixels_per_patch=None, rng=None, max_batches=0, target_crop=None):
     """Trains directly on normalized target space, matching the U-Net's training convention."""
     X_parts, y_parts = [], []
     n_batches = max_batches if max_batches else len(loader)
@@ -229,6 +237,9 @@ def tabularize_loader(loader, valid_mask_threshold, pixels_per_patch=None, rng=N
 
         targets_np = targets.numpy()
         masks_np = masks.numpy()
+        combined_np = _crop_to_target(combined_np, target_crop)
+        targets_np = _crop_to_target(targets_np, target_crop)
+        masks_np = _crop_to_target(masks_np, target_crop)
 
         B, C, H, W = combined_np.shape
         x = combined_np.transpose(0, 2, 3, 1).reshape(-1, C)
@@ -285,6 +296,7 @@ def evaluate_patchwise_and_hexel(
     metric_names,
     top_fraction: float = 0.10,
     max_batches: int = 0,
+    target_crop: tuple[int, int] | None = None,
 ):
     metric_fns = {k: AVAILABLE_METRICS[k] for k in metric_names}
     running = {name: 0.0 for name in metric_fns}
@@ -314,6 +326,9 @@ def evaluate_patchwise_and_hexel(
         combined_np = combine_inputs(inputs_np, fuel_curve_np)
 
         targets_np, masks_np = targets.numpy(), masks.numpy()
+        combined_np = _crop_to_target(combined_np, target_crop)
+        targets_np = _crop_to_target(targets_np, target_crop)
+        masks_np = _crop_to_target(masks_np, target_crop)
         B, C, H, W = combined_np.shape
 
         x_flat = combined_np.transpose(0, 2, 3, 1).reshape(-1, C)
@@ -390,6 +405,7 @@ def evaluate_region_level(
     target_name: str,
     device="cpu",
     max_batches: int = 0,
+    target_crop: tuple[int, int] | None = None,
 ):
     """
     Stitches per-patch predictions (denormalized to real units) into full hexel
@@ -408,9 +424,7 @@ def evaluate_region_level(
         fuel_curve = batch.get("fuel_curve")
         patch_metadata = batch.get("patch_metadata")
         if patch_metadata is None or "row" not in patch_metadata or "col" not in patch_metadata:
-            raise ValueError(
-                "Batch is missing patch_metadata['row']/['col']; requires the " "dataset.py patch_metadata extension (see PR)."
-            )
+            raise ValueError("Batch is missing patch_metadata['row']/['col']; requires the dataset.py patch_metadata extension (see PR).")
         hex_ids = patch_metadata["hex_id"].numpy()
         rows = patch_metadata["row"].numpy()
         cols = patch_metadata["col"].numpy()
@@ -419,6 +433,8 @@ def evaluate_region_level(
         fuel_curve_np = fuel_curve.numpy() if fuel_curve is not None else None
         combined_np = combine_inputs(inputs_np, fuel_curve_np)
         masks_np = masks.numpy()
+        combined_np = _crop_to_target(combined_np, target_crop)
+        masks_np = _crop_to_target(masks_np, target_crop)
         B, C, H, W = combined_np.shape
 
         x_flat = combined_np.transpose(0, 2, 3, 1).reshape(-1, C)
@@ -536,6 +552,7 @@ def run_split_evaluation(
     max_eval_batches: int,
     timings: dict,
 ):
+    target_crop = config.data_prep.resolved_target_crop() if config.data_prep.context_crop_enabled else None
     with timed(f"{split_name} Eval", timings):
         patch_metrics, hex_rank_metrics = evaluate_patchwise_and_hexel(
             model,
@@ -548,6 +565,7 @@ def run_split_evaluation(
             valid_mask_threshold,
             config.metrics,
             max_batches=max_eval_batches,
+            target_crop=target_crop,
         )
     print_metrics(f"{split_name} metrics (patch)", patch_metrics)
     print_metrics(f"{split_name} metrics (hexel, scalar-summary rank agreement)", hex_rank_metrics)
@@ -566,6 +584,7 @@ def run_split_evaluation(
             region_metric_functions,
             target_name=target_name,
             max_batches=max_eval_batches,
+            target_crop=target_crop,
         )
     print_region_metrics_table(region_agg, region_per_hexel, split_name, DISPLAY_METRICS)
 
@@ -605,6 +624,7 @@ def main() -> None:
 
     valid_mask_threshold = config.data.valid_mask_threshold
     pixels_per_patch = args.pixels_per_patch if args.pixels_per_patch > 0 else None
+    target_crop = config.data_prep.resolved_target_crop() if config.data_prep.context_crop_enabled else None
 
     # ---------- Tabularize ----------
     with timed("Tabularize", timings):
@@ -614,6 +634,7 @@ def main() -> None:
             pixels_per_patch=pixels_per_patch,
             rng=rng,
             max_batches=args.max_train_batches,
+            target_crop=target_crop,
         )
     print(f"======= Train rows ========\n{X_train.shape[0]:,} pixels, {X_train.shape[1]} channels")
 

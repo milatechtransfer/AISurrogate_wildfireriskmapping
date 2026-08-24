@@ -175,3 +175,61 @@ def test_fuel_counterfactual_preserves_original_nan_mask(
     patch[0, 0, 0] = np.nan
     edited = transform(patch, metadata.iloc[0].to_dict())
     assert np.isnan(edited[0, 0, 0])
+
+
+def test_fuel_counterfactual_aligns_context_window_with_target_coordinates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    global_fuel = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 0]], dtype=np.float32)
+    metadata = pd.DataFrame(
+        [
+            {
+                "filename": "context.npy",
+                "hex_id": 16,
+                "row": 0,
+                "col": 0,
+                "input_win_h": 4,
+                "input_win_w": 4,
+                "target_crop_h": 2,
+                "target_crop_w": 2,
+            }
+        ]
+    )
+    scenario = ScenarioConfig(
+        name="remove_barriers",
+        kind="fuel",
+        description="",
+        params={"mode": "nonfuel_to_burnable_local_adjacent_modal", "nonfuel_ids": [0]},
+    )
+    reference_profile = {
+        "driver": "GTiff",
+        "height": 3,
+        "width": 3,
+        "count": 1,
+        "dtype": "float32",
+        "crs": "EPSG:4326",
+        "transform": from_origin(0, 3, 1, 1),
+        "nodata": -9999,
+    }
+    monkeypatch.setattr(
+        "src.datasets.postprocessing.counterfactual.fuel_counterfactual_transform.load_spatial_raster",
+        lambda **_: (np.ma.masked_array(global_fuel, mask=False), reference_profile),
+    )
+    monkeypatch.setattr(
+        "src.datasets.postprocessing.counterfactual.fuel_counterfactual_transform.load_fuel_grid",
+        lambda **_: np.ma.masked_array(global_fuel, mask=False),
+    )
+    transform = FuelCounterfactualTransform.from_metadata(
+        metadata=metadata,
+        fuel_channel=0,
+        scenario=scenario,
+        raw_data_dir=tmp_path,
+    )
+
+    patch = np.zeros((4, 4, 1), dtype=np.float32)
+    patch[0, :, 0] = np.nan
+    patch[:, 0, 0] = np.nan
+    edited = transform(patch, metadata.iloc[0].to_dict())
+
+    np.testing.assert_array_equal(edited[1:3, 1:3, 0], global_fuel[:2, :2])
