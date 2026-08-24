@@ -13,7 +13,8 @@ model:
   output_head: "bp_behavior"
   input_branches: ["spatial"]
   use_coordconv: false
-
+  bp_head_depth: 0
+  bp_split_decoder: true
 optimizer:
   name: "AdamW"
   lr: 7.0e-4
@@ -50,13 +51,13 @@ training:
 evaluation:
   best_ckpt_metrics: ["bp/ccc", "fi/ccc", "ros/ccc"]
   best_ckpt_metrics_mode: ["max", "max", "max"]
-  checkpoint_filename: "best.pth"
+  checkpoint_filename: "last_finetuned_v1.pth"
   bp_nodata_as_zero: true
   prediction_support_policy: "input"
   hazard_fi_cap: 10000.0
 
 data:
-  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_baseline_FireSpotting"
+  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_baseline_FireSpotting_v2"
   raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data"
 
   train_split: ""
@@ -117,7 +118,7 @@ logger:
   enabled: true
   project_name: "nrcan-05-wildfires-nwt-data"
   workspace: "mila-amlrt"
-  experiment_name: "multi_task_NWT_data_scenario_baseline_FireSpotting"
+  experiment_name: "multi_task_NWT_data_scenario_baseline_FireSpotting_v2_data_split_decoders_after_finetuning_v1_best"
   tags:
     - "full_data"
     - "modelling_approach=1"

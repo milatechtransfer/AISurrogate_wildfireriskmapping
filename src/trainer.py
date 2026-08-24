@@ -88,7 +88,7 @@ class Trainer:
         except Exception as exc:  # noqa: BLE001 - best-effort lookup, never block startup
             print(f"[Comet] Could not read previous checkpoint at {last_path} to resume experiment: {exc}")
             return None
-        return checkpoint.get("comet_experiment_key")
+        return None
 
     def setup(self):
         """

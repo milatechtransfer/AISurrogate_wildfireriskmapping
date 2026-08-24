@@ -6,7 +6,7 @@
 #SBATCH --error=logs/job_%x_%j.err
 #SBATCH --partition=long
 #SBATCH --ntasks=1
-#SBATCH --time=12:59:00
+#SBATCH --time=01:59:00
 #SBATCH --mem=64Gb
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
