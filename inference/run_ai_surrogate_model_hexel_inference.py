@@ -361,7 +361,10 @@ def run_single_hexel_pipeline(
         )
     else:
         suffix = "" if data_scope == "actual" else f"_{data_scope}"
-        processed_data_dir = data_dir / f"data_samples_approach_{data_prep_config['modelling_approach']}{suffix}"
+        local_data_dir = data_dir / f"data_samples_approach_{data_prep_config['modelling_approach']}{suffix}"
+        configured_data_dir = Path(data_config["root_dir"])
+        metadata_name = f"meta_hex_{hex_id}.csv"
+        processed_data_dir = local_data_dir if (local_data_dir / metadata_name).is_file() else configured_data_dir
         logger.info(f"Step 2: Using existing data at {processed_data_dir}")
 
     # Step 3: Build Dataset

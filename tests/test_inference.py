@@ -9,6 +9,7 @@ from inference.run_ai_surrogate_model_hexel_inference import (
     get_target_spec_from_data_config,
     get_target_specs_from_data_config,
     resolve_target_normalization,
+    run_single_hexel_pipeline,
 )
 from src.datasets.targets import get_target_spec
 
@@ -140,6 +141,45 @@ def test_inference_dataset_uses_training_resources_for_grid_only(tmp_path, monke
         },
     )
     assert created_roots["spatialized_weather"] == (str(processed_dir), {})
+
+
+@pytest.mark.parametrize("local_exists", [False, True])
+def test_inference_resolves_existing_prepared_data(tmp_path, monkeypatch, local_exists):
+    raw_data_dir = tmp_path / "raw"
+    local_data_dir = raw_data_dir / "data_samples_approach_1"
+    configured_root = tmp_path / "training_data"
+    configured_root.mkdir()
+    (configured_root / "meta_hex_01.csv").touch()
+    if local_exists:
+        local_data_dir.mkdir(parents=True)
+        (local_data_dir / "meta_hex_01.csv").touch()
+    captured = {}
+
+    monkeypatch.setattr(
+        "inference.run_ai_surrogate_model_hexel_inference.torch.load",
+        lambda *_args, **_kwargs: {
+            "config": {
+                "data": {"root_dir": str(configured_root)},
+                "data_prep": {"modelling_approach": 1},
+            }
+        },
+    )
+
+    def capture_data_dir(processed_data_dir, *_args, **_kwargs):
+        captured["processed_data_dir"] = processed_data_dir
+        raise RuntimeError("stop after resolving prepared data")
+
+    monkeypatch.setattr("inference.run_ai_surrogate_model_hexel_inference.create_dataset", capture_data_dir)
+
+    with pytest.raises(RuntimeError, match="stop after resolving"):
+        run_single_hexel_pipeline(
+            checkpoint_path=tmp_path / "best.pth",
+            data_dir=raw_data_dir,
+            hex_id="01",
+            prepare_data=False,
+        )
+
+    assert captured["processed_data_dir"] == (local_data_dir if local_exists else configured_root)
 
 
 class ConstantModel(torch.nn.Module):
