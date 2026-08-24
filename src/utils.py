@@ -9,6 +9,7 @@ import torch
 from matplotlib import pyplot as plt
 from torch.utils.data import DataLoader
 
+from src.datasets.context_crop import centered_crop_slices
 from src.losses import (
     BCELoss,
     BernoulliKLLoss,
@@ -100,6 +101,21 @@ def build_single_loss(name: str, huber_beta: float = 1.0) -> torch.nn.Module:
     raise ValueError(f"Unknown loss type: {name}")
 
 
+def _crop_visualization_array_to_prediction(
+    array: np.ndarray,
+    prediction_shape: tuple[int, int],
+) -> np.ndarray:
+    source_height, source_width = array.shape[-2:]
+    prediction_height, prediction_width = prediction_shape
+    row_slice, col_slice = centered_crop_slices(
+        source_height,
+        source_width,
+        prediction_height,
+        prediction_width,
+    )
+    return array[..., row_slice, col_slice]
+
+
 def visualize_model_predictions(
     test_loader: DataLoader,
     test_predictions: np.ndarray,
@@ -135,7 +151,7 @@ def visualize_model_predictions(
     None
         This function creates matplotlib figures and displays/saves them.
     """
-    all_inputs, all_targets, all_masks = [], [], []
+    input_batches, target_batches, mask_batches = [], [], []
 
     # If more than one data source, we only need the grid for the viz.
     for batch in test_loader:
@@ -144,13 +160,17 @@ def visualize_model_predictions(
         else:
             inputs, targets, masks = batch
 
-        all_inputs.append(inputs.detach().cpu().numpy())
-        all_targets.append(targets.detach().cpu().numpy())
-        all_masks.append(masks.detach().cpu().numpy())
+        input_batches.append(inputs.detach().cpu().numpy())
+        target_batches.append(targets.detach().cpu().numpy())
+        mask_batches.append(masks.detach().cpu().numpy())
 
-    all_inputs = np.concatenate(all_inputs, axis=0)
-    all_targets = np.concatenate(all_targets, axis=0)
-    all_masks = np.concatenate(all_masks, axis=0)
+    all_inputs = np.concatenate(input_batches, axis=0)
+    all_targets = np.concatenate(target_batches, axis=0)
+    all_masks = np.concatenate(mask_batches, axis=0)
+    prediction_shape = test_predictions.shape[-2:]
+    all_inputs = _crop_visualization_array_to_prediction(all_inputs, prediction_shape)
+    all_targets = _crop_visualization_array_to_prediction(all_targets, prediction_shape)
+    all_masks = _crop_visualization_array_to_prediction(all_masks, prediction_shape)
 
     preds = test_predictions.squeeze(1) if test_predictions.ndim == 4 else test_predictions
     targets = all_targets.squeeze(1) if all_targets.ndim == 4 else all_targets

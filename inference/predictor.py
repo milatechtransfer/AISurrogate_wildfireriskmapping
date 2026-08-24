@@ -10,6 +10,7 @@ from typing import Any
 import torch
 
 from src.config import ModelConfig
+from src.datasets.context_crop import centered_crop_slices, configured_target_crop
 from src.datasets.targets import (
     TargetName,
     TargetSpec,
@@ -157,6 +158,14 @@ class BurnRiskPredictor:
             auxiliary_inputs = {k: v.to(self.device) for k, v in auxiliary_inputs.items() if k != "grid"}
 
         predictions = self.model(spatial_inputs, auxiliary_inputs if auxiliary_inputs else None)
+        target_crop = configured_target_crop(self.config)
+        if target_crop is not None:
+            row_slice, col_slice = centered_crop_slices(
+                predictions.shape[-2],
+                predictions.shape[-1],
+                *target_crop,
+            )
+            predictions = predictions[..., row_slice, col_slice]
 
         predictions = activate_target_predictions(predictions, self.target_specs)
 

@@ -23,6 +23,7 @@ from data_preparation.process_tabular_data import build_weather_table, process_f
 from data_preparation.spatial.utils import NORM_STATS_JSON, get_output_log_stats_cached, get_range_output_cached, read_split_hex_ids
 from data_preparation.utils import find_hex_ids
 from inference.predictor import BurnRiskPredictor
+from src.datasets.context_crop import configured_target_crop, validate_context_crop_metadata
 from src.datasets.dataset import MultiSourceDataset
 from src.datasets.postprocessing.hazard import compute_raw_hazard
 from src.datasets.postprocessing.utils import (
@@ -64,6 +65,8 @@ def prepare_hexel_data(
     hex_id: str,
     win_h: int = 128,
     win_w: int = 128,
+    target_crop_h: int | None = None,
+    target_crop_w: int | None = None,
     overlap_ratio: float = 0.2,
     modelling_approach: int = 1,
     output_type: str = "prob",
@@ -82,6 +85,8 @@ def prepare_hexel_data(
         hex_id: Hexel ID to process (e.g., "02").
         win_h: Patch height in pixels.
         win_w: Patch width in pixels.
+        target_crop_h: Height of the centered prediction crop.
+        target_crop_w: Width of the centered prediction crop.
         overlap_ratio: Overlap between patches (0.0 to 1.0).
         modelling_approach: 1 for joint season-cause, 2 for separate.
         output_type: "count" or "prob" for fire output type.
@@ -112,7 +117,7 @@ def prepare_hexel_data(
     logger.info("Building weather table...")
     build_weather_table(root_dir=data_dir, save_path=weather_table_path, norm_params_path=weather_norm_params_path)
 
-    fire_size_input = data_dir / "df_fire_fru.csv"
+    fire_size_input = data_dir / "df_fire_fru_25ha_1970_2023.csv"
     fire_size_output = processed_data_dir / "df_fire_fru_processed.csv"
     if fire_size_input.exists():
         logger.info("Processing fire size distribution table...")
@@ -151,6 +156,8 @@ def prepare_hexel_data(
         hex_id=hex_id,
         win_h=win_h,
         win_w=win_w,
+        target_crop_h=target_crop_h,
+        target_crop_w=target_crop_w,
         overlap_ratio=overlap_ratio,
         mask_scope=scope,
     )
@@ -347,6 +354,8 @@ def run_single_hexel_pipeline(
             hex_id=hex_id,
             win_h=data_prep_config["win_h"],
             win_w=data_prep_config["win_w"],
+            target_crop_h=data_prep_config.get("target_crop_h"),
+            target_crop_w=data_prep_config.get("target_crop_w"),
             overlap_ratio=data_prep_config["overlap_ratio"],
             modelling_approach=data_prep_config["modelling_approach"],
             mask_scope=data_scope,
@@ -355,13 +364,21 @@ def run_single_hexel_pipeline(
         )
     else:
         suffix = "" if data_scope == "actual" else f"_{data_scope}"
-        processed_data_dir = data_dir / f"data_samples_approach_{data_prep_config['modelling_approach']}{suffix}"
+        local_data_dir = data_dir / f"data_samples_approach_{data_prep_config['modelling_approach']}{suffix}"
+        configured_data_dir = Path(data_config["root_dir"])
+        metadata_name = f"meta_hex_{hex_id}.csv"
+        processed_data_dir = local_data_dir if (local_data_dir / metadata_name).is_file() else configured_data_dir
         logger.info(f"Step 2: Using existing data at {processed_data_dir}")
 
     # Step 3: Build Dataset
     logger.info("Step 3: Building Dataset...")
     dataset = create_dataset(processed_data_dir, hex_id, data_config)
     validate_patch_metadata_mask_scope(dataset.metadata, scope)
+    validate_context_crop_metadata(
+        dataset.metadata,
+        configured_target_crop(checkpoint["config"]),
+        (int(data_prep_config["win_h"]), int(data_prep_config["win_w"])),
+    )
     spatial_channels, auxiliary_input_dims = get_dataset_dimensions(dataset)
     if spatial_channels is None:
         raise ValueError("Could not determine spatial channels from dataset")

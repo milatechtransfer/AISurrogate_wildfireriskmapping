@@ -9,6 +9,7 @@ from inference.run_ai_surrogate_model_hexel_inference import (
     get_target_spec_from_data_config,
     get_target_specs_from_data_config,
     resolve_target_normalization,
+    run_single_hexel_pipeline,
 )
 from src.datasets.targets import get_target_spec
 
@@ -142,6 +143,45 @@ def test_inference_dataset_uses_training_resources_for_grid_only(tmp_path, monke
     assert created_roots["spatialized_weather"] == (str(processed_dir), {})
 
 
+@pytest.mark.parametrize("local_exists", [False, True])
+def test_inference_resolves_existing_prepared_data(tmp_path, monkeypatch, local_exists):
+    raw_data_dir = tmp_path / "raw"
+    local_data_dir = raw_data_dir / "data_samples_approach_1"
+    configured_root = tmp_path / "training_data"
+    configured_root.mkdir()
+    (configured_root / "meta_hex_01.csv").touch()
+    if local_exists:
+        local_data_dir.mkdir(parents=True)
+        (local_data_dir / "meta_hex_01.csv").touch()
+    captured = {}
+
+    monkeypatch.setattr(
+        "inference.run_ai_surrogate_model_hexel_inference.torch.load",
+        lambda *_args, **_kwargs: {
+            "config": {
+                "data": {"root_dir": str(configured_root)},
+                "data_prep": {"modelling_approach": 1},
+            }
+        },
+    )
+
+    def capture_data_dir(processed_data_dir, *_args, **_kwargs):
+        captured["processed_data_dir"] = processed_data_dir
+        raise RuntimeError("stop after resolving prepared data")
+
+    monkeypatch.setattr("inference.run_ai_surrogate_model_hexel_inference.create_dataset", capture_data_dir)
+
+    with pytest.raises(RuntimeError, match="stop after resolving"):
+        run_single_hexel_pipeline(
+            checkpoint_path=tmp_path / "best.pth",
+            data_dir=raw_data_dir,
+            hex_id="01",
+            prepare_data=False,
+        )
+
+    assert captured["processed_data_dir"] == (local_data_dir if local_exists else configured_root)
+
+
 class ConstantModel(torch.nn.Module):
     def __init__(self, value: float):
         super().__init__()
@@ -172,6 +212,19 @@ def test_predictor_sigmoids_bp_outputs():
 
     predictions = predictor(torch.zeros(1, 1, 2, 2))
 
+    assert torch.allclose(predictions, torch.full((1, 1, 2, 2), 0.5))
+
+
+def test_predictor_returns_configured_center_crop():
+    config = {
+        "data": {"input_sources": [{"name": "grid", "params": {"target_name": "bp"}}]},
+        "data_prep": {"win_h": 4, "win_w": 4, "target_crop_h": 2, "target_crop_w": 2},
+    }
+    predictor = BurnRiskPredictor(model=ConstantModel(0.0), device="cpu", config=config)
+
+    predictions = predictor(torch.zeros(1, 1, 4, 4))
+
+    assert predictions.shape == (1, 1, 2, 2)
     assert torch.allclose(predictions, torch.full((1, 1, 2, 2), 0.5))
 
 

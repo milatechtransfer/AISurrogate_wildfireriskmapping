@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from src.config import (
     Config,
     DataConfig,
+    DataPrepConfig,
     DataSourceConfig,
     EvaluationConfig,
     GridParams,
@@ -315,6 +316,17 @@ def test_trainer_step(dummy_config, dummy_data):
     assert isinstance(loss, torch.Tensor)
 
 
+def test_trainer_step_crops_supervision_to_center(tmp_path):
+    config = _make_config(tmp_path)
+    config.data_prep = DataPrepConfig(win_h=32, win_w=32, target_crop_h=16, target_crop_w=16)
+    trainer = Trainer(config, spatial_input_channels=1)
+    patch_trainer(trainer)
+
+    predictions, _, _, targets, masks = trainer._step(next(iter(DataLoader(GridDataset(size=2), batch_size=2))))
+
+    assert predictions.shape == targets.shape == masks.shape == (2, 1, 16, 16)
+
+
 def test_trainer_step_routes_multi_target_losses(tmp_path):
     config = _make_config(
         tmp_path,
@@ -502,6 +514,38 @@ def test_train_epoch_runs(dummy_config, dummy_data):
     results = trainer.train_epoch(dummy_data)
     assert "loss" in results
     assert "dummy" in results
+
+
+def test_train_epoch_steps_optimizer_after_accumulation(tmp_path, monkeypatch):
+    config = _make_config(tmp_path)
+    config.training.gradient_accumulation_steps = 2
+    trainer = Trainer(config, spatial_input_channels=SPATIAL_CHANNELS)
+    patch_trainer(trainer)
+    optimizer_step = MagicMock(wraps=trainer.optimizer.step)
+    monkeypatch.setattr(trainer.optimizer, "step", optimizer_step)
+
+    trainer.train_epoch(DataLoader(GridDataset(size=5), batch_size=1))
+
+    assert optimizer_step.call_count == 3
+
+
+def test_batch_scheduler_horizon_uses_accumulated_optimizer_steps(tmp_path):
+    from src.schedulers import build_lr_scheduler
+
+    config = _make_config(tmp_path)
+    config.training.max_epochs = 4
+    config.training.gradient_accumulation_steps = 2
+    config.lr_scheduler.name = "cosine_warmup"
+    config.lr_scheduler.warmup_epochs = 1
+    trainer = Trainer(config, spatial_input_channels=SPATIAL_CHANNELS)
+    loader = DataLoader(GridDataset(size=5), batch_size=1)
+
+    lr_scheduler, lr_scheduler_type = build_lr_scheduler(config, trainer.optimizer, loader)
+
+    assert lr_scheduler_type == "batch"
+    assert lr_scheduler._milestones == [3]
+    assert lr_scheduler._schedulers[0].total_iters == 3
+    assert lr_scheduler._schedulers[1].T_max == 9
 
 
 def test_train_epoch_runs_with_hex_summary_loss(tmp_path):

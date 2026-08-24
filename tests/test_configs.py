@@ -23,6 +23,8 @@ BP_CONFIG = Path("configs/bp_spatial_weather.yaml")
 FI_CONFIG = Path("configs/fi_spatial_weather.yaml")
 ROS_CONFIG = Path("configs/ros_spatial_weather.yaml")
 MULTI_OUTPUT_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
+Q3_CONTEXT_CONFIG = Path("configs/context_models/unet_512_crop_256_firesize_q3.yaml")
+Q3_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3.yaml")
 HAZARD_EVAL_CONFIG = Path("configs/hazard_eval_spatial_weather.yaml")
 HAZARD_MODEL_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
 COMMON_INPUT_PIPELINE_CONFIGS = [BP_CONFIG, FI_CONFIG, ROS_CONFIG]
@@ -197,6 +199,31 @@ def test_multi_output_common_input_pipeline_config():
     assert set(config.optimizer.target_losses) == {"bp", "fi", "ros"}
     assert sum(target.task_weight for target in config.optimizer.target_losses.values()) == pytest.approx(1.0)
     assert config.data.include_patch_metadata is True
+
+
+def test_q3_context_config_preserves_successful_training_recipe():
+    config = _load_config(Q3_CONTEXT_CONFIG)
+    fire_size = next(source.params for source in config.data.input_sources if source.name == "spatialized_fire_size")
+
+    assert isinstance(fire_size, SpatializedTabularParams)
+    assert fire_size.quantiles == [0.1, 0.5, 0.9]
+    assert config.data.batch_size == 8
+    assert config.training.gradient_accumulation_steps == 8
+    assert config.data_prep.resolved_target_crop() == (256, 256)
+    assert (config.data_prep.win_h, config.data_prep.win_w) == (512, 512)
+
+
+def test_q3_256_config_matches_shared_checkpoint_recipe():
+    config = _load_config(Q3_256_CONFIG)
+    fire_size = next(source.params for source in config.data.input_sources if source.name == "spatialized_fire_size")
+
+    assert isinstance(fire_size, SpatializedTabularParams)
+    assert fire_size.quantiles == [0.1, 0.5, 0.9]
+    assert config.data.batch_size == 64
+    assert config.training.gradient_accumulation_steps == 1
+    assert config.evaluation.best_ckpt_metrics == ["bp/ccc", "fi/ccc", "ros/ccc"]
+    assert config.data_prep.resolved_target_crop() == (256, 256)
+    assert config.data_prep.context_crop_enabled is False
 
 
 def test_multi_output_config_round_trips_through_checkpoint_dump():

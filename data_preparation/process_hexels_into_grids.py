@@ -9,6 +9,7 @@ from data_preparation.hexel_loader import FUEL_GRID_CHOICES, IGNITION_WEIGHTING_
 from data_preparation.paths import MASK_SCOPE_CHOICES, prepared_mask_scope
 from data_preparation.spatial import NODATA
 from data_preparation.utils import find_hex_ids, get_processed_hex_ids
+from src.datasets.context_crop import centered_crop_slices
 
 
 def save_split_hexel_windows(
@@ -31,6 +32,8 @@ def get_split_hexel_window(
     hex_id: str,
     win_h: int = 128,
     win_w: int = 128,
+    target_crop_h: int | None = None,
+    target_crop_w: int | None = None,
     overlap_ratio: float = 0.2,
     mask_scope: str | None = None,
 ):
@@ -43,22 +46,37 @@ def get_split_hexel_window(
     scope = prepared_mask_scope(mask_scope) if mask_scope is not None else None
     print("============Splitting the hexel==================")
     num_season_cause, H, W, _ = season_cause_stacked_feats.shape
-    stride_h = max(1, int(win_h * (1 - overlap_ratio)))  # n_rows = (H-win_h)//stride_h + 1
-    stride_w = max(1, int(win_w * (1 - overlap_ratio)))
+    if (target_crop_h is None) != (target_crop_w is None):
+        raise ValueError("target_crop_h and target_crop_w must either both be set or both be omitted.")
+    crop_h = win_h if target_crop_h is None else target_crop_h
+    crop_w = win_w if target_crop_w is None else target_crop_w
+    crop_rows, crop_cols = centered_crop_slices(win_h, win_w, crop_h, crop_w)
+    context_h = crop_rows.start or 0
+    context_w = crop_cols.start or 0
+    stride_h = max(1, int(crop_h * (1 - overlap_ratio)))
+    stride_w = max(1, int(crop_w * (1 - overlap_ratio)))
 
-    # Adding padding for the edges
-    pad_h = stride_h - (H - win_h) % stride_h if (H - win_h) % stride_h != 0 else 0
-    pad_w = stride_w - (W - win_w) % stride_w if (W - win_w) % stride_w != 0 else 0
+    def trailing_padding(length: int, crop_size: int, stride: int) -> int:
+        if length <= crop_size:
+            return crop_size - length
+        return (stride - (length - crop_size) % stride) % stride
+
+    target_pad_h = trailing_padding(H, crop_h, stride_h)
+    target_pad_w = trailing_padding(W, crop_w, stride_w)
     season_cause_stacked_feats_padded = np.pad(
-        season_cause_stacked_feats, ((0, 0), (0, pad_h), (0, pad_w), (0, 0)), mode="constant", constant_values=NODATA
+        season_cause_stacked_feats,
+        ((0, 0), (context_h, context_h + target_pad_h), (context_w, context_w + target_pad_w), (0, 0)),
+        mode="constant",
+        constant_values=NODATA,
     )
     season_cause_mask_padded = np.pad(
-        season_cause_mask, ((0, 0), (0, pad_h), (0, pad_w)), mode="constant", constant_values=1.0
-    )  # Mask should be 1 where nan
-    # season_cause_stacked_feats_padded[:,:,:,-1][season_cause_mask_padded] = 0.0 #For outputs, mask means 0 probability
-    _, H_pad, W_pad, _ = season_cause_stacked_feats_padded.shape
+        season_cause_mask,
+        ((0, 0), (context_h, context_h + target_pad_h), (context_w, context_w + target_pad_w)),
+        mode="constant",
+        constant_values=1.0,
+    )
 
-    window_area = win_h * win_w
+    window_area = crop_h * crop_w
     num_total_windows, num_valid_windows = 0.0, 0.0
     valid_coords = []
     for i in range(num_season_cause):
@@ -68,12 +86,13 @@ def get_split_hexel_window(
             season, cause = "all", "all"
         else:
             season, cause = season_cause_mapping[i]
-        for row in range(0, H_pad - win_h + 1, stride_h):
-            for col in range(0, W_pad - win_w + 1, stride_w):
+        for row in range(0, H + target_pad_h - crop_h + 1, stride_h):
+            for col in range(0, W + target_pad_w - crop_w + 1, stride_w):
                 num_total_windows += 1
-                # Extract the mask patch
-                mask_window = mask[row : row + win_h, col : col + win_w]
-                # Count True values in the mask
+                mask_window = mask[
+                    row + context_h : row + context_h + crop_h,
+                    col + context_w : col + context_w + crop_w,
+                ]
                 true_count = np.count_nonzero(~mask_window)
                 valid_ratio = true_count / window_area
 
@@ -91,6 +110,10 @@ def get_split_hexel_window(
                         col,
                         valid_ratio,
                         scope,
+                        win_h,
+                        win_w,
+                        crop_h,
+                        crop_w,
                     ]
                 )
     df_coords = pd.DataFrame(valid_coords)
@@ -104,6 +127,10 @@ def get_split_hexel_window(
         "col",
         "valid_ratio",
         "mask_scope",
+        "input_win_h",
+        "input_win_w",
+        "target_crop_h",
+        "target_crop_w",
     ]
     df_coords.to_csv(os.path.join(out_dir, f"meta_hex_{hex_id}.csv"), index=False)
     print(f"=====Hexel data Saved at {out_dir} ========")
@@ -115,6 +142,8 @@ def generate_data_samples(
     save_dir: str | None,
     win_h: int = 128,
     win_w: int = 128,
+    target_crop_h: int | None = None,
+    target_crop_w: int | None = None,
     overlap_ratio: float = 0.2,
     is_array_job: bool = False,
     task_id: int = 0,
@@ -177,6 +206,8 @@ def generate_data_samples(
             hex_id=hex_id,
             win_h=win_h,
             win_w=win_w,
+            target_crop_h=target_crop_h,
+            target_crop_w=target_crop_w,
             overlap_ratio=overlap_ratio,
             mask_scope=scope,
         )
@@ -191,6 +222,8 @@ def main():
     parser.add_argument("--modelling_approach", type=int, help="Either 1 or 2", default=2)
     parser.add_argument("--win_h", type=int, help="Height of the window", default=128)
     parser.add_argument("--win_w", type=int, help="Height of the window", default=128)
+    parser.add_argument("--target_crop_h", type=int, default=None, help="Height of the centered prediction crop.")
+    parser.add_argument("--target_crop_w", type=int, default=None, help="Width of the centered prediction crop.")
     parser.add_argument("--overlap_ratio", type=float, help="Overlap ratio between windows", default=0.2)
     parser.add_argument("--is_array_job", action="store_true", help="Boolean to indicate if using SLURM job array")
     parser.add_argument("--task_id", type=int, default=0, help="SLURM array ID")
@@ -228,6 +261,8 @@ def main():
         modelling_approach=args.modelling_approach,
         win_h=args.win_h,
         win_w=args.win_w,
+        target_crop_h=args.target_crop_h,
+        target_crop_w=args.target_crop_w,
         overlap_ratio=args.overlap_ratio,
         is_array_job=args.is_array_job,
         task_id=args.task_id,
