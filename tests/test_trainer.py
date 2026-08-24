@@ -529,6 +529,25 @@ def test_train_epoch_steps_optimizer_after_accumulation(tmp_path, monkeypatch):
     assert optimizer_step.call_count == 3
 
 
+def test_batch_scheduler_horizon_uses_accumulated_optimizer_steps(tmp_path):
+    from src.schedulers import build_lr_scheduler
+
+    config = _make_config(tmp_path)
+    config.training.max_epochs = 4
+    config.training.gradient_accumulation_steps = 2
+    config.lr_scheduler.name = "cosine_warmup"
+    config.lr_scheduler.warmup_epochs = 1
+    trainer = Trainer(config, spatial_input_channels=SPATIAL_CHANNELS)
+    loader = DataLoader(GridDataset(size=5), batch_size=1)
+
+    lr_scheduler, lr_scheduler_type = build_lr_scheduler(config, trainer.optimizer, loader)
+
+    assert lr_scheduler_type == "batch"
+    assert lr_scheduler._milestones == [3]
+    assert lr_scheduler._schedulers[0].total_iters == 3
+    assert lr_scheduler._schedulers[1].T_max == 9
+
+
 def test_train_epoch_runs_with_hex_summary_loss(tmp_path):
     config = _make_config(
         tmp_path,

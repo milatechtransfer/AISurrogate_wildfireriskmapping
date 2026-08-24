@@ -1,3 +1,4 @@
+import math
 from typing import Any
 
 import torch.optim as optim
@@ -24,7 +25,7 @@ def build_lr_scheduler(config: Config, optimizer: optim.Optimizer, train_loader:
 
     name = config.lr_scheduler.name.lower()
     epochs = config.training.max_epochs
-    steps_per_epoch = len(train_loader)
+    steps_per_epoch = math.ceil(len(train_loader) / config.training.gradient_accumulation_steps)
     total_steps = epochs * steps_per_epoch
 
     # onecycle
