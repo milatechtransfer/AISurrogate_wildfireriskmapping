@@ -117,7 +117,7 @@ def prepare_hexel_data(
     logger.info("Building weather table...")
     build_weather_table(root_dir=data_dir, save_path=weather_table_path, norm_params_path=weather_norm_params_path)
 
-    fire_size_input = data_dir / "df_fire_fru.csv"
+    fire_size_input = data_dir / "df_fire_fru_25ha_1970_2023.csv"
     fire_size_output = processed_data_dir / "df_fire_fru_processed.csv"
     if fire_size_input.exists():
         logger.info("Processing fire size distribution table...")
