@@ -39,7 +39,7 @@ python -m data_preparation.process_hexels_into_grids \
 
 The overlap and metadata coordinates apply to the `256x256` prediction tiles; each saved patch includes 128 context pixels per side. Match this geometry in `data_prep`. The provided q3 config uses `batch_size: 8` with `gradient_accumulation_steps: 8` to preserve the original effective batch size of 64.
 
-For this q3 context dataset, use `data_samples_v4_context_512_crop_256` instead of `data_samples_v4` as the Step 2 `--data_dir` and Step 3 `--save_dir` below.
+For this q3 context dataset only, replace `data_samples_v4` with `data_samples_v4_context_512_crop_256` in the Step 2–5 paths below. The original 256x256 workflow continues to use `data_samples_v4`.
 
 Omitting `target_crop_h` and `target_crop_w` preserves the original full-window behavior.
 
