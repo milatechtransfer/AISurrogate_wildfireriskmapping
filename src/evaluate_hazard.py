@@ -85,7 +85,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         choices=["actual", "buffer", "buffer_only"],
         default=None,
-        help="Override hazard_config.mask_scope for this run.",
+        help="Override mask scope for this run. Defaults to each model's config.data_prep.mask_scope (no masking if unset).",
     )
     parser.add_argument(
         "--save_dir",

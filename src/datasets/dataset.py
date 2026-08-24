@@ -164,6 +164,7 @@ def build_dataset(
         if source_conf.name == "grid":
             source_kwargs["raw_data_dir"] = config.raw_data_dir
             source_kwargs["train_split_csv_name"] = config.train_split
+            source_kwargs["norm_stats_filename"] = config.norm_stats_filename
         sources[source_conf.name] = source_class(**source_kwargs)
 
     dataset = MultiSourceDataset(

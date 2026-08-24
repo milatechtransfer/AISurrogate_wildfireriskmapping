@@ -141,6 +141,7 @@ def get_target_transform_params(config: Config, target_name: str):
                 output_type=target_spec.output_type,
                 allowed_hex_ids=train_hex_ids,
                 raw_data_dir=config.data.raw_data_dir,
+                norm_stats_filename=config.data.norm_stats_filename,
             )
         if target_log_mean is None or target_log_std is None:
             raise ValueError(f"target_log_mean/std unavailable for target={target_name!r} with out_norm='log_standard'.")
@@ -408,9 +409,7 @@ def evaluate_region_level(
         fuel_curve = batch.get("fuel_curve")
         patch_metadata = batch.get("patch_metadata")
         if patch_metadata is None or "row" not in patch_metadata or "col" not in patch_metadata:
-            raise ValueError(
-                "Batch is missing patch_metadata['row']/['col']; requires the " "dataset.py patch_metadata extension (see PR)."
-            )
+            raise ValueError("Batch is missing patch_metadata['row']/['col']; requires the dataset.py patch_metadata extension (see PR).")
         hex_ids = patch_metadata["hex_id"].numpy()
         rows = patch_metadata["row"].numpy()
         cols = patch_metadata["col"].numpy()

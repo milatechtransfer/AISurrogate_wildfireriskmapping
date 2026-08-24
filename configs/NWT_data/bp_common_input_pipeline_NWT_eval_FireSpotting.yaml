@@ -10,7 +10,7 @@
 # Unlike the previous BP best model (non-spatialized tabular fed through an auxiliary MLP
 # branch), BP now consumes the spatialized tabular channels on the spatial branch, matching
 # FI/ROS. Spatialized input is heavier, so batch_size is 32 (was 64 for the auxiliary variant).
-save_dir: "experiments/bp_spatial_weather_firesize"
+save_dir: "experiments/bp_NWT_data_scenario_baseline_FireSpotting"
 
 modelling_approach: "1"
 
@@ -48,11 +48,11 @@ evaluation:
   prediction_support_policy: "input"
 
 data:
-  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4"
-  raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_baseline_FireSpotting"
+  raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data"
 
-  train_split: "train_indices.csv"
-  val_split: "val_indices.csv"
+  train_split: ""
+  val_split: ""
   test_split: "test_indices.csv"
 
   batch_size: 64
@@ -90,23 +90,8 @@ data:
           - "wind_y"
         fire_weather_zone_id_col: "WeatherZone"
         fire_weather_zone_selection_approach: "mode"
+        aggregation: "mean"
         hex_id_col: "hex_id"
-        aggregation: "mean"
-        zone_channel_key: "firezones_grid"
-        missing_value_strategy: "global_mean"
-        include_missing_firezone_mask: false
-        shuffle_lut: false
-        shuffle_seed: 42
-        transforms_list: []
-        augmentation_prob: 0.0
-
-    - name: "spatialized_fire_size"
-      params:
-        csv_name: "df_fire_fru_processed.csv"
-        feature_names_list: ["NORM_LOG_SIZE_HA"]
-        fire_weather_zone_id_col: "GRIDCODE"
-        fire_weather_zone_selection_approach: "mode"
-        aggregation: "mean"
         zone_channel_key: "firezones_grid"
         missing_value_strategy: "global_mean"
         include_missing_firezone_mask: false
@@ -117,15 +102,16 @@ data:
 
 logger:
   enabled: true
-  project_name: "nrcan05-wildfireriskmapping"
+  project_name: "nrcan-05-wildfires-nwt-data"
   workspace: "mila-amlrt"
-  experiment_name: "bp_spatial_weather_firesize"
+  experiment_name: "bp_NWT_data_scenario_baseline_FireSpotting"
   tags:
     - "full_data"
     - "modelling_approach=1"
     - "target=bp"
+    - "bp_NWT_data_scenario_baseline_FireSpotting"
     - "coordconv=patch_local"
-    - "data_samples_v4"
+    - "data_samples_v3"
     - "ignition=aggregated_human_lightning"
     - "raw_fuel_iROS"
     - "best_ckpt=ccc"
@@ -151,7 +137,6 @@ metrics:
   - "mae_top10"
   - "spearman"
   - "bias"
-  - "normalized_bias"
   - "ccc"
   - "kl_div"
   - "iou_top005"
@@ -169,4 +154,5 @@ data_prep:
   overlap_ratio: 0.2
   ignition_weighting: "distribution" # ("max", "distribution")
   fuel_representation: "raw" # ("raw", "group")
-  mask_scope: "actual"
+  scenario_name: "FireSpotting"
+  mask_scope: None

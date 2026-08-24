@@ -230,7 +230,12 @@ curve_colors <- c(
 
   # Non-burning classes
   "Non-fuel" = "#666666",
-  "Water" = "#005AB5"
+  "Water" = "#005AB5",
+  "M-1 25%C leafless" = "#80B1D3",
+  "M-2 5%C green" = "#8DD3C7",
+  "M-2 25%C green" = "#66C2A5",
+  "M-1/M-2 80%C leafless" = "#BC80BD",
+  "M-1/M-2 80%C green" = "#CCEBC5"
 )
 
 curve_linetypes <- c(
@@ -274,7 +279,12 @@ curve_linetypes <- c(
   "M-1/M-2 65%C green" = "dashed",
 
   "Non-fuel" = "solid",
-  "Water" = "solid"
+  "Water" = "solid",
+  "M-1 25%C leafless" = "solid",
+  "M-2 5%C green" = "dashed",
+  "M-2 25%C green" = "dashed",
+  "M-1/M-2 80%C leafless" = "solid",
+  "M-1/M-2 80%C green" = "dashed"
 )
 
 curve_sizes <- setNames(

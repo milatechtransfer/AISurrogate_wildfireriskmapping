@@ -146,7 +146,7 @@ def test_non_bp_target_nodata_is_not_zero_filled():
 
 def test_load_target_grid_bp_nodata_zero_fill_is_configurable(monkeypatch, tmp_path):
     class FakePaths:
-        def output_burn_prob(self):
+        def output_burn_prob(self, scenario_name=None):
             return tmp_path / "bp.tif"
 
         def mask_grid(self, hex_id, mask_scope):

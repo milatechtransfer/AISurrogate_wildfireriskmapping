@@ -280,7 +280,7 @@ def visualize_target_grids(
     if experiment_logger:
         experiment_logger.log_image(
             image_path=out_path,
-            name=f"predicted_hexel_{hex_id}{suffix}",
+            name=f"predicted_hexel_{hex_id}{suffix}{filename_suffix}",
         )
 
     plt.close(fig)

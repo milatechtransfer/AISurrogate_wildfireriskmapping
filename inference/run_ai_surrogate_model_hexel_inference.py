@@ -20,7 +20,7 @@ from data_preparation.hexel_loader import load_spatial_features_per_hexel
 from data_preparation.paths import MASK_SCOPE_CHOICES, Paths, normalize_mask_scope, prepared_mask_scope
 from data_preparation.process_hexels_into_grids import get_split_hexel_window
 from data_preparation.process_tabular_data import build_weather_table, process_fire_size_distribution_table
-from data_preparation.spatial.utils import get_output_log_stats_cached, get_range_output_cached, read_split_hex_ids
+from data_preparation.spatial.utils import NORM_STATS_JSON, get_output_log_stats_cached, get_range_output_cached, read_split_hex_ids
 from data_preparation.utils import find_hex_ids
 from inference.predictor import BurnRiskPredictor
 from src.datasets.dataset import MultiSourceDataset
@@ -249,6 +249,7 @@ def resolve_target_normalization(
 ) -> TargetNormalization:
     root_dir = str(data_config["root_dir"])
     raw_data_dir = str(data_config.get("raw_data_dir") or root_dir)
+    norm_stats_filename = str(data_config.get("norm_stats_filename") or NORM_STATS_JSON)
     train_hex_ids = None
     train_split = data_config.get("train_split")
     if train_split:
@@ -267,6 +268,7 @@ def resolve_target_normalization(
             output_type=target.output_type,
             allowed_hex_ids=train_hex_ids,
             raw_data_dir=raw_data_dir,
+            norm_stats_filename=norm_stats_filename,
         )
         max_value, min_value = apply_bp_nodata_zero_range(
             target_name=target.name,
@@ -280,6 +282,7 @@ def resolve_target_normalization(
             output_type=target.output_type,
             allowed_hex_ids=train_hex_ids,
             raw_data_dir=raw_data_dir,
+            norm_stats_filename=norm_stats_filename,
         )
     return TargetNormalization(
         out_norm=out_norm,
@@ -451,6 +454,7 @@ def run_single_hexel_pipeline(
             mask_scope=scope,
             hex_id=hex_id,
             bp_nodata_as_zero=bp_nodata_as_zero,
+            scenario_name=data_config.get("scenario_name"),
         )
         artifact_target_name = target.name if multi_target else None
         save_predicted_hexels(

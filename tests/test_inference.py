@@ -67,7 +67,7 @@ def test_inference_bp_normalization_uses_training_split_and_zero_minimum(tmp_pat
     (tmp_path / "train_indices.csv").write_text("hex_id\n1\n")
     captured = {}
 
-    def fake_range(root_dir, output_type, allowed_hex_ids, raw_data_dir):
+    def fake_range(root_dir, output_type, allowed_hex_ids, raw_data_dir, **_kwargs):
         captured.update(
             root_dir=root_dir,
             output_type=output_type,

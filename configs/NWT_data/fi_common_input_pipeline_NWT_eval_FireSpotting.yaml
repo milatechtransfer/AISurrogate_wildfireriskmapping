@@ -10,7 +10,7 @@
 # Unlike the previous BP best model (non-spatialized tabular fed through an auxiliary MLP
 # branch), BP now consumes the spatialized tabular channels on the spatial branch, matching
 # FI/ROS. Spatialized input is heavier, so batch_size is 32 (was 64 for the auxiliary variant).
-save_dir: "experiments/bp_spatial_weather_firesize"
+save_dir: "experiments/fi_NWT_data_scenario_baseline_FireSpotting"
 
 modelling_approach: "1"
 
@@ -25,12 +25,11 @@ model:
 optimizer:
   name: "AdamW"
   lr: 7.0e-4
-  loss: ["kl", "ccc", "hex_mean_pairwise_rank", "hex_top10_pairwise_rank"]
+  loss: ["huber", "raw_pearson"]
+  huber_beta: 1.0
   loss_weights:
-    kl: 0.45
-    ccc: 0.45
-    hex_mean_pairwise_rank: 0.05
-    hex_top10_pairwise_rank: 0.05
+    huber: 0.7
+    raw_pearson: 0.3
 
 lr_scheduler:
   name: "cosine_warmup"
@@ -44,34 +43,31 @@ evaluation:
   best_ckpt_metrics: ["ccc"]
   best_ckpt_metrics_mode: ["max"]
   checkpoint_filename: "best.pth"
-  bp_nodata_as_zero: true
-  prediction_support_policy: "input"
+  robust_plot_percentile: 99.0
 
 data:
-  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4"
-  raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_baseline_FireSpotting"
+  raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data"
 
-  train_split: "train_indices.csv"
-  val_split: "val_indices.csv"
+  train_split: ""
+  val_split: ""
   test_split: "test_indices.csv"
 
   batch_size: 64
   num_workers: 2
   valid_mask_threshold: 0.01
-  include_patch_metadata: true
 
   input_sources:
     - name: "grid"
       params:
         feature_names_list: ["ignition_grid_human", "ignition_grid_lightning", "fuel_grid", "elevation_grid"]
-        target_name: "bp"
-        out_norm: "min_max"
+        target_name: "fi"
+        out_norm: "log_standard"
         fuel_feats_encoding: "iROS"
         normalize_fuel_feats_ordinal: false # set to true if using ordinal
         transforms_list: []
         augmentation_prob: 0.0
         terrain_derivatives: ["slope", "aspect_sin", "aspect_cos"]
-        bp_nodata_as_zero: true
 
     - name: "spatialized_weather"
       params:
@@ -90,23 +86,8 @@ data:
           - "wind_y"
         fire_weather_zone_id_col: "WeatherZone"
         fire_weather_zone_selection_approach: "mode"
+        aggregation: "mean"
         hex_id_col: "hex_id"
-        aggregation: "mean"
-        zone_channel_key: "firezones_grid"
-        missing_value_strategy: "global_mean"
-        include_missing_firezone_mask: false
-        shuffle_lut: false
-        shuffle_seed: 42
-        transforms_list: []
-        augmentation_prob: 0.0
-
-    - name: "spatialized_fire_size"
-      params:
-        csv_name: "df_fire_fru_processed.csv"
-        feature_names_list: ["NORM_LOG_SIZE_HA"]
-        fire_weather_zone_id_col: "GRIDCODE"
-        fire_weather_zone_selection_approach: "mode"
-        aggregation: "mean"
         zone_channel_key: "firezones_grid"
         missing_value_strategy: "global_mean"
         include_missing_firezone_mask: false
@@ -117,15 +98,16 @@ data:
 
 logger:
   enabled: true
-  project_name: "nrcan05-wildfireriskmapping"
+  project_name: "nrcan-05-wildfires-nwt-data"
   workspace: "mila-amlrt"
-  experiment_name: "bp_spatial_weather_firesize"
+  experiment_name: "fi_NWT_data_scenario_baseline_FireSpotting"
   tags:
     - "full_data"
     - "modelling_approach=1"
     - "target=bp"
+    - "fi_NWT_data_scenario_baseline_FireSpotting"
     - "coordconv=patch_local"
-    - "data_samples_v4"
+    - "data_samples_v3"
     - "ignition=aggregated_human_lightning"
     - "raw_fuel_iROS"
     - "best_ckpt=ccc"
@@ -151,9 +133,7 @@ metrics:
   - "mae_top10"
   - "spearman"
   - "bias"
-  - "normalized_bias"
   - "ccc"
-  - "kl_div"
   - "iou_top005"
   - "iou_top01"
   - "iou_top02"
@@ -169,4 +149,5 @@ data_prep:
   overlap_ratio: 0.2
   ignition_weighting: "distribution" # ("max", "distribution")
   fuel_representation: "raw" # ("raw", "group")
-  mask_scope: "actual"
+  scenario_name: "FireSpotting"
+  mask_scope: None
