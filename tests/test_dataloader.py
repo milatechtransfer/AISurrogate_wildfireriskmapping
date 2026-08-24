@@ -592,6 +592,25 @@ def test_build_dataset_appends_spatialized_tabular_channels_to_grid(temp_data_di
     assert inputs.shape == (5, 32, 32)
 
 
+def test_spatialized_fire_size_rasterizes_empirical_quantiles(temp_data_dir):
+    tmpdir, _, _, _, _, _, fire_size_csv, _ = temp_data_dir
+    source = SpatializedTabularSource(
+        root_dir=tmpdir,
+        params=SpatializedTabularParams(
+            csv_name=fire_size_csv,
+            feature_names_list=["size"],
+            fire_weather_zone_id_col="grid_code",
+            quantiles=[0.25, 0.5, 0.75],
+        ),
+        modelling_approach="1",
+    )
+
+    sample = source.get_sample({"file_path": os.path.join(tmpdir, "sample_0.npy")})
+
+    assert source.input_dim() == 3
+    assert sample[:, 0, 0].tolist() == pytest.approx([30.0, 50.0, 75.0])
+
+
 def test_build_dataset_can_include_patch_metadata(temp_data_dir, monkeypatch):
     tmpdir, train_csv, _, _, _, _, _, _ = temp_data_dir
     monkeypatch.setattr("src.datasets.sources.grids.get_range_output_cached", lambda *_args, **_kwargs: (1.0, 0.0))

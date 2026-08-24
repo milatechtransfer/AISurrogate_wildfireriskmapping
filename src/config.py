@@ -92,6 +92,7 @@ class SchedulerConfig(BaseModel):
 class TrainingConfig(BaseModel):
     max_epochs: int = 50
     log_every_n_epoch: int = 1
+    gradient_accumulation_steps: int = Field(default=1, gt=0)
 
 
 class EvaluationConfig(BaseModel):
@@ -222,6 +223,20 @@ class SpatializedTabularParams(TabularParams):
     include_missing_firezone_mask: bool = False
     missing_value_strategy: str = "global_mean"
     global_fill_csv_name: str | None = None
+    quantiles: list[float] | None = None
+
+    @field_validator("quantiles")
+    @classmethod
+    def validate_quantiles(cls, values: list[float] | None) -> list[float] | None:
+        if values is None:
+            return None
+        if not values:
+            raise ValueError("quantiles must not be empty.")
+        if any(not 0.0 < value < 1.0 for value in values):
+            raise ValueError("quantiles must lie strictly between 0 and 1.")
+        if values != sorted(set(values)):
+            raise ValueError("quantiles must be sorted and unique.")
+        return values
 
 
 class DataSourceConfig(BaseModel):
@@ -274,9 +289,33 @@ class DataConfig(BaseModel):
 
 class DataPrepConfig(BaseModel):
     modelling_approach: int = 1
-    win_h: int = 256
-    win_w: int = 256
-    overlap_ratio: float = 0.2
+    win_h: int = Field(default=256, gt=0)
+    win_w: int = Field(default=256, gt=0)
+    target_crop_h: int | None = Field(default=None, gt=0)
+    target_crop_w: int | None = Field(default=None, gt=0)
+    overlap_ratio: float = Field(default=0.2, ge=0.0, lt=1.0)
+
+    @model_validator(mode="after")
+    def validate_target_crop(self) -> "DataPrepConfig":
+        if (self.target_crop_h is None) != (self.target_crop_w is None):
+            raise ValueError("target_crop_h and target_crop_w must either both be set or both be omitted.")
+
+        crop_h, crop_w = self.resolved_target_crop()
+        if crop_h > self.win_h or crop_w > self.win_w:
+            raise ValueError(f"Target crop {(crop_h, crop_w)} cannot exceed input window {(self.win_h, self.win_w)}.")
+        if (self.win_h - crop_h) % 2 != 0 or (self.win_w - crop_w) % 2 != 0:
+            raise ValueError("Input window and target crop differences must be even for a centered crop.")
+        return self
+
+    def resolved_target_crop(self) -> tuple[int, int]:
+        return (
+            self.win_h if self.target_crop_h is None else self.target_crop_h,
+            self.win_w if self.target_crop_w is None else self.target_crop_w,
+        )
+
+    @property
+    def context_crop_enabled(self) -> bool:
+        return self.target_crop_h is not None
 
 
 class Config(BaseModel):

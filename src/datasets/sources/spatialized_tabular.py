@@ -69,6 +69,7 @@ class SpatializedTabularSource(DataSource):
         self.shuffle_lut = params.shuffle_lut
         self.shuffle_seed = params.shuffle_seed
         self.hex_id_col = params.hex_id_col
+        self.quantiles = params.quantiles
 
         with open(os.path.join(self.root_dir, f"feature_channel_map_{self.modelling_approach}.json")) as f:
             channel_feature_map = json.load(f)
@@ -136,9 +137,6 @@ class SpatializedTabularSource(DataSource):
             "min": "min",
             "max": "max",
         }
-        if self.aggregation not in aggregations:
-            raise ValueError(f"Unsupported spatialized tabular aggregation {self.aggregation!r}. Supported values: {sorted(aggregations)}")
-
         zone_ids = self._integer_zone_ids_from_csv(df[self.zone_id_col])
         if self.hex_id_col is not None:
             hex_ids = pd.to_numeric(df[self.hex_id_col], errors="coerce").astype("Int64")
@@ -149,6 +147,23 @@ class SpatializedTabularSource(DataSource):
         else:
             hex_ids = pd.Series(_NO_HEX_ID, index=df.index, dtype="Int64")
 
+        if self.quantiles is not None:
+            lookup: dict[tuple[int, int], np.ndarray] = {}
+            grouped = df.assign(_hex_id=hex_ids, _zone_id=zone_ids).groupby(["_hex_id", "_zone_id"], dropna=True)
+            for (hex_id, zone), frame in grouped:
+                values: list[float] = []
+                for feature_name in self.feature_names_list:
+                    feature_values = frame[feature_name].dropna()
+                    if feature_values.empty:
+                        values = []
+                        break
+                    values.extend(float(feature_values.quantile(quantile)) for quantile in self.quantiles)
+                if values:
+                    lookup[(int(hex_id), int(zone))] = np.asarray(values, dtype=np.float32)
+            return lookup
+
+        if self.aggregation not in aggregations:
+            raise ValueError(f"Unsupported spatialized tabular aggregation {self.aggregation!r}. Supported values: {sorted(aggregations)}")
         grouped = df.groupby([hex_ids, zone_ids], dropna=True)[self.feature_names_list].agg(aggregations[self.aggregation])
         grouped = grouped.dropna(how="any")
         return {(int(hex_id), int(zone)): row.to_numpy(dtype=np.float32) for (hex_id, zone), row in grouped.iterrows()}
@@ -163,32 +178,37 @@ class SpatializedTabularSource(DataSource):
         """Per-feature fill vector(s) for pixels whose firezone has no row in the tabular source.
 
         Returns a ``(global_fill, fill_by_hex)`` pair. Both are all-zeros unless
-        ``missing_value_strategy == "global_mean"``, in which case they hold the mean of each feature
-        over rows. ``fill_by_hex`` is populated only when ``hex_id_col`` is configured, with the mean
-        computed separately per hex_id, so a patch's missing-zone fill is only ever derived from rows
-        belonging to its own hexel — never pooled across hexels, which would otherwise leak data
-        across train/val/test splits. ``global_fill`` (mean over all rows) is used when ``hex_id_col``
-        is not configured. Raises if any resulting mean is non-finite.
+        ``missing_value_strategy == "global_mean"``, in which case they hold each feature's mean or
+        configured quantiles. ``fill_by_hex`` is populated only when ``hex_id_col`` is configured,
+        so missing-zone fills are never pooled across train/val/test hexels. Raises if any resulting
+        mean is non-finite.
         """
         if self.missing_value_strategy != "global_mean":
-            zeros = np.zeros(len(self.feature_names_list), dtype=np.float32)
+            zeros = np.zeros(self._feature_dim(), dtype=np.float32)
             return zeros, {}
 
         fill_by_hex: dict[int, np.ndarray] = {}
         if self.hex_id_col is not None:
             hex_ids = pd.to_numeric(df[self.hex_id_col], errors="coerce").astype("Int64")
-            grouped_means = df.groupby(hex_ids)[self.feature_names_list].mean()
-            for hex_id, row in grouped_means.iterrows():
-                values = row.to_numpy(dtype=np.float32)
+            for hex_id, frame in df.groupby(hex_ids):
+                values = self._fill_values(frame)
                 if not np.isfinite(values).all():
                     raise ValueError(f"Imputation fill for {self.csv_name!r} and hex_id={hex_id} contains non-finite values.")
                 fill_by_hex[int(hex_id)] = values
-            return np.zeros(len(self.feature_names_list), dtype=np.float32), fill_by_hex
+            return np.zeros(self._feature_dim(), dtype=np.float32), fill_by_hex
 
-        values = df[self.feature_names_list].mean(axis=0).to_numpy(dtype=np.float32)
+        values = self._fill_values(df)
         if not np.isfinite(values).all():
             raise ValueError(f"Imputation fill for {self.csv_name!r} contains non-finite values.")
         return values, fill_by_hex
+
+    def _fill_values(self, df: pd.DataFrame) -> np.ndarray:
+        if self.quantiles is None:
+            return df[self.feature_names_list].mean(axis=0).to_numpy(dtype=np.float32)
+        values = [
+            float(df[feature_name].dropna().quantile(quantile)) for feature_name in self.feature_names_list for quantile in self.quantiles
+        ]
+        return np.asarray(values, dtype=np.float32)
 
     def _shuffle_lut_values(self) -> None:
         zones = sorted(self.lut)
@@ -208,10 +228,10 @@ class SpatializedTabularSource(DataSource):
             else:
                 fill_value = self.global_fill
         elif self.missing_value_strategy == "zero":
-            fill_value = np.zeros(len(self.feature_names_list), dtype=np.float32)
+            fill_value = np.zeros(self._feature_dim(), dtype=np.float32)
         else:
-            fill_value = np.full(len(self.feature_names_list), np.nan, dtype=np.float32)
-        return np.broadcast_to(fill_value, (height, width, len(self.feature_names_list))).copy()
+            fill_value = np.full(self._feature_dim(), np.nan, dtype=np.float32)
+        return np.broadcast_to(fill_value, (height, width, self._feature_dim())).copy()
 
     def _zone_ids(self, zone_grid: np.ndarray, finite_zone_mask: np.ndarray) -> np.ndarray:
         zone_int_grid = np.zeros(zone_grid.shape, dtype=np.int64)
@@ -266,4 +286,8 @@ class SpatializedTabularSource(DataSource):
         return torch.from_numpy(features.astype(np.float32)).permute(2, 0, 1)
 
     def input_dim(self):
-        return len(self.feature_names_list) + int(self.include_missing_firezone_mask)
+        return self._feature_dim() + int(self.include_missing_firezone_mask)
+
+    def _feature_dim(self) -> int:
+        feature_multiplier = len(self.quantiles) if self.quantiles is not None else 1
+        return len(self.feature_names_list) * feature_multiplier

@@ -19,6 +19,28 @@ python -m data_preparation.process_hexels_into_grids --root_dir="/network/projec
 
 `--fuel_grid_representation` controls the fuel grid representation: `raw` (default) produces raw class values, while `group` groups similar classes together using `FUEL_GROUP_MAP` and saves the grid as 0-N values.
 
+### Context crops
+
+Use a larger input window and a smaller centered target crop to add spatial context without changing the prediction-tile resolution:
+
+```bash
+python -m data_preparation.process_hexels_into_grids \
+    --root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA" \
+    --save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4_context_512_crop_256" \
+    --modelling_approach=1 \
+    --win_h=512 \
+    --win_w=512 \
+    --target_crop_h=256 \
+    --target_crop_w=256 \
+    --overlap_ratio=0.2 \
+    --ignition_weighting="distribution" \
+    --fuel_grid_representation="raw"
+```
+
+The overlap and metadata coordinates apply to the `256x256` prediction tiles; each saved patch includes 128 context pixels per side. Match this geometry in `data_prep`. The provided q3 config uses `batch_size: 8` with `gradient_accumulation_steps: 8` to preserve the original effective batch size of 64.
+
+Omitting `target_crop_h` and `target_crop_w` preserves the original full-window behavior.
+
 Step 2: Create training, validation and test splits.
 
 - Run the `get_stratified_data_split` function in `data_preparation/utils.py` to run stratified sampling over the available hex_ids. This will give a train, val, test split with 37,5,5 hexels in each respectively
@@ -34,7 +56,7 @@ Step 3: Create tabular files (weather + fire-size)
 
 To produce the sequential weather table and the fire-size distribution table used by the model. Both tables are mapped to patches via the fire weather zone ID, so your grids must include that ID.
 
-For fire size data, you should download "df_fire_fru.csv" from drive project folder / data (in case it is not already there in the root data folder on the cluster).
+For fire size data, download `df_fire_fru_25ha_1970_2023.csv` from the project data folder if it is not already in the root data directory on the cluster.
 
 To build the tabular files, run the following:
 
@@ -53,7 +75,7 @@ For national data, this saves : `weather_norm_params.json` and `fire_size_norm_p
 
 [Important] For new evaluation data (NWT data), pass `--fire_size_norm_params_file` and `--weather_norm_params_file` to read train-only normalization parameters previously computed from national study
 
-Notes: If you used modelling approach 2, set `--save_dir` to `data_samples_approach_2`. The `process_tabular_data` script will look for the fire-size file in `--root_dir` first, then in `--save_dir`; ensure `df_fire_fru.csv` is present in one of those places.
+Notes: If you used modelling approach 2, set `--save_dir` to `data_samples_approach_2`. The `process_tabular_data` script will look for the fire-size file in `--root_dir` first, then in `--save_dir`; ensure `df_fire_fru_25ha_1970_2023.csv` is present in one of those places.
 
 Step 4 (necessary if fuel_grid_representation is '`raw`): Generate iROS values from the FBP package
 

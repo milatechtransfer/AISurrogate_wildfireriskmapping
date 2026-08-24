@@ -11,8 +11,6 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
-
-logger = logging.getLogger(__name__)
 import torch
 from rasterio.features import geometry_mask
 from rasterio.profiles import Profile
@@ -26,6 +24,7 @@ from data_preparation.spatial.utils import (
     read_split_hex_ids,
 )
 from src.config import Config, GridParams
+from src.datasets.context_crop import centered_crop_slices
 from src.datasets.postprocessing.stitch_hexel import stitch_windows
 from src.datasets.postprocessing.visualize_predictions import (
     as_float_array_with_nan,
@@ -37,6 +36,8 @@ from src.datasets.postprocessing.visualize_predictions import (
 from src.datasets.targets import TargetSpec, get_target_specs
 from src.datasets.utils import apply_bp_nodata_zero_range, denormalize_output_target
 from src.logger import CometLogger
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -236,8 +237,8 @@ def get_stitched_windows(
     Accumulate and stitch all the windows together to build the hexel
     """
     all_data_points, all_locations, all_masks = [], [], []
-    for i, data in enumerate(np.array(df)):
-        path = data[0]
+    for i, (_, record) in enumerate(df.iterrows()):
+        path = record.iloc[0]
         array = np.load(os.path.join(base_dir, path))
         if target_channel_index >= array.shape[2]:
             raise ValueError(f"target_channel_index={target_channel_index} is out of bounds for patch with shape {array.shape}.")
@@ -251,9 +252,33 @@ def get_stitched_windows(
                 raise ValueError(f"prediction mask channel indices {invalid_indices} are out of bounds for patch with shape {array.shape}.")
             mask = np.logical_and.reduce([np.isfinite(array[:, :, index]) for index in prediction_mask_channel_indices])
         patch_h, patch_w = array.shape[:2]
-        all_data_points.append(predictions[start_idx + i].reshape((patch_h, patch_w)))
-        all_locations.append((data[5], data[6]))
-        all_masks.append(mask.reshape((patch_h, patch_w)))
+        prediction = np.asarray(predictions[start_idx + i])
+        if prediction.ndim == 2:
+            prediction_h, prediction_w = prediction.shape
+        elif prediction.size == patch_h * patch_w:
+            prediction_h, prediction_w = patch_h, patch_w
+            prediction = prediction.reshape((prediction_h, prediction_w))
+        else:
+            metadata_crop_h = record.get("target_crop_h")
+            metadata_crop_w = record.get("target_crop_w")
+            if pd.isna(metadata_crop_h) or pd.isna(metadata_crop_w):
+                raise ValueError(
+                    f"Cannot infer spatial shape for prediction with shape {prediction.shape} from patch {(patch_h, patch_w)}."
+                )
+            prediction_h, prediction_w = int(metadata_crop_h), int(metadata_crop_w)
+            prediction = prediction.reshape((prediction_h, prediction_w))
+
+        row_slice, col_slice = centered_crop_slices(patch_h, patch_w, prediction_h, prediction_w)
+        if "target_crop_h" in record and not pd.isna(record["target_crop_h"]):
+            expected_shape = (int(record["target_crop_h"]), int(record["target_crop_w"]))
+            if expected_shape != (prediction_h, prediction_w):
+                raise ValueError(f"Prediction shape {(prediction_h, prediction_w)} does not match metadata crop {expected_shape}.")
+
+        all_data_points.append(prediction)
+        row = int(record["row"]) if "row" in record else int(record.iloc[5])
+        col = int(record["col"]) if "col" in record else int(record.iloc[6])
+        all_locations.append((row, col))
+        all_masks.append(mask[row_slice, col_slice])
     reconstructed_hexel = stitch_windows(
         all_data_points,
         all_locations,

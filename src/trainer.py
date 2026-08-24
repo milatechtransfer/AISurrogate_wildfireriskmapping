@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from data_preparation.spatial.utils import NORM_STATS_JSON, get_output_log_stats_cached, get_range_output_cached, read_split_hex_ids
 from src.config import Config, GridParams
+from src.datasets.context_crop import centered_crop_slices, validate_context_crop_metadata
 from src.datasets.fuel_utils import FUEL_CURVE_ENCODINGS
 from src.datasets.targets import activate_target_predictions, get_target_specs
 from src.datasets.utils import apply_bp_nodata_zero_range, get_fuel_curve_normalization_stats
@@ -39,6 +40,12 @@ class Trainer:
         self.spatial_input_channels = spatial_input_channels
         self.auxiliary_input_dims = auxiliary_input_dims if auxiliary_input_dims is not None else {}
         self.train_dataset = train_dataset
+        if train_dataset is not None and hasattr(train_dataset, "metadata"):
+            validate_context_crop_metadata(
+                train_dataset.metadata,
+                config.data_prep.resolved_target_crop() if config.data_prep.context_crop_enabled else None,
+                (config.data_prep.win_h, config.data_prep.win_w),
+            )
 
         # Set device
         self.device = set_device()
@@ -422,6 +429,22 @@ class Trainer:
             auxiliary_data[key] = value.to(self.device)
 
         predictions = self.model(inputs, auxiliary_data)
+        if predictions.shape[-2:] != targets.shape[-2:] or targets.shape[-2:] != masks.shape[-2:]:
+            raise ValueError(
+                "Predictions, targets, and masks must share spatial dimensions before context cropping, got "
+                f"{predictions.shape[-2:]}, {targets.shape[-2:]}, and {masks.shape[-2:]}."
+            )
+        if self.config.data_prep.context_crop_enabled:
+            crop_h, crop_w = self.config.data_prep.resolved_target_crop()
+            row_slice, col_slice = centered_crop_slices(
+                predictions.shape[-2],
+                predictions.shape[-1],
+                crop_h,
+                crop_w,
+            )
+            predictions = predictions[..., row_slice, col_slice]
+            targets = targets[..., row_slice, col_slice]
+            masks = masks[..., row_slice, col_slice]
 
         if getattr(self.loss_fn, "requires_patch_metadata", False):
             if patch_metadata is None:
@@ -473,15 +496,21 @@ class Trainer:
         running_loss_parts: dict[str, float] = {}
 
         training_loop = tqdm(loader, desc="Training", leave=True)
+        accumulation_steps = self.config.training.gradient_accumulation_steps
+        self.optimizer.zero_grad()
 
-        for batch in training_loop:
+        for batch_idx, batch in enumerate(training_loop):
             predictions, loss, loss_parts, targets, masks = self._step(batch)
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+            group_start = (batch_idx // accumulation_steps) * accumulation_steps
+            group_size = min(accumulation_steps, len(loader) - group_start)
+            (loss / group_size).backward()
+            optimizer_step = (batch_idx + 1) % accumulation_steps == 0 or batch_idx + 1 == len(loader)
+            if optimizer_step:
+                self.optimizer.step()
+                self.optimizer.zero_grad()
 
             # use scheduler if its type is batch-level
-            if lr_scheduler is not None and lr_scheduler_type == "batch":
+            if optimizer_step and lr_scheduler is not None and lr_scheduler_type == "batch":
                 lr_scheduler.step()
 
             batch_size = targets.size(0) if hasattr(targets, "size") else 1
