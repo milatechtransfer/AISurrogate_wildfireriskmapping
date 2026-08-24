@@ -8,6 +8,7 @@ from data_preparation.process_hexels_into_grids import get_split_hexel_window
 from src.config import DataPrepConfig
 from src.datasets.context_crop import centered_crop_slices, validate_context_crop_metadata
 from src.datasets.postprocessing.utils import get_stitched_windows
+from src.utils import _crop_visualization_array_to_prediction
 
 
 def test_context_crop_config_and_slices() -> None:
@@ -84,3 +85,11 @@ def test_stitching_places_center_prediction_at_target_coordinates(tmp_path: Path
     expected = np.full((4, 5), np.nan, dtype=np.float32)
     expected[1:3, 2:4] = predictions[0]
     np.testing.assert_array_equal(stitched, expected)
+
+
+def test_prediction_visualization_array_uses_center_prediction_crop() -> None:
+    array = np.arange(48, dtype=np.float32).reshape(1, 1, 6, 8)
+
+    cropped = _crop_visualization_array_to_prediction(array, prediction_shape=(2, 4))
+
+    np.testing.assert_array_equal(cropped, array[..., 2:4, 2:6])
