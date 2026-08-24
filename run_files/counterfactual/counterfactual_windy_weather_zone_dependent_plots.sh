@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=cf_mean_weather_plots
+#SBATCH --job-name=cf_windy_weather_zone_dependent_plots
 #SBATCH --output=logs/job_%x_%j.out
 #SBATCH --error=logs/job_%x_%j.err
 #SBATCH --partition=long-cpu
@@ -14,16 +14,18 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
 source .venv/bin/activate
 
-config="configs/counterfactual/counterfactual_mean_weather_multi_output.yaml"
+config="configs/counterfactual/counterfactual_windy_weather_zone_dependent_multi_output.yaml"
 hex_id="16"
 scenarios=(
-    "bc_mean_weather_transplant"
+    "windy_self_transplant_zone_dependent"
+    "windy_self_transplant_zone_dependent_s1"
+    "windy_self_transplant_zone_dependent_s2"
 )
 endpoints=("bp" "fi" "ros")
 
 for scenario in "${scenarios[@]}"; do
     for endpoint in "${endpoints[@]}"; do
         python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
-            --config "${config}" --scenario "${scenario}" --endpoint "${endpoint}" --hex_id "${hex_id}"
+            --config "${config}" --scenario "${scenario}" --endpoint "${endpoint}" --hex_id "${hex_id}" --zone_overlay
     done
 done

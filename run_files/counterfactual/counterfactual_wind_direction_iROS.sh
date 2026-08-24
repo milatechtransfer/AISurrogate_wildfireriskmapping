@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=cf_fuel_eval
+#SBATCH --job-name=cf_wind_direction_eval
 #SBATCH --output=logs/job_%x_%j.out
 #SBATCH --error=logs/job_%x_%j.err
 #SBATCH --partition=unkillable
@@ -16,5 +16,8 @@ mkdir -p logs
 source .venv/bin/activate
 
 python -m src.evaluate_counterfactual \
-    --config configs/counterfactual/counterfactual_fuel_multi_output.yaml \
+    --config configs/counterfactual/counterfactual_wind_direction_multi_output.yaml \
+    --endpoint bp \
+    --endpoint fi \
+    --endpoint ros \
     --overwrite

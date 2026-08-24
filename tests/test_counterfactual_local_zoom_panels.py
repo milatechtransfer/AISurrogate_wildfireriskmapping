@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from src.datasets.postprocessing.counterfactual.plotting.counterfactual_local_zoom_panels import (
     NeighborhoodWindow,
@@ -59,8 +60,10 @@ def test_select_neighborhood_windows_uses_positive_direction_aligned_response() 
     )
     assert len(windows) == 1
     window = windows[0]
-    assert window.row_min < 22 and window.row_max > 16
-    assert window.col_min < 22 and window.col_max > 16
+    assert window.row_min < 22
+    assert window.row_max > 16
+    assert window.col_min < 22
+    assert window.col_max > 16
     assert window.delta_hazard_mean > 1.0
 
 
@@ -85,6 +88,35 @@ def test_select_neighborhood_windows_uses_negative_direction_aligned_response() 
     )
 
     assert windows[0].delta_hazard_mean < 0.0
+    assert windows[0].score > 0.0
+
+
+def test_select_neighborhood_windows_uses_absolute_response_without_expected_direction() -> None:
+    edit_mask = np.zeros((30, 30), dtype=bool)
+    edit_mask[2:8, 2:8] = True
+    edit_mask[16:22, 16:22] = True
+    valid = np.ones_like(edit_mask, dtype=bool)
+    delta_hazard = np.ones((30, 30), dtype=float)
+    delta_fi = np.ones((30, 30), dtype=float)
+    delta_hazard[15:25, 15:25] = -5.0
+    delta_fi[15:25, 15:25] = -10.0
+
+    windows = select_neighborhood_windows(
+        edit_mask=edit_mask,
+        valid_mask=valid,
+        delta_hazard=delta_hazard,
+        delta_fi=delta_fi,
+        response_direction=None,
+        n_windows=1,
+        crop_size=10,
+        stride=5,
+        min_edit_pixels=10,
+        min_edit_density=0.05,
+        max_edit_density=0.8,
+        exclude_border_pixels=0,
+    )
+
+    assert windows[0].delta_hazard_mean < -1.0
     assert windows[0].score > 0.0
 
 
@@ -118,7 +150,7 @@ def test_select_neighborhood_windows_raises_without_candidates() -> None:
     edit_mask = np.zeros((10, 10), dtype=bool)
     valid = np.ones_like(edit_mask, dtype=bool)
     delta = np.ones((10, 10), dtype=float)
-    try:
+    with pytest.raises(ValueError, match="No neighborhood windows"):
         select_neighborhood_windows(
             edit_mask=edit_mask,
             valid_mask=valid,
@@ -130,10 +162,6 @@ def test_select_neighborhood_windows_raises_without_candidates() -> None:
             min_edit_pixels=1,
             exclude_border_pixels=0,
         )
-    except ValueError as error:
-        assert "No neighborhood windows" in str(error)
-    else:
-        raise AssertionError("Expected a ValueError when no edited pixels are present.")
 
 
 def test_hazard_response_uses_zero_outside_each_scenarios_support() -> None:
@@ -163,6 +191,12 @@ def test_response_direction_distinguishes_added_and_removed_support() -> None:
     edit_mask = np.array([[False, True]])
     assert _response_direction(edit_mask, np.array([[True, False]]), np.array([[True, True]])) == 1
     assert _response_direction(edit_mask, np.array([[True, True]]), np.array([[True, False]])) == -1
+
+
+def test_response_direction_is_neutral_when_edit_preserves_support() -> None:
+    edit_mask = np.array([[False, True]])
+    support = np.array([[True, True]])
+    assert _response_direction(edit_mask, support, support) is None
 
 
 def test_effective_crop_means_share_response_support() -> None:

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=cf_mean_weather_plots
+#SBATCH --job-name=cf_windy_weather_plots
 #SBATCH --output=logs/job_%x_%j.out
 #SBATCH --error=logs/job_%x_%j.err
 #SBATCH --partition=long-cpu
@@ -14,10 +14,12 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
 source .venv/bin/activate
 
-config="configs/counterfactual/counterfactual_mean_weather_multi_output.yaml"
+config="configs/counterfactual/counterfactual_windy_weather_multi_output.yaml"
 hex_id="16"
 scenarios=(
-    "bc_mean_weather_transplant"
+    "windy_self_transplant"
+    "windy_self_transplant_s1"
+    "windy_self_transplant_s2"
 )
 endpoints=("bp" "fi" "ros")
 

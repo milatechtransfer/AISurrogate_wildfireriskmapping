@@ -1,0 +1,50 @@
+raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+save_dir: "experiments/counterfactual_windy_weather_multi_output_hex16"
+hex_ids: ["16"]
+nonfuel_ids: [100, 101, 102, 105, 106, 110]
+
+# Single multi-output checkpoint jointly predicting bp/fi(/ros) instead of three
+# separate single-target models. All three endpoint names still point at the exact
+# same config_path, so `evaluate_counterfactual.py` runs inference for this checkpoint
+# only once per scenario and the existing per-target plotting scripts (`--endpoint bp`,
+# `--endpoint fi`, `--endpoint ros`) keep working unchanged, reading each target's
+# raster from its suffixed filename (`hexel_XX_<target>_predicted.tif`) inside the
+# shared prediction directory.
+endpoints:
+  bp:
+    config_path: "configs/multi_output_spatial_weather.yaml"
+  fi:
+    config_path: "configs/multi_output_spatial_weather.yaml"
+  ros:
+    config_path: "configs/multi_output_spatial_weather.yaml"
+
+scenarios:
+  - name: "baseline"
+    kind: "baseline"
+    description: "Unmodified prepared weather inputs."
+
+  - name: "windy_self_transplant"
+    kind: "weather"
+    description: "Assign every hex16 weather zone the exact mean processed-weather vector across hex16's own rows with raw WindSpeed >= 20 km/h (~90th percentile of hex16's WindSpeed distribution), i.e. hex16 donates its own windiest-day conditions to itself."
+    params:
+      mode: "windy_mean_zone_transplant"
+      donor_hex_ids: ["16"]
+      wind_speed_percentile: 90
+
+  - name: "windy_self_transplant_s1"
+    kind: "weather"
+    description: "Season-restricted variant of windy_self_transplant: hex16's own windiest days within Season 1 only (hex16_Seasons.csv: Julian day 121-211, ~Apr 30-Jul 29, spring/early summer), wind_speed_percentile=90 resolved within that season alone."
+    params:
+      mode: "windy_mean_zone_transplant"
+      donor_hex_ids: ["16"]
+      wind_speed_percentile: 90
+      season: 1
+
+  - name: "windy_self_transplant_s2"
+    kind: "weather"
+    description: "Season-restricted variant of windy_self_transplant: hex16's own windiest days within Season 2 only (hex16_Seasons.csv: Julian day 212+, ~Jul 30 onward, summer/fall), wind_speed_percentile=90 resolved within that season alone."
+    params:
+      mode: "windy_mean_zone_transplant"
+      donor_hex_ids: ["16"]
+      wind_speed_percentile: 90
+      season: 2
