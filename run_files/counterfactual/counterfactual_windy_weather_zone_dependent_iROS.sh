@@ -20,4 +20,5 @@ python -m src.evaluate_counterfactual \
     --endpoint bp \
     --endpoint fi \
     --endpoint ros \
+    --scenario windy_self_transplant_zone_dependent \
     --overwrite

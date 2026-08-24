@@ -7,11 +7,11 @@ nonfuel_ids: [100, 101, 102, 105, 106, 110]
 # counterfactual_windy_weather_multi_output.yaml for details on this pattern.
 endpoints:
   bp:
-    config_path: "configs/multi_output_spatial_weather.yaml"
+    config_path: "configs/context_models/unet_512_crop_256_firesize_q3.yaml"
   fi:
-    config_path: "configs/multi_output_spatial_weather.yaml"
+    config_path: "configs/context_models/unet_512_crop_256_firesize_q3.yaml"
   ros:
-    config_path: "configs/multi_output_spatial_weather.yaml"
+    config_path: "configs/context_models/unet_512_crop_256_firesize_q3.yaml"
 
 # Zone-dependent variant of counterfactual_wind_direction_multi_output.yaml: each
 # hex16 WeatherZone keeps its own (same-zone) average wind speed but forced to

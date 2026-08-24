@@ -11,11 +11,11 @@ hex_ids: ["16"]
 # shared prediction directory.
 endpoints:
   bp:
-    config_path: "configs/multi_output_spatial_weather.yaml"
+    config_path: "configs/context_models/unet_512_crop_256_firesize_q3.yaml"
   fi:
-    config_path: "configs/multi_output_spatial_weather.yaml"
+    config_path: "configs/context_models/unet_512_crop_256_firesize_q3.yaml"
   ros:
-    config_path: "configs/multi_output_spatial_weather.yaml"
+    config_path: "configs/context_models/unet_512_crop_256_firesize_q3.yaml"
 
 scenarios:
   - name: "baseline"

@@ -18,8 +18,6 @@ config="configs/counterfactual/counterfactual_windy_weather_zone_dependent_multi
 hex_id="16"
 scenarios=(
     "windy_self_transplant_zone_dependent"
-    "windy_self_transplant_zone_dependent_s1"
-    "windy_self_transplant_zone_dependent_s2"
 )
 endpoints=("bp" "fi" "ros")
 
