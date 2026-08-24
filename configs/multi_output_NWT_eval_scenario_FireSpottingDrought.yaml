@@ -14,7 +14,7 @@ model:
   input_branches: ["spatial"]
   use_coordconv: false
   bp_head_depth: 0
-  bp_split_decoder: true
+  bp_split_decoder: false
 optimizer:
   name: "AdamW"
   lr: 7.0e-4
@@ -51,7 +51,7 @@ training:
 evaluation:
   best_ckpt_metrics: ["bp/ccc", "fi/ccc", "ros/ccc"]
   best_ckpt_metrics_mode: ["max", "max", "max"]
-  checkpoint_filename: "last_finetuned_v1.pth"
+  checkpoint_filename: "best_firesize_q3.pth"
   bp_nodata_as_zero: true
   prediction_support_policy: "input"
   hazard_fi_cap: 10000.0
@@ -68,7 +68,7 @@ data:
   num_workers: 2
   valid_mask_threshold: 0.01
   include_patch_metadata: true
-
+  norm_stats_filename: "dataset_norm_stats.json"
   input_sources:
     - name: "grid"
       params:
@@ -114,11 +114,20 @@ data:
         transforms_list: []
         augmentation_prob: 0.0
 
+    - name: "spatialized_fire_size"
+      params:
+        csv_name: "ObservedFiresizedistribution_FortSimpson_processed.csv"
+        feature_names_list: ["NORM_LOG_SIZE_HA"]
+        fire_weather_zone_id_col: "GRIDCODE"
+        aggregation: "mean"
+        quantiles: [0.1, 0.5, 0.9]
+        missing_value_strategy: "global_mean"
+
 logger:
   enabled: true
   project_name: "nrcan-05-wildfires-nwt-data"
   workspace: "mila-amlrt"
-  experiment_name: "multi_task_NWT_data_scenario_baseline_FireSpottingDrought_v2_data_split_decoders_after_finetuning_v1_last"
+  experiment_name: "multi_task_NWT_data_scenario_baseline_FireSpottingDrought_v2_data_firesize_q3_model"
   tags:
     - "full_data"
     - "modelling_approach=1"
