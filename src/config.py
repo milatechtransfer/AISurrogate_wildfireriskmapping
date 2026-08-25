@@ -114,6 +114,11 @@ class EvaluationConfig(BaseModel):
     bp_nodata_as_zero: bool = True
     prediction_support_policy: str = "input"
     hazard_fi_cap: float | None = Field(default=DEFAULT_FI_CAP, gt=0.0)
+    # When True, additionally break down hexel-level metrics by firezone ID
+    # (read from data_preparation.paths.Paths.firezones_grid), restricted to
+    # `firezone_metric_names`, and report them as e.g. "all/firezone3_bp_ccc".
+    report_firezone_metrics: bool = False
+    firezone_metric_names: list[str] = ["ccc", "spearman", "auc_iou_top10"]
 
 
 class TargetConfig(BaseModel):

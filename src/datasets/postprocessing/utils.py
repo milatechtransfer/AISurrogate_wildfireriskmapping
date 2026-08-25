@@ -641,6 +641,49 @@ def get_hexel_binary_maps(pred_grid: np.ndarray, gt_grid: np.ndarray, percentile
     return pred_bin, gt_bin
 
 
+def load_firezone_ids(paths: Paths, hex_id: str, profile: dict[str, Any]) -> np.ndarray | None:
+    """Load the per-pixel firezone ID raster for one hexel, aligned to ``profile``.
+
+    Returns a float array (NaN where nodata/outside any firezone) matching the
+    reconstructed target/prediction grid shape, or ``None`` if no firezone
+    raster is available for this hexel.
+    """
+    firezone_path = paths.firezones_grid(hex_id=hex_id)
+    if not Path(firezone_path).exists():
+        return None
+    firezone_grid, _ = load_spatial_raster(path=firezone_path, reference_profile=profile)
+    return as_float_array_with_nan(firezone_grid)
+
+
+def calculate_firezone_hexel_metrics(
+    gt_grid: np.ndarray,
+    pred_grid: np.ndarray,
+    firezone_ids: np.ndarray,
+    device: str | torch.device,
+    metric_functions: dict[str, Callable],
+) -> dict[str, dict[str, float]]:
+    """Compute ``metric_functions`` separately for each firezone ID present in ``firezone_ids``.
+
+    Returns a mapping of ``{"firezone{id}": {metric_name: value}}`` restricted
+    to pixels belonging to that firezone (other pixels are masked out as NaN,
+    same as any other invalid pixel).
+    """
+    firezone_ids = as_float_array_with_nan(firezone_ids)
+    if firezone_ids.shape != np.asarray(gt_grid).shape:
+        raise ValueError(f"firezone_ids shape {firezone_ids.shape} does not match gt_grid shape {np.asarray(gt_grid).shape}.")
+
+    results: dict[str, dict[str, float]] = {}
+    unique_ids = np.unique(firezone_ids[np.isfinite(firezone_ids)])
+    for fz_id in unique_ids:
+        fz_mask = firezone_ids == fz_id
+        fz_gt = np.where(fz_mask, gt_grid, np.nan)
+        fz_pred = np.where(fz_mask, pred_grid, np.nan)
+        results[f"firezone{int(fz_id)}"] = calculate_hexel_metrics_pytorch(
+            gt_grid=fz_gt, pred_grid=fz_pred, device=device, metric_functions=metric_functions
+        )
+    return results
+
+
 def evaluate_and_visualize_hexels(
     test_predictions: np.ndarray,
     config: Config,
@@ -679,6 +722,9 @@ def evaluate_and_visualize_hexels(
     all_hexel_metrics: list[tuple[str, str | None, str | None, dict[str, float]]] = []
     current_hex_id: str | None = None
     multi_target = len(get_config_target_specs(config)) > 1
+    report_firezone_metrics = config.evaluation.report_firezone_metrics
+    firezone_metric_names = set(config.evaluation.firezone_metric_names)
+    firezone_ids_by_hex: dict[str, np.ndarray | None] = {}
 
     for stitched_hexel in reconstruct_denormalized_hexels(
         test_predictions=test_predictions,
@@ -801,6 +847,28 @@ def evaluate_and_visualize_hexels(
                 )
                 all_hexel_metrics.append((stitched_hexel.hex_id, metric_target_name, "actual", actual_metrics))
                 all_hexel_metrics.append((stitched_hexel.hex_id, metric_target_name, "buffer_only", buffer_only_metrics))
+
+            if report_firezone_metrics:
+                firezone_metric_functions = {name: fn for name, fn in metric_functions.items() if name in firezone_metric_names}
+                if firezone_metric_functions:
+                    if stitched_hexel.hex_id not in firezone_ids_by_hex:
+                        firezone_paths = Paths(hex_id=stitched_hexel.hex_id, root_dir=config.data.raw_data_dir)
+                        firezone_ids_by_hex[stitched_hexel.hex_id] = load_firezone_ids(
+                            paths=firezone_paths, hex_id=stitched_hexel.hex_id, profile=stitched_hexel.profile
+                        )
+                    firezone_ids = firezone_ids_by_hex[stitched_hexel.hex_id]
+                    if firezone_ids is not None:
+                        firezone_metrics = calculate_firezone_hexel_metrics(
+                            gt_grid=grid_gt,
+                            pred_grid=reconstructed_hexel_denorm,
+                            firezone_ids=firezone_ids,
+                            device=device,
+                            metric_functions=firezone_metric_functions,
+                        )
+                        for firezone_scope, fz_metrics in firezone_metrics.items():
+                            all_hexel_metrics.append((stitched_hexel.hex_id, metric_target_name, firezone_scope, fz_metrics))
+                    else:
+                        logger.warning(f"No firezone raster found for hex {stitched_hexel.hex_id!r}; skipping firezone metrics.")
 
             percentiles_to_plot = [
                 fn.keywords["percentile"]

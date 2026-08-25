@@ -93,6 +93,12 @@ def parse_args() -> argparse.Namespace:
         help="Mask scope for stitched evaluation/inference artifacts. Defaults to config.data_prep.mask_scope. Non-actual scopes require matching patch metadata.",
     )
     parser.add_argument(
+        "--report_firezone_metrics",
+        action="store_true",
+        help="Also break down hexel-level metrics by firezone ID (data_preparation.paths.Paths.firezones_grid), "
+        "restricted to config.evaluation.firezone_metric_names. Defaults to config.evaluation.report_firezone_metrics.",
+    )
+    parser.add_argument(
         "--run_id",
         type=int,
         default=None,
@@ -128,6 +134,8 @@ def main(
         args.skip_hexel_plots = True
         args.no_save_predictions = True
     config = config or load_config(args.config)
+    if getattr(args, "report_firezone_metrics", False):
+        config.evaluation.report_firezone_metrics = True
 
     if getattr(args, "tif_only", False):
         args.metrics_only = False

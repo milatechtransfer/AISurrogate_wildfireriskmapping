@@ -1033,6 +1033,89 @@ def test_log_standard_target_transform_requires_stats():
         output_target_norm(output_arr=raw, target_max=1.0, target_min=0.0, out_norm="log_standard")
 
 
+def test_calculate_firezone_hexel_metrics_splits_by_firezone_id():
+    gt = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    pred = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    firezone_ids = np.array([[1.0, 1.0], [2.0, np.nan]], dtype=np.float32)
+
+    results = post_utils.calculate_firezone_hexel_metrics(
+        gt_grid=gt,
+        pred_grid=pred,
+        firezone_ids=firezone_ids,
+        device=torch.device("cpu"),
+        metric_functions={"mae": lambda preds, targets, masks: torch.mean(torch.abs(preds[masks] - targets[masks]))},
+    )
+
+    assert set(results.keys()) == {"firezone1", "firezone2"}
+    assert results["firezone1"]["mae"] == pytest.approx(0.0)
+    assert results["firezone2"]["mae"] == pytest.approx(0.0)
+
+
+def test_evaluate_and_visualize_hexels_reports_per_firezone_metrics(tmp_path, monkeypatch):
+    with (tmp_path / "feature_channel_map_1.json").open("w") as f:
+        json.dump({"ignition_grid": [0], "bp_out_grid": [3]}, f)
+
+    patch = np.ones((2, 2, 4), dtype=np.float32)
+    patch[:, :, 3] = 1.0
+    np.save(tmp_path / "patch.npy", patch)
+
+    pd.DataFrame([{"filename": "patch.npy", "hex_id": 1, "valid_ratio": 1.0, "season": "spring", "cause": "H", "row": 0, "col": 0}]).to_csv(
+        tmp_path / "test_indices.csv", index=False
+    )
+    shutil.copyfile(tmp_path / "test_indices.csv", tmp_path / "train_indices.csv")
+
+    (tmp_path / "hex01" / "spatial").mkdir(parents=True)
+    (tmp_path / "hex01" / "spatial" / "hex01_firezones.tif").touch()
+
+    config = Config(
+        save_dir=str(tmp_path / "out"),
+        modelling_approach="1",
+        model=ModelConfig(num_classes=1, input_branches=["spatial"], hidden_features=[8, 16]),
+        optimizer=OptimizerConfig(loss="mse", name="Adam", lr=0.001),
+        training=TrainingConfig(max_epochs=1, log_every_n_epoch=1),
+        evaluation=EvaluationConfig(
+            best_ckpt_metrics=["loss"],
+            best_ckpt_metrics_mode=["min"],
+            report_firezone_metrics=True,
+            firezone_metric_names=["mae"],
+        ),
+        data=DataConfig(
+            root_dir=str(tmp_path),
+            raw_data_dir=str(tmp_path),
+            train_split="train_indices.csv",
+            val_split="val_indices.csv",
+            test_split="test_indices.csv",
+            input_sources=[DataSourceConfig(name="grid", params=GridParams(feature_names_list=["ignition_grid"], target_name="bp"))],
+        ),
+        logger=LoggerConfig(enabled=False, project_name="test", workspace="test", experiment_name="test"),
+        metrics=["mae"],
+        data_prep=DataPrepConfig(win_h=2, win_w=2),
+    )
+
+    def fake_load_spatial_raster(*args, **kwargs):
+        path = str(kwargs.get("path") or args[0])
+        if "firezones" in path:
+            return np.array([[1.0, 1.0], [2.0, 2.0]], dtype=np.float32), {"dtype": "float32", "nodata": -9999}
+        return np.ones((2, 2), dtype=np.float32), {"dtype": "float32", "nodata": -9999}
+
+    monkeypatch.setattr(post_utils, "get_range_output_cached", lambda *args, **kwargs: (1.0, 0.0))
+    monkeypatch.setattr(post_utils, "load_spatial_raster", fake_load_spatial_raster)
+
+    metrics = post_utils.evaluate_and_visualize_hexels(
+        test_predictions=np.ones((1, 1, 2, 2), dtype=np.float32),
+        config=config,
+        out_norm="none",
+        device=torch.device("cpu"),
+        metric_functions={"mae": lambda preds, targets, masks: torch.mean(torch.abs(preds[masks] - targets[masks]))},
+        save_artifacts=False,
+    )
+
+    assert metrics["hex01/firezone1_mae"] == pytest.approx(0.0)
+    assert metrics["hex01/firezone2_mae"] == pytest.approx(0.0)
+    assert metrics["all/firezone1_mae"] == pytest.approx(0.0)
+    assert metrics["all/firezone2_mae"] == pytest.approx(0.0)
+
+
 def test_get_hexel_binary_maps_respects_masked_arrays(recwarn):
     pred = np.ma.array(
         [[1.0, 5.0], [100.0, 2.0]],
