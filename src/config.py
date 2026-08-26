@@ -119,6 +119,9 @@ class EvaluationConfig(BaseModel):
     # `firezone_metric_names`, and report them as e.g. "all/firezone3_bp_ccc".
     report_firezone_metrics: bool = False
     firezone_metric_names: list[str] = ["ccc", "spearman", "auc_iou_top10"]
+    # Optional remap applied to firezone ids loaded for the breakdown above, e.g. {45: 26} to merge
+    # fru45 into fru26. Empty dict (default) means no remapping is performed.
+    firezone_id_remap: dict[int, int] = Field(default_factory=dict)
 
 
 class TargetConfig(BaseModel):
@@ -227,6 +230,9 @@ class TabularParams(BaseModel):
     # rows belonging to its own hexel — never pooled across hexels that share a fire-weather zone but
     # live in different train/val/test splits. Requires ``patch_info["hex_id"]`` to be present.
     hex_id_col: str | None = None
+    # Optional remap applied to zone ids read from the patch's zone channel before LUT lookup, e.g.
+    # {45: 26} to treat fru45 pixels as fru26. Empty dict (default) means no remapping is performed.
+    zone_id_remap: dict[int, int] = Field(default_factory=dict)
 
 
 class SpatializedTabularParams(TabularParams):

@@ -46,6 +46,7 @@ class TabularSource(DataSource):
         self.feature_to_bias = params.feature_to_bias
         self.num_samples_per_patch = params.num_samples_per_patch
         self.hex_id_col = params.hex_id_col
+        self.zone_id_remap = {int(k): int(v) for k, v in params.zone_id_remap.items()}
 
         # Pre-compute the column index for the bias feature
         self.bias_col_idx: int | None = None
@@ -111,6 +112,10 @@ class TabularSource(DataSource):
     def get_sample(self, patch_info: dict):
         data = patch_info["data"] if "data" in patch_info else np.load(patch_info["file_path"])
         zone_arr = data[:, :, self.zone_channel]
+        if self.zone_id_remap:
+            zone_arr = np.copy(zone_arr)
+            for old_id, new_id in self.zone_id_remap.items():
+                zone_arr[zone_arr == old_id] = new_id
         mask = ~np.isnan(zone_arr) & (zone_arr > 0)
         zone_arr = zone_arr[mask]
 

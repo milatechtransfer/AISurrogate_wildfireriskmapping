@@ -641,18 +641,26 @@ def get_hexel_binary_maps(pred_grid: np.ndarray, gt_grid: np.ndarray, percentile
     return pred_bin, gt_bin
 
 
-def load_firezone_ids(paths: Paths, hex_id: str, profile: dict[str, Any]) -> np.ndarray | None:
+def load_firezone_ids(paths: Paths, hex_id: str, profile: dict[str, Any], zone_id_remap: dict[int, int] | None = None) -> np.ndarray | None:
     """Load the per-pixel firezone ID raster for one hexel, aligned to ``profile``.
 
     Returns a float array (NaN where nodata/outside any firezone) matching the
     reconstructed target/prediction grid shape, or ``None`` if no firezone
     raster is available for this hexel.
+
+    ``zone_id_remap`` optionally maps old zone ids to new ones (e.g. {45: 26})
+    so per-zone metric breakdowns merge the remapped zones together. Empty/None
+    means no remapping is performed.
     """
     firezone_path = paths.firezones_grid(hex_id=hex_id)
     if not Path(firezone_path).exists():
         return None
     firezone_grid, _ = load_spatial_raster(path=firezone_path, reference_profile=profile)
-    return as_float_array_with_nan(firezone_grid)
+    firezone_ids = as_float_array_with_nan(firezone_grid)
+    if zone_id_remap:
+        for old_id, new_id in zone_id_remap.items():
+            firezone_ids[firezone_ids == old_id] = new_id
+    return firezone_ids
 
 
 def calculate_firezone_hexel_metrics(
@@ -854,7 +862,10 @@ def evaluate_and_visualize_hexels(
                     if stitched_hexel.hex_id not in firezone_ids_by_hex:
                         firezone_paths = Paths(hex_id=stitched_hexel.hex_id, root_dir=config.data.raw_data_dir)
                         firezone_ids_by_hex[stitched_hexel.hex_id] = load_firezone_ids(
-                            paths=firezone_paths, hex_id=stitched_hexel.hex_id, profile=stitched_hexel.profile
+                            paths=firezone_paths,
+                            hex_id=stitched_hexel.hex_id,
+                            profile=stitched_hexel.profile,
+                            zone_id_remap=config.evaluation.firezone_id_remap,
                         )
                     firezone_ids = firezone_ids_by_hex[stitched_hexel.hex_id]
                     if firezone_ids is not None:
