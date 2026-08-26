@@ -79,9 +79,9 @@ expected_features = {
     "ignition_grid_human",
     "ignition_grid_lightning",
     "firezones_grid",
-    "burn_probability",
-    "fire_intensity",
-    "fire_ros",
+    "bp_out_grid",
+    "fi_out_grid",
+    "ros_out_grid",
 }
 if set(feature_map) != expected_features:
     raise RuntimeError(f"Unexpected feature map keys: {sorted(feature_map)}")
