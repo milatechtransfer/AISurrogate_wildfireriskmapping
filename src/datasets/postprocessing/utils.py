@@ -178,6 +178,7 @@ def load_target_grid_for_mask_scope(
     mask_scope: str,
     hex_id: str,
     bp_nodata_as_zero: bool = True,
+    preserve_native_grid: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     scope = normalize_mask_scope(mask_scope)
     target_path = getattr(paths, target.path_method)()
@@ -185,6 +186,7 @@ def load_target_grid_for_mask_scope(
         path=target_path,
         mask_path=paths.mask_grid(hex_id=hex_id, mask_scope=scope),
         reference_profile=profile,
+        reproject_flag=not preserve_native_grid,
     )
     target_grid, pred_grid = apply_mask_scope_to_grids(
         gt_grid=as_float_array_with_nan(loaded_target_grid),
@@ -305,6 +307,7 @@ def get_predicted_hexel(
     target_channel_index: int = 0,
     prediction_mask_channel_indices: list[int] | None = None,
     mask_scope: str = "actual",
+    preserve_native_grid: bool = False,
 ) -> tuple[np.ndarray, Profile]:
     """
     Returns the reconstructed hexel
@@ -317,6 +320,7 @@ def get_predicted_hexel(
     gt_elevation_grid, gt_elevation_grid_profile = load_spatial_raster(
         path=all_paths.elevation_grid(hex_id=hex_id),
         mask_path=all_paths.mask_grid(hex_id=hex_id, mask_scope=scope),
+        reproject_flag=not preserve_native_grid,
     )
 
     if out_norm in {"min_max", "log"}:

@@ -150,6 +150,7 @@ def generate_data_samples(
     mask_scope: str = "actual",
     ignition_weighting: str = "distribution",
     fuel_representation: str = "raw",
+    preserve_native_grid: bool = False,
     overwrite: bool = False,
 ):
     scope = prepared_mask_scope(mask_scope)
@@ -190,6 +191,7 @@ def generate_data_samples(
             mask_scope=scope,
             ignition_weighting=ignition_weighting,
             fuel_representation=fuel_representation,
+            preserve_native_grid=preserve_native_grid,
         )
         if (stacked_feats is None) or (mask is None):
             print(f"================Failed for hex {hex_id}===================")
@@ -243,6 +245,11 @@ def main():
         help="'raw' (default) for raw fuel class values (use with iROS curves) or 'group' to group similar classes for one-hot encoding.",
     )
     parser.add_argument(
+        "--preserve_native_grid",
+        action="store_true",
+        help="Keep each hexel on its original aligned 100 m grid instead of reprojecting to the national CRS.",
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Reprocess every hex even if its meta_hex_*.csv already exists (overwrites patches in place).",
@@ -264,6 +271,7 @@ def main():
         mask_scope=args.mask_scope,
         ignition_weighting=args.ignition_weighting,
         fuel_representation=args.fuel_grid_representation,
+        preserve_native_grid=args.preserve_native_grid,
         overwrite=args.overwrite,
     )
 

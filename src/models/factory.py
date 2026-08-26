@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from src.config import ModelConfig
 from src.models.interpretable_mechanistic import InterpretableMechanisticModel
+from src.models.mechanistic_hybrid_v22 import MechanisticHybridV22
 from src.models.mechanistic_propagation import MechanisticFirePropagationUNet
 from src.models.mechanistic_travel_time import MechanisticTravelTimeUNet
 from src.models.unet import BaselineUNet, MultiSourceUNet
@@ -29,6 +30,10 @@ MECHANISTIC_TRAVEL_TIME_V4_NAMES = {
     "mechanistic_travel_time_v4",
     "travel_time_propagation_v4",
     "mechanistic_propagation_v4",
+}
+MECHANISTIC_HYBRID_V22_NAMES = {
+    "mechanistic_hybrid_v22",
+    "cnn_physics_hybrid_v22",
 }
 INTERPRETABLE_MECHANISTIC_NAMES = {
     "interpretable_mechanistic",
@@ -136,6 +141,22 @@ def build_model(
             target_names=target_names,
         )
 
+    if architecture in MECHANISTIC_HYBRID_V22_NAMES:
+        if auxiliary_requested:
+            raise ValueError("Mechanistic hybrid v2.2 supports spatial inputs and early-fused iROS/HFI curves only.")
+        if target_names is None:
+            raise ValueError("target_names are required for mechanistic hybrid v2.2.")
+        return MechanisticHybridV22(
+            input_channels=spatial_input_channels,
+            spatial_input_names=model_config.spatial_input_names,
+            model_config=model_config,
+            fuel_curve_input_dim=fuel_curve_input_dim,
+            fuel_curve_embed_dim=fuel_curve_embed_dim,
+            fuel_curve_mean=fuel_curve_mean,
+            fuel_curve_std=fuel_curve_std,
+            target_names=target_names,
+        )
+
     if architecture in INTERPRETABLE_MECHANISTIC_NAMES | INTERPRETABLE_MECHANISTIC_V2_NAMES | INTERPRETABLE_MECHANISTIC_V3_NAMES:
         if auxiliary_requested:
             raise ValueError("Interpretable mechanism supports spatial inputs and raw fuel curves only.")
@@ -195,6 +216,7 @@ def build_model(
         | MECHANISTIC_PROPAGATION_V21_NAMES
         | MECHANISTIC_PROPAGATION_V3_NAMES
         | MECHANISTIC_TRAVEL_TIME_V4_NAMES
+        | MECHANISTIC_HYBRID_V22_NAMES
         | INTERPRETABLE_MECHANISTIC_NAMES
         | INTERPRETABLE_MECHANISTIC_V2_NAMES
         | INTERPRETABLE_MECHANISTIC_V3_NAMES

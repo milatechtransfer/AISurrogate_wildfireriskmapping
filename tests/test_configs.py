@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,7 @@ MECHANISTIC_V3_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v3_512
 MECHANISTIC_V3_PILOT_CONFIG = Path("configs/mechanistic/mechanistic_propagation_v3_512_crop_256_spread_opportunity_q3_pilot.yaml")
 MECHANISTIC_V4_CONFIG = Path("configs/mechanistic/mechanistic_travel_time_v4_512_crop_256_spread_opportunity_q3.yaml")
 GRAY_BOX_PHYSICS_V3_CONFIG = Path("configs/mechanistic/gray_box_physics_v3_512_crop_256_firesize_q3.yaml")
+MECHANISTIC_HYBRID_V22_CONFIG = Path("configs/mechanistic/mechanistic_hybrid_v22_native_512_crop_256_firesize_q3.yaml")
 COUNT_UNET_CONFIG = Path("configs/context_models/unet_512_crop_256_firesize_q3_ignition_count.yaml")
 FIRE_SIZE_UNET_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3.yaml")
 COUNT_UNET_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3_ignition_count.yaml")
@@ -220,6 +222,30 @@ def test_stabilized_mechanistic_configs_resolve(config_path, architecture):
     assert config.optimizer.parameter_lr_scales["bp_local_calibration"] == pytest.approx(0.25)
     assert config.training.gradient_clip_norm == pytest.approx(1.0)
     assert config.evaluation.best_ckpt_metrics == ["mean/ccc"]
+    assert config.evaluation.best_ckpt_metrics_mode == ["max"]
+
+
+def test_mechanistic_hybrid_v22_config_is_native_scratch_q3() -> None:
+    config = load_resolved_config(MECHANISTIC_HYBRID_V22_CONFIG)
+
+    assert config.model.architecture == "mechanistic_hybrid_v22"
+    assert config.seed == 42
+    assert config.training.initial_checkpoint is None
+    assert config.training.freeze_pretrained_epochs == 0
+    assert config.data_prep.preserve_native_grid
+    assert config.data_prep.resolved_target_crop() == (256, 256)
+    assert config.model.propagation_downsample_factor == 8
+    assert config.model.propagation_steps == 16
+    assert config.model.propagation_speed_correction_log_limit == pytest.approx(math.log(2.0))
+    assert config.model.propagation_max_local_log_calibration == pytest.approx(math.log(1.5))
+    assert config.data.batch_size * config.training.gradient_accumulation_steps == 64
+    grid = next(source.params for source in config.data.input_sources if source.name == "grid")
+    assert isinstance(grid, GridParams)
+    assert grid.fuel_feats_encoding == "iROS_HFI"
+    fire_size = next(source.params for source in config.data.input_sources if source.name == "spatialized_fire_size")
+    assert isinstance(fire_size, SpatializedTabularParams)
+    assert fire_size.quantiles == [0.1, 0.5, 0.9]
+    assert config.evaluation.best_ckpt_metrics == ["hex/mean/ccc"]
     assert config.evaluation.best_ckpt_metrics_mode == ["max"]
 
 

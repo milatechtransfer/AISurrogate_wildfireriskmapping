@@ -43,15 +43,34 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
         "physical_mechanistic_v3",
         "gray_box_mechanistic",
     }
+    hybrid_v22_architectures = {"mechanistic_hybrid_v22", "cnn_physics_hybrid_v22"}
     count_aware_interpretable_architectures = interpretable_v2_architectures | interpretable_v3_architectures
+    count_aware_architectures = count_aware_interpretable_architectures | hybrid_v22_architectures
     all_interpretable_architectures = interpretable_architectures | count_aware_interpretable_architectures
-    if resolved_architecture not in travel_time_architectures | all_interpretable_architectures:
+    physical_behavior_architectures = all_interpretable_architectures | hybrid_v22_architectures
+    if resolved_architecture not in travel_time_architectures | physical_behavior_architectures:
         return
+
+    if resolved_architecture in hybrid_v22_architectures:
+        if not config.data_prep.preserve_native_grid:
+            raise ValueError("Mechanistic hybrid v2.2 requires data_prep.preserve_native_grid=true.")
+        if config.model.propagation_downsample_factor != 8:
+            raise ValueError("Mechanistic hybrid v2.2 requires model.propagation_downsample_factor=8.")
+        if not np.isclose(config.model.propagation_cell_size_m, 100.0):
+            raise ValueError("Mechanistic hybrid v2.2 requires native 100 m pixels.")
+        crop_h, crop_w = config.data_prep.resolved_target_crop()
+        context_pixels = min((config.data_prep.win_h - crop_h) // 2, (config.data_prep.win_w - crop_w) // 2)
+        max_context_steps = context_pixels // config.model.propagation_downsample_factor
+        if config.model.propagation_steps > max_context_steps:
+            raise ValueError(
+                f"model.propagation_steps={config.model.propagation_steps} exceeds the centered context margin "
+                f"of {max_context_steps} coarse cells."
+            )
 
     checks: list[tuple[str, dict[str, tuple[str, float]]]] = []
     if (
         resolved_architecture in travel_time_architectures and config.model.propagation_ignition_mode == "probability_mass"
-    ) or resolved_architecture in count_aware_interpretable_architectures:
+    ) or resolved_architecture in count_aware_architectures:
         count_checks = {
             "log1p_mean_minimum": (
                 "model.propagation_count_log_mean_min",
@@ -62,7 +81,7 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
                 config.model.propagation_count_log_mean_max,
             ),
         }
-        if resolved_architecture in count_aware_interpretable_architectures:
+        if resolved_architecture in count_aware_architectures:
             count_checks.update(
                 {
                     "cv_minimum": (
@@ -98,21 +117,23 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
             )
         )
 
-    if resolved_architecture in all_interpretable_architectures:
+    if resolved_architecture in physical_behavior_architectures:
         grid_params = next(
             (source.params for source in config.data.input_sources if source.name == "grid" and isinstance(source.params, GridParams)),
             None,
         )
         if grid_params is None:
-            raise ValueError("Interpretable mechanism requires a configured grid data source.")
+            raise ValueError("Physical behavior mechanism requires a configured grid data source.")
+        if resolved_architecture in hybrid_v22_architectures and grid_params.fuel_feats_encoding != "iROS_HFI":
+            raise ValueError("Mechanistic hybrid v2.2 requires grid.fuel_feats_encoding='iROS_HFI'.")
         targets_by_name = {target.name: target for target in grid_params.resolved_targets()}
         expected_norms: dict[TargetName, str] = {"bp": "none", "fi": "log_standard", "ros": "log_standard"}
         for target_name, expected_norm in expected_norms.items():
             target = targets_by_name.get(target_name)
             if target is None:
-                raise ValueError(f"Interpretable mechanism requires a {target_name!r} grid target.")
+                raise ValueError(f"Physical behavior mechanism requires a {target_name!r} grid target.")
             if target.out_norm != expected_norm:
-                raise ValueError(f"Interpretable mechanism requires {target_name}.out_norm={expected_norm!r}, got {target.out_norm!r}.")
+                raise ValueError(f"Physical behavior mechanism requires {target_name}.out_norm={expected_norm!r}, got {target.out_norm!r}.")
 
         path = os.path.join(config.data.root_dir, NORM_STATS_JSON)
         if not os.path.isfile(path):
@@ -137,6 +158,19 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
                 config.model.interpretable_ros_log_std,
             ),
         }
+        if resolved_architecture in hybrid_v22_architectures:
+            target_checks.update(
+                {
+                    ("elevation", "min"): (
+                        "model.propagation_elevation_min_m",
+                        config.model.propagation_elevation_min_m,
+                    ),
+                    ("elevation", "max"): (
+                        "model.propagation_elevation_max_m",
+                        config.model.propagation_elevation_max_m,
+                    ),
+                }
+            )
         for (artifact_target_name, stat_name), (config_name, configured_value) in target_checks.items():
             try:
                 artifact_value = float(payload[artifact_target_name][stat_name])
@@ -148,6 +182,46 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
                     f"{path}:{artifact_target_name}.{stat_name}={artifact_value}. "
                     "Update the config or regenerate the matching normalization artifact."
                 )
+
+        if resolved_architecture in hybrid_v22_architectures:
+            for curve_name in ("fuel_curve_iROS", "fuel_curve_HFI"):
+                entry = payload.get(curve_name)
+                if not isinstance(entry, dict) or "log_mean" not in entry or "log_std" not in entry:
+                    raise ValueError(f"Mechanistic normalization metadata {path} is missing {curve_name} log statistics.")
+            weather_path = os.path.join(config.data.root_dir, "weather_norm_params.json")
+            if not os.path.isfile(weather_path):
+                raise FileNotFoundError(f"Mechanistic normalization metadata does not exist: {weather_path}")
+            with open(weather_path) as handle:
+                weather_payload = json.load(handle)
+            z_score = weather_payload.get("z_score", {})
+            columns = list(z_score.get("cols", []))
+            means = list(z_score.get("mean", []))
+            stds = list(z_score.get("std", []))
+            if not (len(columns) == len(means) == len(stds)):
+                raise ValueError(f"Mechanistic normalization metadata {weather_path} has inconsistent z-score arrays.")
+            weather_stats = {name: (float(mean), float(std)) for name, mean, std in zip(columns, means, stds, strict=True)}
+            weather_checks = {
+                "InitialSpreadIndex": (
+                    ("model.propagation_isi_mean", config.model.propagation_isi_mean),
+                    ("model.propagation_isi_std", config.model.propagation_isi_std),
+                ),
+                "wind_x": (
+                    ("model.propagation_wind_x_mean", config.model.propagation_wind_x_mean),
+                    ("model.propagation_wind_x_std", config.model.propagation_wind_x_std),
+                ),
+                "wind_y": (
+                    ("model.propagation_wind_y_mean", config.model.propagation_wind_y_mean),
+                    ("model.propagation_wind_y_std", config.model.propagation_wind_y_std),
+                ),
+            }
+            for feature_name, ((mean_name, configured_mean), (std_name, configured_std)) in weather_checks.items():
+                if feature_name not in weather_stats:
+                    raise ValueError(f"Mechanistic normalization metadata {weather_path} is missing {feature_name!r}.")
+                artifact_mean, artifact_std = weather_stats[feature_name]
+                if not np.isclose(configured_mean, artifact_mean, rtol=1e-9, atol=1e-12):
+                    raise ValueError(f"{mean_name}={configured_mean} does not match {weather_path}:{feature_name}.mean={artifact_mean}.")
+                if not np.isclose(configured_std, artifact_std, rtol=1e-9, atol=1e-12):
+                    raise ValueError(f"{std_name}={configured_std} does not match {weather_path}:{feature_name}.std={artifact_std}.")
         configured_target_stats: dict[TargetName, tuple[float, float]] = {
             "fi": (
                 config.model.interpretable_fi_log_mean,
@@ -405,6 +479,24 @@ class Trainer:
         grid_params = self._get_grid_params()
         if grid_params is None or grid_params.fuel_feats_encoding not in FUEL_CURVE_ENCODINGS:
             return {"fuel_curve_mean": None, "fuel_curve_std": None}
+
+        resolved_architecture = resolve_model_architecture(self.config.model)
+        if resolved_architecture in {"mechanistic_hybrid_v22", "cnn_physics_hybrid_v22"}:
+            cache_path = os.path.join(self.config.data.root_dir, NORM_STATS_JSON)
+            with open(cache_path) as handle:
+                cached = json.load(handle)
+            ros_entry = cached["fuel_curve_iROS"]
+            hfi_entry = cached["fuel_curve_HFI"]
+            return {
+                "fuel_curve_mean": torch.tensor(
+                    [float(ros_entry["log_mean"]), float(hfi_entry["log_mean"])],
+                    dtype=torch.float32,
+                ),
+                "fuel_curve_std": torch.tensor(
+                    [float(ros_entry["log_std"]), float(hfi_entry["log_std"])],
+                    dtype=torch.float32,
+                ),
+            }
 
         # Training mode: read from GridSource which already computed/cached the stats.
         if self.train_dataset is not None:

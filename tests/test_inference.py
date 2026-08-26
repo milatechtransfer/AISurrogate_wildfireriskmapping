@@ -1,13 +1,16 @@
 import pytest
 import torch
 
+from inference import run_ai_surrogate_model_hexel_inference as inference_module
 from inference.predictor import BurnRiskPredictor
 from inference.run_ai_surrogate_model_hexel_inference import (
+    _copy_ignition_count_artifacts,
     create_dataset,
     get_grid_params_from_data_config,
     get_target_params_from_grid_config,
     get_target_spec_from_data_config,
     get_target_specs_from_data_config,
+    prepare_hexel_data,
     resolve_target_normalization,
 )
 from src.datasets.targets import get_target_spec
@@ -140,6 +143,70 @@ def test_inference_dataset_uses_training_resources_for_grid_only(tmp_path, monke
         },
     )
     assert created_roots["spatialized_weather"] == (str(processed_dir), {})
+
+
+def test_inference_copies_checkpoint_ignition_count_artifacts(tmp_path):
+    training_root = tmp_path / "training"
+    processed_dir = tmp_path / "processed"
+    training_root.mkdir()
+    processed_dir.mkdir()
+    (training_root / "ignition_count_processed.csv").write_text(
+        "hex_id,GRIDCODE,NORM_LOG1P_IGNITION_COUNT_MEAN,NORM_IGNITION_COUNT_CV\n" "1,10,0.5,0.25\n"
+    )
+    (training_root / "ignition_count_norm_params.json").write_text('{"version": 1}\n')
+
+    _copy_ignition_count_artifacts(
+        {
+            "root_dir": str(training_root),
+            "input_sources": [
+                {
+                    "name": "spatialized_ignition_count",
+                    "params": {
+                        "csv_name": "ignition_count_processed.csv",
+                        "hex_id_col": "hex_id",
+                    },
+                }
+            ],
+        },
+        processed_dir,
+        "01",
+    )
+
+    assert (processed_dir / "ignition_count_processed.csv").read_text() == (training_root / "ignition_count_processed.csv").read_text()
+    assert (processed_dir / "ignition_count_norm_params.json").read_text() == '{"version": 1}\n'
+
+
+def test_inference_preparation_forwards_checkpoint_spatial_modes(tmp_path, monkeypatch):
+    (tmp_path / "hex01").mkdir()
+    captured = {}
+
+    monkeypatch.setattr(inference_module, "build_weather_table", lambda **_kwargs: None)
+    monkeypatch.setattr(inference_module, "find_hex_ids", lambda _root: ["01"])
+
+    def fake_load_spatial_features_per_hexel(**kwargs):
+        captured.update(kwargs)
+        return (
+            torch.zeros(1, 2, 2, 1).numpy(),
+            torch.ones(1, 2, 2, dtype=torch.bool).numpy(),
+            {0: (0, 0)},
+        )
+
+    monkeypatch.setattr(inference_module, "load_spatial_features_per_hexel", fake_load_spatial_features_per_hexel)
+    monkeypatch.setattr(inference_module, "get_split_hexel_window", lambda **_kwargs: None)
+
+    prepare_hexel_data(
+        data_dir=tmp_path,
+        hex_id="01",
+        win_h=2,
+        win_w=2,
+        ignition_weighting="probability_mass",
+        fuel_representation="raw",
+        preserve_native_grid=True,
+    )
+
+    assert captured["ignition_weighting"] == "probability_mass"
+    assert captured["fuel_representation"] == "raw"
+    assert captured["preserve_native_grid"] is True
 
 
 class ConstantModel(torch.nn.Module):

@@ -15,4 +15,8 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 source .venv/bin/activate
 
 : "${CONFIG:?CONFIG must point to a training YAML}"
-python -m src.smoke_train_batch --config="$CONFIG"
+smoke_args=(--config="$CONFIG")
+if [[ -n "${DATA_ROOT:-}" ]]; then
+    smoke_args+=(--data-root="$DATA_ROOT")
+fi
+python -m src.smoke_train_batch "${smoke_args[@]}"

@@ -116,6 +116,7 @@ def reconstruct_denormalized_hexels(
                 target_channel_index=settings.target_channel_index,
                 prediction_mask_channel_indices=prediction_mask_channel_indices,
                 mask_scope=scope,
+                preserve_native_grid=config.data_prep.preserve_native_grid,
             )
             paths = Paths(hex_id=hex_id, root_dir=config.data.raw_data_dir)
             gt_grid, pred_grid = post_utils.load_target_grid_for_mask_scope(
@@ -126,6 +127,7 @@ def reconstruct_denormalized_hexels(
                 mask_scope=scope,
                 hex_id=hex_id,
                 bp_nodata_as_zero=config.evaluation.bp_nodata_as_zero,
+                preserve_native_grid=config.data_prep.preserve_native_grid,
             )
             actual_support_mask = None
             buffer_support_mask = None

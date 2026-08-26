@@ -79,6 +79,8 @@ class ModelConfig(BaseModel):
     propagation_wind_y_std: float = Field(default=1.0, gt=0.0)
     propagation_wind_direction_is_from: bool = True
     propagation_wind_anisotropy: float = Field(default=0.6931471805599453, ge=0.0)
+    propagation_wind_anisotropy_min: float = Field(default=0.0, ge=0.0)
+    propagation_wind_anisotropy_max: float = Field(default=2.0794415416798357, gt=0.0)
     propagation_wind_half_saturation_kmh: float = Field(default=10.0, gt=0.0)
     propagation_elevation_min_m: float = 0.0
     propagation_elevation_max_m: float = 1.0
@@ -87,6 +89,8 @@ class ModelConfig(BaseModel):
     propagation_min_ros_m_per_min: float = Field(default=0.05, gt=0.0)
     propagation_speed_correction_log_limit: float = Field(default=0.6931471805599453, ge=0.0)
     propagation_max_bp_logit_correction: float = Field(default=2.0, gt=0.0)
+    propagation_quantile_kl_weight: float = Field(default=1e-2, ge=0.0)
+    propagation_behavior_consistency_weight: float = Field(default=2e-2, ge=0.0)
 
     # Mechanism-dominant physical baseline
     interpretable_initial_ignition_rate: float = Field(default=8.0, gt=0.0)
@@ -135,6 +139,13 @@ class ModelConfig(BaseModel):
             raise ValueError("propagation_isi_bins must be strictly increasing.")
         if self.propagation_elevation_max_m <= self.propagation_elevation_min_m:
             raise ValueError("propagation_elevation_max_m must exceed propagation_elevation_min_m.")
+        if self.propagation_wind_anisotropy_max <= self.propagation_wind_anisotropy_min:
+            raise ValueError("propagation_wind_anisotropy_max must exceed propagation_wind_anisotropy_min.")
+        if not self.propagation_wind_anisotropy_min < self.propagation_wind_anisotropy < self.propagation_wind_anisotropy_max:
+            raise ValueError(
+                "propagation_wind_anisotropy must be strictly between "
+                "propagation_wind_anisotropy_min and propagation_wind_anisotropy_max."
+            )
         if not (self.interpretable_min_ignition_rate < self.interpretable_initial_ignition_rate < self.interpretable_max_ignition_rate):
             raise ValueError(
                 "interpretable_initial_ignition_rate must be strictly between "
@@ -423,6 +434,7 @@ class DataPrepConfig(BaseModel):
     overlap_ratio: float = Field(default=0.2, ge=0.0, lt=1.0)
     ignition_weighting: Literal["max", "distribution", "probability_mass"] = "distribution"
     fuel_representation: Literal["raw", "group"] = "raw"
+    preserve_native_grid: bool = False
 
     @model_validator(mode="after")
     def validate_target_crop(self) -> "DataPrepConfig":

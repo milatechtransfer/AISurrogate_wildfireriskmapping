@@ -15,9 +15,11 @@ Instead, you can run the following on an interactive node:
 python -m data_preparation.process_hexels_into_grids --root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"  --save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4" --modelling_approach=1 --win_h=256 --win_w=256 --overlap_ratio=0.2 --ignition_weighting="distribution" --fuel_grid_representation="raw"
 ```
 
-`--ignition_weighting` controls the ignition channels: `distribution` (default) produces zone-area-weighted 2-channel ignition (human + lightning), while `max` produces the original single-channel max-aggregation.
+`--ignition_weighting` controls the ignition channels: `distribution` (default) produces zone-area-weighted 2-channel ignition (human + lightning), `probability_mass` preserves the exact BurnP3+ per-ignition Human/Lightning spatial mass, and `max` produces the original single-channel max-aggregation.
 
 `--fuel_grid_representation` controls the fuel grid representation: `raw` (default) produces raw class values, while `group` groups similar classes together using `FUEL_GROUP_MAP` and saves the grid as 0-N values.
+
+`--preserve_native_grid` skips the Canada-wide reprojection and keeps each hexel on its original 100 m local grid. In this mode every DEM, fuel, fire-zone, ignition, BP, FI, and ROS raster must have an identical CRS, affine transform, width, and height; preparation fails explicitly if any layer is misaligned.
 
 ### Context crops
 

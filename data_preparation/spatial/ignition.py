@@ -25,6 +25,7 @@ def load_ignition_grid(
     season: int = None,
     reference_profile: dict[str, Any] | None = None,
     mask_scope: str = "actual",
+    reproject_flag: bool = True,
 ) -> np.ma.MaskedArray:
     """Load ignition grids for a specific season/cause or all seasons/causes"""
     all_paths = Paths(hex_id=hex_id, root_dir=root_dir)
@@ -34,6 +35,7 @@ def load_ignition_grid(
         file_name = f"hex{hex_id}_ignGrid_{fire_cause_mapping[cause]}_s{season}.tif"
         ignition_raster, _ = load_spatial_raster(
             path=ignition_grids_folder_path / file_name,
+            reproject_flag=reproject_flag,
             mask_path=all_paths.mask_grid(hex_id=hex_id, mask_scope=mask_scope),
             reference_profile=reference_profile,
         )
@@ -46,6 +48,7 @@ def load_ignition_grid(
     for file_name in ignition_raster_files:
         ignition_raster, _ = load_spatial_raster(
             path=ignition_grids_folder_path / file_name,
+            reproject_flag=reproject_flag,
             mask_path=all_paths.mask_grid(hex_id=hex_id, mask_scope=mask_scope),
             reference_profile=reference_profile,
         )
@@ -164,6 +167,7 @@ def load_ignition_grid_probability_mass(
     firezones_grid: np.ma.MaskedArray,
     reference_profile: dict[str, Any] | None = None,
     mask_scope: str = "actual",
+    reproject_flag: bool = True,
 ) -> np.ma.MaskedArray:
     """Load Human/Lightning location mass per million sampled ignitions."""
     all_paths = Paths(hex_id=hex_id, root_dir=root_dir)
@@ -180,6 +184,7 @@ def load_ignition_grid_probability_mass(
             cause_letter, season = match.group(1), match.group(2)
             raster, _ = load_spatial_raster(
                 path=ign_dir / fname,
+                reproject_flag=reproject_flag,
                 mask_path=mask_path,
                 reference_profile=reference_profile,
             )
@@ -207,6 +212,7 @@ def load_ignition_grid_weighted(
     firezones_grid: np.ma.MaskedArray,
     reference_profile: dict[str, Any] | None = None,
     mask_scope: str = "actual",
+    reproject_flag: bool = True,
 ) -> np.ma.MaskedArray:
     """Load ignition grids as zone-area-weighted Human and Lightning channels.
 
@@ -242,6 +248,7 @@ def load_ignition_grid_weighted(
             cause_letter, season_str = match.group(1), match.group(2)
             raster, _ = load_spatial_raster(
                 path=ign_dir / fname,
+                reproject_flag=reproject_flag,
                 mask_path=mask_path,
                 reference_profile=reference_profile,
             )

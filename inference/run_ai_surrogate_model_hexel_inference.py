@@ -5,12 +5,14 @@ Orchestrates data preparation, dataset building, and prediction.
 
 import argparse
 import logging
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import torch
 import yaml
 from torch.utils.data import DataLoader
@@ -60,6 +62,68 @@ class TargetNormalization:
     log_std: float | None = None
 
 
+def _configured_source(data_config: dict[str, Any], source_name: str) -> dict[str, Any] | None:
+    for source in data_config.get("input_sources", []):
+        if source.get("name") == source_name:
+            return source
+    return None
+
+
+def _checkpoint_normalization_path(
+    data_config: dict[str, Any],
+    source_name: str,
+    filename: str,
+    explicit_path: Path | None,
+) -> Path | None:
+    if _configured_source(data_config, source_name) is None:
+        return explicit_path
+    path = explicit_path or Path(str(data_config["root_dir"])) / filename
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{source_name} inference requires the training normalization artifact at {path}. "
+            "Pass an explicit matching artifact path rather than fitting normalization on the inference hexel."
+        )
+    return path
+
+
+def _copy_ignition_count_artifacts(
+    data_config: dict[str, Any],
+    processed_data_dir: Path,
+    hex_id: str,
+) -> None:
+    source = _configured_source(data_config, "spatialized_ignition_count")
+    if source is None:
+        return
+
+    params = source.get("params", {})
+    csv_name = params.get("csv_name")
+    if not csv_name:
+        raise ValueError("spatialized_ignition_count must configure params.csv_name.")
+
+    training_root = Path(str(data_config["root_dir"]))
+    source_table = training_root / str(csv_name)
+    if not source_table.is_file():
+        raise FileNotFoundError(f"Checkpoint ignition-count table not found: {source_table}")
+
+    hex_id_col = params.get("hex_id_col")
+    if hex_id_col:
+        table = pd.read_csv(source_table, usecols=[str(hex_id_col)])
+        table_hex_ids = pd.to_numeric(table[str(hex_id_col)], errors="coerce")
+        if not table_hex_ids.eq(int(hex_id)).any():
+            raise ValueError(f"Ignition-count table {source_table} does not contain hex {hex_id}.")
+
+    destination_table = processed_data_dir / str(csv_name)
+    if source_table.resolve() != destination_table.resolve():
+        shutil.copy2(source_table, destination_table)
+
+    source_norm = training_root / "ignition_count_norm_params.json"
+    if not source_norm.is_file():
+        raise FileNotFoundError(f"Checkpoint ignition-count normalization artifact not found: {source_norm}")
+    destination_norm = processed_data_dir / source_norm.name
+    if source_norm.resolve() != destination_norm.resolve():
+        shutil.copy2(source_norm, destination_norm)
+
+
 def prepare_hexel_data(
     data_dir: Path,
     hex_id: str,
@@ -72,8 +136,12 @@ def prepare_hexel_data(
     output_type: str = "prob",
     weather_sampling: str = "weather_zone_id",
     mask_scope: str = "actual",
+    ignition_weighting: str = "distribution",
+    fuel_representation: str = "raw",
+    preserve_native_grid: bool = False,
     weather_norm_params_path: Path | None = None,
     fire_size_norm_params_path: Path | None = None,
+    checkpoint_data_config: dict[str, Any] | None = None,
 ) -> Path:
     """
     Prepare data patches for a single hexel.
@@ -91,6 +159,8 @@ def prepare_hexel_data(
         modelling_approach: 1 for joint season-cause, 2 for separate.
         output_type: "count" or "prob" for fire output type.
         weather_sampling: Weather sampling strategy.
+        ignition_weighting: Ignition raster construction used by the checkpoint.
+        fuel_representation: Fuel raster representation used by the checkpoint.
         weather_norm_params_path: Path to a JSON file with weather normalization parameters.
             If the file exists, parameters are loaded and applied (inference mode) instead of
             being refit, preventing leakage from the hexel(s) being predicted. Defaults to
@@ -112,6 +182,8 @@ def prepare_hexel_data(
         weather_norm_params_path = processed_data_dir / "weather_norm_params.json"
     if fire_size_norm_params_path is None:
         fire_size_norm_params_path = processed_data_dir / "fire_size_norm_params.json"
+    if checkpoint_data_config is not None:
+        _copy_ignition_count_artifacts(checkpoint_data_config, processed_data_dir, hex_id)
 
     weather_table_path = processed_data_dir / "weather_table_processed.csv"
     logger.info("Building weather table...")
@@ -140,6 +212,9 @@ def prepare_hexel_data(
         feature_channel_map_path=str(feature_channel_map_path),
         modelling_approach=modelling_approach,
         mask_scope=scope,
+        ignition_weighting=ignition_weighting,
+        fuel_representation=fuel_representation,
+        preserve_native_grid=preserve_native_grid,
     )
 
     if stacked_feats is None or mask is None:
@@ -342,10 +417,23 @@ def run_single_hexel_pipeline(
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     data_config = checkpoint["config"]["data"]  # We use this to build dataset class
     data_prep_config = checkpoint["config"]["data_prep"]  # We use this to prepare data
+    preserve_native_grid = data_prep_config.get("preserve_native_grid", False)
 
     # Step 2: Prepare the Data (if requested)
     if prepare_data:
         logger.info("Step 2: Preparing Hexel Data...")
+        weather_norm_params_path = _checkpoint_normalization_path(
+            data_config,
+            "spatialized_weather",
+            "weather_norm_params.json",
+            weather_norm_params_path,
+        )
+        fire_size_norm_params_path = _checkpoint_normalization_path(
+            data_config,
+            "spatialized_fire_size",
+            "fire_size_norm_params.json",
+            fire_size_norm_params_path,
+        )
         processed_data_dir = prepare_hexel_data(
             data_dir=data_dir,
             hex_id=hex_id,
@@ -356,8 +444,12 @@ def run_single_hexel_pipeline(
             overlap_ratio=data_prep_config["overlap_ratio"],
             modelling_approach=data_prep_config["modelling_approach"],
             mask_scope=data_scope,
+            ignition_weighting=data_prep_config.get("ignition_weighting", "distribution"),
+            fuel_representation=data_prep_config.get("fuel_representation", "raw"),
+            preserve_native_grid=preserve_native_grid,
             weather_norm_params_path=weather_norm_params_path,
             fire_size_norm_params_path=fire_size_norm_params_path,
+            checkpoint_data_config=data_config,
         )
     else:
         suffix = "" if data_scope == "actual" else f"_{data_scope}"
@@ -452,6 +544,7 @@ def run_single_hexel_pipeline(
             target_channel_index=target_channel_index,
             prediction_mask_channel_indices=prediction_mask_channel_indices,
             mask_scope=scope,
+            preserve_native_grid=preserve_native_grid,
         )
         gt_grid, reconstructed_target = load_target_grid_for_mask_scope(
             paths=all_paths,
@@ -461,6 +554,7 @@ def run_single_hexel_pipeline(
             mask_scope=scope,
             hex_id=hex_id,
             bp_nodata_as_zero=bp_nodata_as_zero,
+            preserve_native_grid=preserve_native_grid,
         )
         artifact_target_name = target.name if multi_target else None
         save_predicted_hexels(

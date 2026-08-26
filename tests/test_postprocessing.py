@@ -155,11 +155,13 @@ def test_load_target_grid_bp_nodata_zero_fill_is_configurable(monkeypatch, tmp_p
         def mask_grid_actual(self, hex_id):
             return tmp_path / f"hex{hex_id}_actual.shp"
 
-    monkeypatch.setattr(
-        post_utils,
-        "load_spatial_raster",
-        lambda *args, **kwargs: (np.array([[np.nan, 0.2]], dtype=np.float32), {"dtype": "float32"}),
-    )
+    raster_calls = []
+
+    def fake_load_spatial_raster(*args, **kwargs):
+        raster_calls.append(kwargs)
+        return np.array([[np.nan, 0.2]], dtype=np.float32), {"dtype": "float32"}
+
+    monkeypatch.setattr(post_utils, "load_spatial_raster", fake_load_spatial_raster)
     monkeypatch.setattr(
         post_utils,
         "apply_mask_scope_to_grids",
@@ -184,10 +186,51 @@ def test_load_target_grid_bp_nodata_zero_fill_is_configurable(monkeypatch, tmp_p
         mask_scope="actual",
         hex_id="01",
         bp_nodata_as_zero=True,
+        preserve_native_grid=True,
     )
 
     assert np.isnan(no_fill_gt[0, 0])
     assert fill_gt[0, 0] == pytest.approx(0.0)
+    assert raster_calls[0]["reproject_flag"] is True
+    assert raster_calls[1]["reproject_flag"] is False
+
+
+def test_get_predicted_hexel_preserves_native_reconstruction_shape(monkeypatch, tmp_path):
+    patch = np.ones((2, 3, 1), dtype=np.float32)
+    np.save(tmp_path / "sample.npy", patch)
+    metadata = pd.DataFrame(
+        [
+            {
+                "filename": "sample.npy",
+                "row": 0,
+                "col": 0,
+                "target_crop_h": 2,
+                "target_crop_w": 3,
+            }
+        ]
+    )
+    raster_calls = []
+
+    def fake_load_spatial_raster(*args, **kwargs):
+        raster_calls.append(kwargs)
+        return np.zeros((2, 3), dtype=np.float32), {"dtype": "float32"}
+
+    monkeypatch.setattr(post_utils, "load_spatial_raster", fake_load_spatial_raster)
+
+    reconstructed, _ = post_utils.get_predicted_hexel(
+        base_dir=str(tmp_path),
+        raw_data_dir=str(tmp_path),
+        test_df=metadata,
+        predictions=np.ones((1, 2, 3), dtype=np.float32),
+        min_target_val=None,
+        max_target_val=None,
+        hex_id="01",
+        out_norm="none",
+        preserve_native_grid=True,
+    )
+
+    assert reconstructed.shape == (2, 3)
+    assert raster_calls[0]["reproject_flag"] is False
 
 
 def test_prediction_support_policy_can_use_target_mask(tmp_path):

@@ -32,6 +32,9 @@ requeue_before_timeout() {
 trap requeue_before_timeout USR1
 
 train_args=(--config="$CONFIG")
+if [[ -n "${DATA_ROOT:-}" ]]; then
+    train_args+=(--data-root="$DATA_ROOT")
+fi
 if [[ "${SKIP_FINAL_HEXEL_ARTIFACTS:-0}" == "1" ]]; then
     train_args+=(--no_log_test_predicted_hexels --no_log_val_predicted_hexels)
 fi

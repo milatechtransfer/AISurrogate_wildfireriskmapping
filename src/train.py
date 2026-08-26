@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
         help="SLURM array task ID (or run index) used to derive a run-specific seed, save_dir, and "
         "Comet experiment name for parallel multi-seed runs (see run_files/train_no_tmp_copy_array.sh).",
     )
+    parser.add_argument("--data-root", type=str, default=None, help="Override config.data.root_dir.")
     return parser.parse_args()
 
 
@@ -69,6 +70,9 @@ def main() -> None:
 
     args = parse_args()
     config = load_config(args.config)
+    if args.data_root is not None:
+        config.data.root_dir = args.data_root
+        print(f"[Config] Overriding data.root_dir={config.data.root_dir}")
 
     if args.run_id is not None:
         run_seed = apply_run_id_overrides(config, args.run_id)

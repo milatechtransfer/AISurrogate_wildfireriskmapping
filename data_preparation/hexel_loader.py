@@ -8,6 +8,7 @@ import numpy as np
 from data_preparation.paths import Paths, normalize_mask_scope
 from data_preparation.spatial import (
     NODATA,
+    assert_raster_grids_match,
     load_fuel_grid,
     load_ignition_grid,
     load_ignition_grid_probability_mass,
@@ -49,6 +50,7 @@ def load_spatial_features_per_hexel(
     mask_scope: str = "actual",
     ignition_weighting: str = "distribution",
     fuel_representation: str = "raw",
+    preserve_native_grid: bool = False,
 ) -> tuple[np.ndarray | None, np.ndarray | None, dict[int, tuple[int, int]] | None]:
     """
     Load all data (features and output) per hexel
@@ -123,17 +125,41 @@ def load_spatial_features_per_hexel(
     scope = normalize_mask_scope(mask_scope)
     all_paths = Paths(hex_id=hex_id, root_dir=root_dir)
     scope_mask_path = all_paths.mask_grid(hex_id=hex_id, mask_scope=scope)
+    reproject_flag = not preserve_native_grid
+    if preserve_native_grid:
+        assert_raster_grids_match(
+            [
+                all_paths.elevation_grid(hex_id),
+                all_paths.fuel_grid(hex_id),
+                all_paths.firezones_grid(hex_id),
+                all_paths.output_burn_prob(),
+                all_paths.output_fire_intensity(),
+                all_paths.output_ros(),
+                *sorted(all_paths.ignition_prob_dir().glob("*.tif")),
+            ]
+        )
 
-    elevation_grid, reference_profile = load_spatial_raster(path=all_paths.elevation_grid(hex_id=hex_id), mask_path=scope_mask_path)
+    elevation_grid, reference_profile = load_spatial_raster(
+        path=all_paths.elevation_grid(hex_id=hex_id),
+        reproject_flag=reproject_flag,
+        mask_path=scope_mask_path,
+    )
+    alignment_profile = None if preserve_native_grid else reference_profile
     # load all common grids on the elevation reference grid
     fuel_grid = load_fuel_grid(
-        root_dir=root_dir, hex_id=hex_id, reference_profile=reference_profile, fuel_representation=fuel_representation, mask_scope=scope
+        root_dir=root_dir,
+        hex_id=hex_id,
+        reference_profile=alignment_profile,
+        fuel_representation=fuel_representation,
+        mask_scope=scope,
+        reproject_flag=reproject_flag,
     )
 
     firezones_grid, _ = load_spatial_raster(
         path=all_paths.firezones_grid(hex_id=hex_id),
+        reproject_flag=reproject_flag,
         mask_path=scope_mask_path,
-        reference_profile=reference_profile,
+        reference_profile=alignment_profile,
     )
 
     if modelling_approach == 1:
@@ -143,34 +169,45 @@ def load_spatial_features_per_hexel(
                 root_dir=root_dir,
                 hex_id=hex_id,
                 firezones_grid=firezones_grid,
-                reference_profile=reference_profile,
+                reference_profile=alignment_profile,
                 mask_scope=scope,
+                reproject_flag=reproject_flag,
             )
         elif ignition_weighting == "probability_mass":
             ignition_grid = load_ignition_grid_probability_mass(
                 root_dir=root_dir,
                 hex_id=hex_id,
                 firezones_grid=firezones_grid,
-                reference_profile=reference_profile,
+                reference_profile=alignment_profile,
                 mask_scope=scope,
+                reproject_flag=reproject_flag,
             )
         else:
-            ignition_grid = load_ignition_grid(root_dir=root_dir, hex_id=hex_id, reference_profile=reference_profile, mask_scope=scope)
+            ignition_grid = load_ignition_grid(
+                root_dir=root_dir,
+                hex_id=hex_id,
+                reference_profile=alignment_profile,
+                mask_scope=scope,
+                reproject_flag=reproject_flag,
+            )
 
         bp_out_grid, _ = load_spatial_raster(
             all_paths.output_burn_prob(),
+            reproject_flag=reproject_flag,
             mask_path=scope_mask_path,
-            reference_profile=reference_profile,
+            reference_profile=alignment_profile,
         )
         fi_out_grid, _ = load_spatial_raster(
             all_paths.output_fire_intensity(),
+            reproject_flag=reproject_flag,
             mask_path=scope_mask_path,
-            reference_profile=reference_profile,
+            reference_profile=alignment_profile,
         )
         ros_out_grid, _ = load_spatial_raster(
             all_paths.output_ros(),
+            reproject_flag=reproject_flag,
             mask_path=scope_mask_path,
-            reference_profile=reference_profile,
+            reference_profile=alignment_profile,
         )
 
         stacked_features, mask = stack_sample(

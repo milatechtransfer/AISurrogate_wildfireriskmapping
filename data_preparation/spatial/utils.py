@@ -83,6 +83,28 @@ def load_raster(path: str) -> np.ma.MaskedArray:
         return raster
 
 
+def assert_raster_grids_match(paths: Collection[Path]) -> None:
+    """Require rasters to share one exact CRS, affine grid, and shape."""
+    resolved = [Path(path) for path in paths]
+    if not resolved:
+        raise ValueError("At least one raster path is required.")
+
+    with rasterio.open(resolved[0]) as src:
+        reference = (src.crs, src.transform, src.width, src.height)
+
+    mismatches = []
+    for path in resolved[1:]:
+        with rasterio.open(path) as src:
+            candidate = (src.crs, src.transform, src.width, src.height)
+        if candidate != reference:
+            mismatches.append(path)
+
+    if mismatches:
+        raise ValueError(
+            f"Native-grid preparation requires exact raster alignment with {resolved[0]}; " f"mismatched rasters: {mismatches}"
+        )
+
+
 def load_spatial_raster(
     path: Path,
     reproject_flag: bool = True,

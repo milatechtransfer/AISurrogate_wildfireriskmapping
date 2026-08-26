@@ -82,8 +82,10 @@ If `prepare_data=True`, the pipeline will:
 
 1. Build weather tables
 2. Process fire size distributions
-3. Split hexel into patches
-4. Generate metadata CSV
+3. Reuse the checkpoint training normalization and ignition-count artifacts
+4. Reproduce the checkpoint's ignition weighting, fuel representation, and native-grid setting
+5. Split the hexel into patches
+6. Generate metadata CSV
 
 Note: The data preparation has to be done at least once before running inference, as it creates the necessary datasets for the prediction loop. If you have already prepared the data, you can set `prepare_data=False` to skip this step in subsequent runs. If you add more hexels later, you can run with `prepare_data=True` with the `hex_id` set to the new hexel to prepare just that hexel's data.
 

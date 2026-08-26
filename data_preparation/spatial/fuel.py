@@ -12,6 +12,7 @@ def load_fuel_grid(
     fuel_representation: str = "raw",
     reference_profile: dict[str, Any] | None = None,
     mask_scope: str = "actual",
+    reproject_flag: bool = True,
 ) -> np.ma.MaskedArray:
     """
     Load an FBP fuel raster and group fuel types if selected
@@ -21,6 +22,7 @@ def load_fuel_grid(
     all_paths = Paths(hex_id=hex_id, root_dir=root_dir)
     fuel_grid, _ = load_spatial_raster(
         all_paths.fuel_grid(hex_id=hex_id),
+        reproject_flag=reproject_flag,
         mask_path=all_paths.mask_grid(hex_id=hex_id, mask_scope=mask_scope),
         reference_profile=reference_profile,
     )

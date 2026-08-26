@@ -14,9 +14,12 @@ from src.utils import seed_everything
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--data-root", default=None, help="Override config.data.root_dir.")
     args = parser.parse_args()
 
     config = load_config(args.config)
+    if args.data_root is not None:
+        config.data.root_dir = args.data_root
     config.logger.enabled = False
     seed_everything(config.seed, config.deterministic)
     train_loader, _ = get_train_val_dataloader(config.data, config.modelling_approach, seed=config.seed)
