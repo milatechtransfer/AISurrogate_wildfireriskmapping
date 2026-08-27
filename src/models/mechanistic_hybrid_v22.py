@@ -247,6 +247,7 @@ class MechanisticHybridV22(nn.Module):
         self._quantile_channel_labels = [f"q{round(level * 100)}" for level in self.scenario_quantile_levels]
 
         self._pending_regularization_loss: torch.Tensor | None = None
+        self._pending_coarse_bp_probability: torch.Tensor | None = None
         self._last_diagnostics: dict[str, torch.Tensor] = {}
         self._last_cap_hit_rate = torch.tensor(0.0)
 
@@ -490,10 +491,16 @@ class MechanisticHybridV22(nn.Module):
         self._pending_regularization_loss = None
         return regularization
 
+    def pop_coarse_bp_probability(self) -> torch.Tensor | None:
+        coarse_bp_probability = self._pending_coarse_bp_probability
+        self._pending_coarse_bp_probability = None
+        return coarse_bp_probability
+
     def forward(self, x: torch.Tensor, x_auxiliary: dict[str, torch.Tensor] | None = None) -> torch.Tensor:
         if x_auxiliary is None or "fuel_curve" not in x_auxiliary:
             raise ValueError(f"{self.MODEL_NAME} requires a 'fuel_curve' tensor.")
         self._pending_regularization_loss = None
+        self._pending_coarse_bp_probability = None
         fuel_curve = x_auxiliary["fuel_curve"]
         if fuel_curve.shape[1] != 2 * self.curve_length:
             raise ValueError(f"Expected {2 * self.curve_length} concatenated iROS/HFI channels, got {fuel_curve.shape[1]}.")
@@ -614,6 +621,7 @@ class MechanisticHybridV22(nn.Module):
             coefficient_of_variation=coefficient_of_variation,
             per_fire_reach_scale=self.per_fire_reach_scale,
         )
+        self._pending_coarse_bp_probability = coarse_bp
 
         mean_log_speed_correction_coarse = log_speed_correction.mean(dim=1, keepdim=True)
         decoded = self.mechanistic_fusion(torch.cat([coarse_features, per_fire_reach, coarse_bp, mean_log_speed_correction_coarse], dim=1))

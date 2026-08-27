@@ -9,6 +9,7 @@ model:
   propagation_initial_additive_bp_hazard: 1.0e-4
   propagation_max_additive_bp_hazard: 0.2231435513142097
   propagation_additive_bp_hazard_weight: 0.1
+  propagation_coarse_bp_supervision_weight: 0.05
 
 data:
   root_dir: "/network/scratch/o/olutayot/nrcan_wildfireriskmapping/data_samples/data_samples_v6_native_context_512_crop_256_ignition_probability_mass_log_firesize"
@@ -105,5 +106,7 @@ logger:
     - "fire_size_neural_stats=frozen_equal_zone"
     - "fire_size_missing_mask=true"
     - "bp=bounded_multiplicative_plus_additive_hazard"
+    - "bp_supervision=final_plus_coarse_kl_ccc"
+    - "coarse_bp_supervision_weight=0.05"
     - "behavior=learned_heads_with_physical_consistency"
     - "best_ckpt=stitched_validation_hex_mean_ccc"

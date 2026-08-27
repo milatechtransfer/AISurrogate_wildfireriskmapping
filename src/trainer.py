@@ -8,6 +8,7 @@ from typing import Any, Literal, cast, overload
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.optim.lr_scheduler import LRScheduler, ReduceLROnPlateau
 from torch.utils.data import DataLoader
@@ -439,6 +440,20 @@ class Trainer:
             self.logger.log_params({"model_total_params": total_params, "model_trainable_params": trainable_params})
 
         self.loss_fn = self._build_loss()
+        self._coarse_bp_supervision_weight = self.config.model.propagation_coarse_bp_supervision_weight
+        self._coarse_bp_loss: WeightedLoss | None = None
+        if self._coarse_bp_supervision_weight > 0.0:
+            if "bp" not in self._target_names:
+                raise ValueError("Coarse BP supervision requires a configured BP target.")
+            if not callable(getattr(self.model, "pop_coarse_bp_probability", None)):
+                raise ValueError("model.propagation_coarse_bp_supervision_weight requires a model exposing pop_coarse_bp_probability().")
+            self._coarse_bp_loss = WeightedLoss(
+                losses={
+                    "kl": build_single_loss("kl"),
+                    "ccc": build_single_loss("ccc"),
+                },
+                weights={"kl": 0.5, "ccc": 0.5},
+            )
 
         # Setup optimizer
         opt_name = self.config.optimizer.name
@@ -800,6 +815,54 @@ class Trainer:
             raise ValueError(f"Invalid metrics found.Available options: {list(AVAILABLE_METRICS)}")
         self.metric_functions = {k: AVAILABLE_METRICS[k] for k in self.config.metrics}
 
+    def _compute_coarse_bp_supervision(
+        self,
+        coarse_probability: torch.Tensor,
+        targets: torch.Tensor,
+        masks: torch.Tensor,
+        full_spatial_shape: tuple[int, int],
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        if self._coarse_bp_loss is None:
+            raise RuntimeError("Coarse BP supervision loss was not configured.")
+        if coarse_probability.ndim != 4 or coarse_probability.shape[1] != 1:
+            raise ValueError(f"Expected coarse BP probability shape (B, 1, H, W), got {tuple(coarse_probability.shape)}.")
+        if coarse_probability.shape[0] != targets.shape[0]:
+            raise ValueError(f"Coarse BP batch size {coarse_probability.shape[0]} does not match target batch size {targets.shape[0]}.")
+
+        full_h, full_w = full_spatial_shape
+        coarse_h, coarse_w = coarse_probability.shape[-2:]
+        if full_h % coarse_h != 0 or full_w % coarse_w != 0:
+            raise ValueError(f"Full spatial shape {full_spatial_shape} must be divisible by coarse BP shape {(coarse_h, coarse_w)}.")
+        scale_h = full_h // coarse_h
+        scale_w = full_w // coarse_w
+        target_h, target_w = targets.shape[-2:]
+        if target_h % scale_h != 0 or target_w % scale_w != 0:
+            raise ValueError(f"Target shape {(target_h, target_w)} must be divisible by coarse BP scale {(scale_h, scale_w)}.")
+        supervised_h = target_h // scale_h
+        supervised_w = target_w // scale_w
+        row_slice, col_slice = centered_crop_slices(coarse_h, coarse_w, supervised_h, supervised_w)
+        coarse_probability = coarse_probability[..., row_slice, col_slice]
+
+        bp_idx = self._target_names.index("bp")
+        bp_target = targets[:, bp_idx : bp_idx + 1]
+        bp_mask = masks[:, bp_idx : bp_idx + 1].to(dtype=bp_target.dtype)
+        valid_fraction = F.adaptive_avg_pool2d(bp_mask, (supervised_h, supervised_w))
+        pooled_target = F.adaptive_avg_pool2d(bp_target * bp_mask, (supervised_h, supervised_w))
+        pooled_target = pooled_target / valid_fraction.clamp_min(1e-8)
+        pooled_mask = valid_fraction > 0.0
+
+        eps = self.config.model.propagation_logit_eps
+        coarse_logits = torch.logit(coarse_probability.clamp(eps, 1.0 - eps))
+        coarse_loss, coarse_parts = self._coarse_bp_loss(coarse_logits, pooled_target, pooled_mask)
+        weighted_loss = self._coarse_bp_supervision_weight * coarse_loss
+        loss_parts = {
+            "model/coarse_bp_kl": coarse_parts["kl"],
+            "model/coarse_bp_ccc": coarse_parts["ccc"],
+            "model/coarse_bp_total": coarse_loss,
+            "model/coarse_bp_weighted": weighted_loss,
+        }
+        return weighted_loss, loss_parts
+
     def _step(self, batch: Any) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor] | None, torch.Tensor, torch.Tensor]:
         """
         Default step. Expects batch -> {'grid': (inputs, targets, masks), 'tabular_weather': ...}.
@@ -820,6 +883,9 @@ class Trainer:
             auxiliary_data[key] = value.to(self.device)
 
         predictions = self.model(inputs, auxiliary_data)
+        full_spatial_shape = predictions.shape[-2:]
+        pop_coarse_bp_probability = getattr(self.model, "pop_coarse_bp_probability", None)
+        coarse_bp_probability = pop_coarse_bp_probability() if callable(pop_coarse_bp_probability) else None
         if predictions.shape[-2:] != targets.shape[-2:] or targets.shape[-2:] != masks.shape[-2:]:
             raise ValueError(
                 "Predictions, targets, and masks must share spatial dimensions before context cropping, got "
@@ -859,6 +925,19 @@ class Trainer:
                 total_loss = total_loss + regularization_loss
                 loss_parts = dict(loss_parts or {})
                 loss_parts["model/field_regularization"] = regularization_loss
+
+        if self._coarse_bp_loss is not None:
+            if coarse_bp_probability is None:
+                raise RuntimeError("Model did not provide the coarse BP probability required for supervision.")
+            coarse_bp_loss, coarse_bp_parts = self._compute_coarse_bp_supervision(
+                coarse_bp_probability,
+                targets,
+                masks,
+                full_spatial_shape,
+            )
+            total_loss = total_loss + coarse_bp_loss
+            loss_parts = dict(loss_parts or {})
+            loss_parts.update(coarse_bp_parts)
 
         metric_predictions = activate_target_predictions(predictions, self._target_specs)
         return metric_predictions, total_loss, loss_parts, targets, masks

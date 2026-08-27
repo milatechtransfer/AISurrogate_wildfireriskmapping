@@ -69,6 +69,7 @@ class ModelConfig(BaseModel):
     propagation_initial_additive_bp_hazard: float = Field(default=1e-4, gt=0.0)
     propagation_max_additive_bp_hazard: float = Field(default=0.2231435513142097, gt=0.0)
     propagation_additive_bp_hazard_weight: float = Field(default=0.1, ge=0.0)
+    propagation_coarse_bp_supervision_weight: float = Field(default=0.0, ge=0.0)
     propagation_budget_hours_per_step: float = Field(default=2.0, gt=0.0)
     propagation_budget_temperature_hours: float = Field(default=2.0, gt=0.0)
     propagation_budget_min_hours: float = Field(default=0.0, ge=0.0)

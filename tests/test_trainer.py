@@ -54,6 +54,26 @@ class RegularizedDummyModel(torch.nn.Module):
         return regularization_loss
 
 
+class CoarseBpDummyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.coarse_logits = torch.nn.Parameter(torch.zeros(1, 1, 4, 4))
+        self._coarse_probability = None
+
+    def forward(self, inputs, auxiliary_data):
+        del auxiliary_data
+        expected_shape = (self.coarse_logits.shape[-2] * 8, self.coarse_logits.shape[-1] * 8)
+        if inputs.shape[-2:] != expected_shape:
+            raise ValueError(f"Expected dummy input shape {expected_shape}, got {tuple(inputs.shape[-2:])}.")
+        self._coarse_probability = torch.sigmoid(self.coarse_logits).expand(inputs.shape[0], -1, -1, -1)
+        return torch.zeros_like(inputs)
+
+    def pop_coarse_bp_probability(self):
+        coarse_probability = self._coarse_probability
+        self._coarse_probability = None
+        return coarse_probability
+
+
 def dummy_metric(predictions, targets, masks):
     return torch.tensor(0.5)
 
@@ -676,6 +696,37 @@ def test_trainer_adds_model_regularization_to_total_loss(dummy_config, dummy_dat
     assert loss_parts is not None
     assert loss_parts["model/field_regularization"].item() == pytest.approx(0.25)
     assert trainer.model.pop_regularization_loss() is None
+
+
+def test_trainer_adds_center_cropped_coarse_bp_supervision(tmp_path, monkeypatch):
+    config = _make_config(tmp_path)
+    config.model.propagation_coarse_bp_supervision_weight = 0.05
+    config.data_prep = DataPrepConfig(win_h=32, win_w=32, target_crop_h=16, target_crop_w=16)
+    model = CoarseBpDummyModel()
+    monkeypatch.setattr("src.trainer.build_model", lambda **_kwargs: model)
+    trainer = Trainer(config, spatial_input_channels=1)
+    trainer.loss_fn = DummyLoss()
+    batch = next(iter(DataLoader(GridDataset(size=2), batch_size=2)))
+
+    _, loss, loss_parts, _, _ = trainer._step(batch)
+
+    assert loss.item() > 1.0
+    assert loss_parts is not None
+    assert set(loss_parts) == {
+        "model/coarse_bp_kl",
+        "model/coarse_bp_ccc",
+        "model/coarse_bp_total",
+        "model/coarse_bp_weighted",
+    }
+    assert loss_parts["model/coarse_bp_weighted"].item() == pytest.approx(0.05 * loss_parts["model/coarse_bp_total"].item())
+    assert trainer.model.pop_coarse_bp_probability() is None
+    loss.backward()
+    assert trainer.model.coarse_logits.grad is not None
+    assert torch.isfinite(trainer.model.coarse_logits.grad).all()
+    assert trainer.model.coarse_logits.grad[..., 1:3, 1:3].abs().sum() > 0.0
+    border_grad = trainer.model.coarse_logits.grad.clone()
+    border_grad[..., 1:3, 1:3] = 0.0
+    assert torch.equal(border_grad, torch.zeros_like(border_grad))
 
 
 def test_trainer_step_crops_predictions_targets_and_masks_to_center(tmp_path):

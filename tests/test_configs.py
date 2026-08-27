@@ -262,6 +262,7 @@ def test_mechanistic_hybrid_v23_config_uses_direct_log_fire_size_and_additive_ha
     assert config.model.propagation_fire_size_neural_std == pytest.approx(0.7868705075427128)
     assert config.model.propagation_max_additive_bp_hazard == pytest.approx(-math.log(0.8))
     assert config.model.propagation_additive_bp_hazard_weight == pytest.approx(0.1)
+    assert config.model.propagation_coarse_bp_supervision_weight == pytest.approx(0.05)
     fire_size = next(source.params for source in config.data.input_sources if source.name == "spatialized_fire_size")
     assert isinstance(fire_size, SpatializedTabularParams)
     assert fire_size.feature_names_list == ["LOG_SIZE_HA"]

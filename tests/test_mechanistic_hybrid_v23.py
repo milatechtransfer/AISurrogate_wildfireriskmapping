@@ -167,13 +167,18 @@ def test_forward_backward_is_finite_and_additive_head_trains() -> None:
 
     output = model(x, auxiliary)
     regularization = model.pop_regularization_loss()
+    coarse_bp = model.pop_coarse_bp_probability()
     assert regularization is not None
+    assert coarse_bp is not None
     loss = output.square().mean() + regularization
     loss.backward()
 
     assert output.shape == (1, 3, 32, 32)
+    assert coarse_bp.shape == (1, 1, 4, 4)
+    assert torch.all((coarse_bp >= 0.0) & (coarse_bp <= 1.0))
     assert torch.isfinite(output).all()
     assert torch.isfinite(loss)
+    assert model.pop_coarse_bp_probability() is None
     assert model.bp_additive_hazard.weight.grad is not None
     assert torch.isfinite(model.bp_additive_hazard.weight.grad).all()
     assert model.diagnostic_metrics()["mean_additive_bp_hazard"] == pytest.approx(1e-4, rel=1e-4)
