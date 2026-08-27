@@ -86,6 +86,40 @@ def _checkpoint_normalization_path(
     return path
 
 
+def _uses_direct_log_fire_size(data_config: dict[str, Any] | None) -> bool:
+    if data_config is None:
+        return False
+    source = _configured_source(data_config, "spatialized_fire_size")
+    if source is None:
+        return False
+    params = source.get("params", {})
+    return (
+        params.get("feature_names_list") == ["LOG_SIZE_HA"]
+        and params.get("include_missing_firezone_mask") is True
+        and bool(params.get("global_fill_csv_name"))
+    )
+
+
+def _copy_direct_log_fire_size_artifacts(data_config: dict[str, Any], processed_data_dir: Path) -> None:
+    if not _uses_direct_log_fire_size(data_config):
+        return
+    source = _configured_source(data_config, "spatialized_fire_size")
+    assert source is not None
+    params = source.get("params", {})
+    global_fill_csv_name = params.get("global_fill_csv_name")
+    if not global_fill_csv_name:
+        raise ValueError("Direct log-hectare fire size requires params.global_fill_csv_name.")
+
+    training_root = Path(str(data_config["root_dir"]))
+    for filename in (str(global_fill_csv_name), "fire_size_log_stats.json"):
+        source_path = training_root / filename
+        if not source_path.is_file():
+            raise FileNotFoundError(f"Checkpoint direct-log fire-size artifact not found: {source_path}")
+        destination_path = processed_data_dir / filename
+        if source_path.resolve() != destination_path.resolve():
+            shutil.copy2(source_path, destination_path)
+
+
 def _copy_ignition_count_artifacts(
     data_config: dict[str, Any],
     processed_data_dir: Path,
@@ -178,12 +212,14 @@ def prepare_hexel_data(
     processed_data_dir.mkdir(parents=True, exist_ok=True)
     (processed_data_dir / "numpy_files").mkdir(parents=True, exist_ok=True)
 
+    direct_log_fire_size = _uses_direct_log_fire_size(checkpoint_data_config)
     if weather_norm_params_path is None:
         weather_norm_params_path = processed_data_dir / "weather_norm_params.json"
-    if fire_size_norm_params_path is None:
+    if fire_size_norm_params_path is None and not direct_log_fire_size:
         fire_size_norm_params_path = processed_data_dir / "fire_size_norm_params.json"
     if checkpoint_data_config is not None:
         _copy_ignition_count_artifacts(checkpoint_data_config, processed_data_dir, hex_id)
+        _copy_direct_log_fire_size_artifacts(checkpoint_data_config, processed_data_dir)
 
     weather_table_path = processed_data_dir / "weather_table_processed.csv"
     logger.info("Building weather table...")
@@ -193,9 +229,22 @@ def prepare_hexel_data(
     fire_size_output = processed_data_dir / "df_fire_fru_processed.csv"
     if fire_size_input.exists():
         logger.info("Processing fire size distribution table...")
-        process_fire_size_distribution_table(
-            input_path=fire_size_input, output_path=fire_size_output, norm_params_path=fire_size_norm_params_path
-        )
+        if direct_log_fire_size:
+            if fire_size_norm_params_path is not None:
+                raise ValueError("Direct log-hectare fire size does not accept a min-max normalization artifact.")
+            process_fire_size_distribution_table(
+                input_path=fire_size_input,
+                output_path=fire_size_output,
+                normalization="none",
+                add_synthetic_zone_36=False,
+                excluded_gridcodes={36},
+            )
+        else:
+            process_fire_size_distribution_table(
+                input_path=fire_size_input,
+                output_path=fire_size_output,
+                norm_params_path=fire_size_norm_params_path,
+            )
 
     # Load features for the hexel
     feature_channel_map_path = processed_data_dir / f"feature_channel_map_{modelling_approach}.json"
@@ -428,12 +477,15 @@ def run_single_hexel_pipeline(
             "weather_norm_params.json",
             weather_norm_params_path,
         )
-        fire_size_norm_params_path = _checkpoint_normalization_path(
-            data_config,
-            "spatialized_fire_size",
-            "fire_size_norm_params.json",
-            fire_size_norm_params_path,
-        )
+        if _uses_direct_log_fire_size(data_config):
+            fire_size_norm_params_path = None
+        else:
+            fire_size_norm_params_path = _checkpoint_normalization_path(
+                data_config,
+                "spatialized_fire_size",
+                "fire_size_norm_params.json",
+                fire_size_norm_params_path,
+            )
         processed_data_dir = prepare_hexel_data(
             data_dir=data_dir,
             hex_id=hex_id,

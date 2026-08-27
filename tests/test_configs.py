@@ -35,6 +35,7 @@ MECHANISTIC_V3_PILOT_CONFIG = Path("configs/mechanistic/mechanistic_propagation_
 MECHANISTIC_V4_CONFIG = Path("configs/mechanistic/mechanistic_travel_time_v4_512_crop_256_spread_opportunity_q3.yaml")
 GRAY_BOX_PHYSICS_V3_CONFIG = Path("configs/mechanistic/gray_box_physics_v3_512_crop_256_firesize_q3.yaml")
 MECHANISTIC_HYBRID_V22_CONFIG = Path("configs/mechanistic/mechanistic_hybrid_v22_native_512_crop_256_firesize_q3.yaml")
+MECHANISTIC_HYBRID_V23_CONFIG = Path("configs/mechanistic/mechanistic_hybrid_v23_native_512_crop_256_firesize_q3.yaml")
 COUNT_UNET_CONFIG = Path("configs/context_models/unet_512_crop_256_firesize_q3_ignition_count.yaml")
 FIRE_SIZE_UNET_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3.yaml")
 COUNT_UNET_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3_ignition_count.yaml")
@@ -247,6 +248,27 @@ def test_mechanistic_hybrid_v22_config_is_native_scratch_q3() -> None:
     assert fire_size.quantiles == [0.1, 0.5, 0.9]
     assert config.evaluation.best_ckpt_metrics == ["hex/mean/ccc"]
     assert config.evaluation.best_ckpt_metrics_mode == ["max"]
+
+
+def test_mechanistic_hybrid_v23_config_uses_direct_log_fire_size_and_additive_hazard() -> None:
+    config = load_resolved_config(MECHANISTIC_HYBRID_V23_CONFIG)
+
+    assert config.model.architecture == "mechanistic_hybrid_v23"
+    assert config.seed == 42
+    assert config.training.initial_checkpoint is None
+    assert config.data_prep.preserve_native_grid
+    assert config.data_prep.resolved_target_crop() == (256, 256)
+    assert config.model.propagation_fire_size_neural_mean == pytest.approx(2.689850106599859)
+    assert config.model.propagation_fire_size_neural_std == pytest.approx(0.7868705075427128)
+    assert config.model.propagation_max_additive_bp_hazard == pytest.approx(-math.log(0.8))
+    assert config.model.propagation_additive_bp_hazard_weight == pytest.approx(0.1)
+    fire_size = next(source.params for source in config.data.input_sources if source.name == "spatialized_fire_size")
+    assert isinstance(fire_size, SpatializedTabularParams)
+    assert fire_size.feature_names_list == ["LOG_SIZE_HA"]
+    assert fire_size.quantiles == [0.1, 0.5, 0.9]
+    assert fire_size.include_missing_firezone_mask
+    assert fire_size.global_fill_csv_name == "fire_size_global_fill.csv"
+    assert config.evaluation.best_ckpt_metrics == ["hex/mean/ccc"]
 
 
 def test_mechanistic_v3_resolves_scenario_budget_contract():

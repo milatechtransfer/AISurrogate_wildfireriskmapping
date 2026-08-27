@@ -2,6 +2,7 @@ import math
 import os
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -59,8 +60,11 @@ def process_fire_size_df(
     df_fire_size: pd.DataFrame,
     train_firezone_ids: set[int] | None = None,
     norm_params_path: str | Path | None = None,
+    normalization: Literal["min_max", "none"] = "min_max",
+    add_synthetic_zone_36: bool = True,
+    excluded_gridcodes: set[int] | None = None,
 ) -> pd.DataFrame:
-    """Log-transform and min-max normalize per-zone fire sizes.
+    """Convert hectares to log-hectares, with optional legacy min-max normalization.
 
     Args:
         df_fire_size: Raw fire-size distribution table (must contain the FIRE_SIZE_FEATURE_COLS).
@@ -73,6 +77,11 @@ def process_fire_size_df(
             - If the file exists: parameters are loaded and applied (inference mode).
             - If the file does not exist: parameters are fitted and saved for reuse.
             - If None: parameters are fitted but not saved.
+        normalization: ``"min_max"`` preserves the legacy normalized feature; ``"none"`` returns
+            physical ``LOG_SIZE_HA = log10(1 + SIZE_HA)`` without dataset-specific scaling.
+        add_synthetic_zone_36: Preserve the legacy synthetic zero-hectare row for zone 36. Direct
+            log-hectare models disable this so zone 36 uses the explicit missing-zone fallback.
+        excluded_gridcodes: Optional fire-zone IDs to remove before producing features.
     """
     # Apply column aliases before validation so alternate naming conventions are accepted.
     _FIRE_SIZE_COLUMN_ALIASES = {"FRU": "GRIDCODE", "Fsize": "SIZE_HA"}
@@ -91,14 +100,25 @@ def process_fire_size_df(
             f"Available columns: {list(df_fire_size.columns)}"
         )
     df_fire_size = df_fire_size[FIRE_SIZE_FEATURE_COLS].copy()
-    zone_36 = {"GRIDCODE": 36, "SIZE_HA": 0}  # Consulted with experts and concluded that imputing with 0 is most reasonable
-    if 36 not in df_fire_size["GRIDCODE"].values:
+    if (df_fire_size["SIZE_HA"] < 0).any():
+        raise ValueError("Fire size hectares must be non-negative.")
+    if excluded_gridcodes:
+        df_fire_size = df_fire_size[~df_fire_size["GRIDCODE"].astype(int).isin(excluded_gridcodes)].copy()
+
+    zone_36 = {"GRIDCODE": 36, "SIZE_HA": 0}
+    if add_synthetic_zone_36 and 36 not in df_fire_size["GRIDCODE"].values:
         df_fire_size = pd.concat(
             [df_fire_size, pd.DataFrame([zone_36])],
             ignore_index=True,
-        )  # Only append synthetic zone 36 if it is not already present, and avoid duplicate indices
+        )
 
     df_fire_size["LOG_SIZE_HA"] = np.log10(df_fire_size["SIZE_HA"] + 1)
+    if normalization == "none":
+        if norm_params_path is not None:
+            raise ValueError("norm_params_path must be omitted when normalization='none'.")
+        return df_fire_size
+    if normalization != "min_max":
+        raise ValueError(f"Unsupported fire-size normalization {normalization!r}.")
 
     if norm_params_path is not None and Path(norm_params_path).exists():
         # ── Apply pre-fitted parameters (inference / reuse mode) ──────────────

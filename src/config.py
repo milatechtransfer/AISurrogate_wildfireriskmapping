@@ -62,8 +62,13 @@ class ModelConfig(BaseModel):
     propagation_scenario_mode: Literal["burn_hours", "fire_size"] = "burn_hours"
     propagation_fire_size_log_min: float = 0.0
     propagation_fire_size_log_max: float = 1.0
+    propagation_fire_size_neural_mean: float = 0.0
+    propagation_fire_size_neural_std: float = Field(default=1.0, gt=0.0)
     propagation_initial_bp_scale: float = Field(default=0.1, gt=0.0)
     propagation_max_local_log_calibration: float = Field(default=0.6931471805599453, ge=0.0)
+    propagation_initial_additive_bp_hazard: float = Field(default=1e-4, gt=0.0)
+    propagation_max_additive_bp_hazard: float = Field(default=0.2231435513142097, gt=0.0)
+    propagation_additive_bp_hazard_weight: float = Field(default=0.1, ge=0.0)
     propagation_budget_hours_per_step: float = Field(default=2.0, gt=0.0)
     propagation_budget_temperature_hours: float = Field(default=2.0, gt=0.0)
     propagation_budget_min_hours: float = Field(default=0.0, ge=0.0)
@@ -131,6 +136,8 @@ class ModelConfig(BaseModel):
             raise ValueError("propagation_count_cv_max must exceed propagation_count_cv_min.")
         if self.propagation_fire_size_log_max <= self.propagation_fire_size_log_min:
             raise ValueError("propagation_fire_size_log_max must exceed propagation_fire_size_log_min.")
+        if self.propagation_initial_additive_bp_hazard >= self.propagation_max_additive_bp_hazard:
+            raise ValueError("propagation_initial_additive_bp_hazard must be below propagation_max_additive_bp_hazard.")
         if self.propagation_budget_max_hours <= self.propagation_budget_min_hours:
             raise ValueError("propagation_budget_max_hours must exceed propagation_budget_min_hours.")
         if len(self.propagation_isi_bins) < 2:
@@ -143,8 +150,7 @@ class ModelConfig(BaseModel):
             raise ValueError("propagation_wind_anisotropy_max must exceed propagation_wind_anisotropy_min.")
         if not self.propagation_wind_anisotropy_min < self.propagation_wind_anisotropy < self.propagation_wind_anisotropy_max:
             raise ValueError(
-                "propagation_wind_anisotropy must be strictly between "
-                "propagation_wind_anisotropy_min and propagation_wind_anisotropy_max."
+                "propagation_wind_anisotropy must be strictly between propagation_wind_anisotropy_min and propagation_wind_anisotropy_max."
             )
         if not (self.interpretable_min_ignition_rate < self.interpretable_initial_ignition_rate < self.interpretable_max_ignition_rate):
             raise ValueError(

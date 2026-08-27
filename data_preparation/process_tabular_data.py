@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -143,6 +144,9 @@ def process_fire_size_distribution_table(
     output_path: Path,
     train_firezone_ids: set[int] | None = None,
     norm_params_path: Path | None = None,
+    normalization: Literal["min_max", "none"] = "min_max",
+    add_synthetic_zone_36: bool = True,
+    excluded_gridcodes: set[int] | None = None,
 ):
     """
     Processes the fire size distribution table.
@@ -157,12 +161,18 @@ def process_fire_size_distribution_table(
             - If the file exists: parameters are loaded and applied (inference mode).
             - If the file does not exist: parameters are fitted and saved for reuse.
             - If None: parameters are fitted but not saved.
+        normalization: ``"min_max"`` for the legacy feature or ``"none"`` for direct log-hectares.
+        add_synthetic_zone_36: Whether to insert the legacy synthetic zero-hectare zone 36 row.
+        excluded_gridcodes: Optional fire-zone IDs to remove before producing features.
     """
     df_fire_size = pd.read_csv(input_path)
     df_fire_size_processed = process_fire_size_df(
         df_fire_size,
         train_firezone_ids=train_firezone_ids,
         norm_params_path=norm_params_path,
+        normalization=normalization,
+        add_synthetic_zone_36=add_synthetic_zone_36,
+        excluded_gridcodes=excluded_gridcodes,
     )
     df_fire_size_processed.to_csv(output_path, index=False)
     logger.info(

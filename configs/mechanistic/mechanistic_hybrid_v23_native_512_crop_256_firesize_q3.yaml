@@ -1,0 +1,109 @@
+extends: "mechanistic_hybrid_v22_native_512_crop_256_firesize_q3.yaml"
+
+save_dir: "experiments/mechanistic/mechanistic_hybrid_v23_native_512_crop_256_firesize_q3"
+
+model:
+  architecture: "mechanistic_hybrid_v23"
+  propagation_fire_size_neural_mean: 2.689850106599859
+  propagation_fire_size_neural_std: 0.7868705075427128
+  propagation_initial_additive_bp_hazard: 1.0e-4
+  propagation_max_additive_bp_hazard: 0.2231435513142097
+  propagation_additive_bp_hazard_weight: 0.1
+
+data:
+  root_dir: "/network/scratch/o/olutayot/nrcan_wildfireriskmapping/data_samples/data_samples_v6_native_context_512_crop_256_ignition_probability_mass_log_firesize"
+  input_sources:
+    - name: "grid"
+      params:
+        feature_names_list: ["ignition_grid_human", "ignition_grid_lightning", "fuel_grid", "elevation_grid"]
+        targets:
+          - name: "bp"
+            out_norm: "none"
+          - name: "fi"
+            out_norm: "log_standard"
+            log_mean: 7.9690247380067625
+            log_std: 1.144906248575859
+          - name: "ros"
+            out_norm: "log_standard"
+            log_mean: 1.7871663060985448
+            log_std: 0.5520388934154877
+        fuel_feats_encoding: "iROS_HFI"
+        normalize_fuel_feats_ordinal: false
+        transforms_list: []
+        augmentation_prob: 0.0
+        terrain_derivatives: []
+        terrain_cell_size_m: 100.0
+        bp_nodata_as_zero: true
+
+    - name: "spatialized_weather"
+      params:
+        csv_name: "weather_table_processed.csv"
+        feature_names_list: ["InitialSpreadIndex", "wind_x", "wind_y"]
+        fire_weather_zone_id_col: "WeatherZone"
+        fire_weather_zone_selection_approach: "mode"
+        hex_id_col: "hex_id"
+        aggregation: "mean"
+        zone_channel_key: "firezones_grid"
+        missing_value_strategy: "global_mean"
+        include_missing_firezone_mask: false
+        shuffle_lut: false
+        shuffle_seed: 42
+        transforms_list: []
+        augmentation_prob: 0.0
+
+    - name: "spatialized_fire_size"
+      params:
+        csv_name: "df_fire_fru_processed.csv"
+        feature_names_list: ["LOG_SIZE_HA"]
+        fire_weather_zone_id_col: "GRIDCODE"
+        fire_weather_zone_selection_approach: "mode"
+        aggregation: "mean"
+        quantiles: [0.1, 0.5, 0.9]
+        zone_channel_key: "firezones_grid"
+        missing_value_strategy: "global_mean"
+        global_fill_csv_name: "fire_size_global_fill.csv"
+        include_missing_firezone_mask: true
+        shuffle_lut: false
+        shuffle_seed: 42
+        transforms_list: []
+        augmentation_prob: 0.0
+
+    - name: "spatialized_ignition_count"
+      params:
+        csv_name: "ignition_count_processed.csv"
+        feature_names_list:
+          - "NORM_LOG1P_IGNITION_COUNT_MEAN"
+          - "NORM_IGNITION_COUNT_CV"
+        fire_weather_zone_id_col: "GRIDCODE"
+        fire_weather_zone_selection_approach: "mode"
+        hex_id_col: "hex_id"
+        aggregation: "mean"
+        zone_channel_key: "firezones_grid"
+        missing_value_strategy: "raise"
+        include_missing_firezone_mask: false
+        shuffle_lut: false
+        shuffle_seed: 42
+        transforms_list: []
+        augmentation_prob: 0.0
+
+logger:
+  experiment_name: "mechanistic_hybrid_v23_native_512_crop_256_firesize_q3"
+  tags:
+    - "mechanistic_hybrid_v23"
+    - "training=scratch"
+    - "seed=42"
+    - "grid=native_100m"
+    - "input_patch=512"
+    - "target_crop=256"
+    - "effective_batch=64"
+    - "fuel=iROS_HFI"
+    - "ignition=exact_probability_mass"
+    - "ignition_count=mean_plus_cv_pgf"
+    - "propagation=source_factorized_travel_time"
+    - "propagation_steps=16"
+    - "fire_size=direct_log_hectares_q10_q50_q90"
+    - "fire_size_neural_stats=frozen_equal_zone"
+    - "fire_size_missing_mask=true"
+    - "bp=bounded_multiplicative_plus_additive_hazard"
+    - "behavior=learned_heads_with_physical_consistency"
+    - "best_ckpt=stitched_validation_hex_mean_ccc"

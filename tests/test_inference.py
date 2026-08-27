@@ -1,10 +1,13 @@
+import pandas as pd
 import pytest
 import torch
 
 from inference import run_ai_surrogate_model_hexel_inference as inference_module
 from inference.predictor import BurnRiskPredictor
 from inference.run_ai_surrogate_model_hexel_inference import (
+    _copy_direct_log_fire_size_artifacts,
     _copy_ignition_count_artifacts,
+    _uses_direct_log_fire_size,
     create_dataset,
     get_grid_params_from_data_config,
     get_target_params_from_grid_config,
@@ -151,7 +154,7 @@ def test_inference_copies_checkpoint_ignition_count_artifacts(tmp_path):
     training_root.mkdir()
     processed_dir.mkdir()
     (training_root / "ignition_count_processed.csv").write_text(
-        "hex_id,GRIDCODE,NORM_LOG1P_IGNITION_COUNT_MEAN,NORM_IGNITION_COUNT_CV\n" "1,10,0.5,0.25\n"
+        "hex_id,GRIDCODE,NORM_LOG1P_IGNITION_COUNT_MEAN,NORM_IGNITION_COUNT_CV\n1,10,0.5,0.25\n"
     )
     (training_root / "ignition_count_norm_params.json").write_text('{"version": 1}\n')
 
@@ -174,6 +177,51 @@ def test_inference_copies_checkpoint_ignition_count_artifacts(tmp_path):
 
     assert (processed_dir / "ignition_count_processed.csv").read_text() == (training_root / "ignition_count_processed.csv").read_text()
     assert (processed_dir / "ignition_count_norm_params.json").read_text() == '{"version": 1}\n'
+
+
+def test_inference_copies_checkpoint_direct_log_fire_size_artifacts(tmp_path):
+    training_root = tmp_path / "training"
+    processed_dir = tmp_path / "processed"
+    training_root.mkdir()
+    processed_dir.mkdir()
+    (training_root / "fire_size_global_fill.csv").write_text("GRIDCODE,LOG_SIZE_HA\n1,2.0\n")
+    (training_root / "fire_size_log_stats.json").write_text('{"contract": "log10_1p_hectares"}\n')
+
+    _copy_direct_log_fire_size_artifacts(
+        {
+            "root_dir": str(training_root),
+            "input_sources": [
+                {
+                    "name": "spatialized_fire_size",
+                    "params": {
+                        "feature_names_list": ["LOG_SIZE_HA"],
+                        "global_fill_csv_name": "fire_size_global_fill.csv",
+                        "include_missing_firezone_mask": True,
+                    },
+                }
+            ],
+        },
+        processed_dir,
+    )
+
+    assert (processed_dir / "fire_size_global_fill.csv").read_text() == "GRIDCODE,LOG_SIZE_HA\n1,2.0\n"
+    assert (processed_dir / "fire_size_log_stats.json").read_text() == '{"contract": "log10_1p_hectares"}\n'
+
+
+def test_inference_does_not_treat_legacy_log_fire_size_as_v23() -> None:
+    assert not _uses_direct_log_fire_size(
+        {
+            "input_sources": [
+                {
+                    "name": "spatialized_fire_size",
+                    "params": {
+                        "feature_names_list": ["LOG_SIZE_HA"],
+                        "include_missing_firezone_mask": False,
+                    },
+                }
+            ]
+        }
+    )
 
 
 def test_inference_preparation_forwards_checkpoint_spatial_modes(tmp_path, monkeypatch):
@@ -207,6 +255,54 @@ def test_inference_preparation_forwards_checkpoint_spatial_modes(tmp_path, monke
     assert captured["ignition_weighting"] == "probability_mass"
     assert captured["fuel_representation"] == "raw"
     assert captured["preserve_native_grid"] is True
+
+
+def test_inference_prepares_direct_log_fire_size_without_zone36_or_minmax(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    training_root = tmp_path / "training"
+    (data_dir / "hex01").mkdir(parents=True)
+    training_root.mkdir()
+    (data_dir / "df_fire_fru.csv").write_text("GRIDCODE,SIZE_HA\n1,99\n36,99\n")
+    (training_root / "fire_size_global_fill.csv").write_text("GRIDCODE,LOG_SIZE_HA\n1,2.0\n")
+    (training_root / "fire_size_log_stats.json").write_text('{"contract": "log10_1p_hectares"}\n')
+
+    monkeypatch.setattr(inference_module, "build_weather_table", lambda **_kwargs: None)
+    monkeypatch.setattr(inference_module, "find_hex_ids", lambda _root: ["01"])
+    monkeypatch.setattr(
+        inference_module,
+        "load_spatial_features_per_hexel",
+        lambda **_kwargs: (
+            torch.zeros(1, 2, 2, 1).numpy(),
+            torch.ones(1, 2, 2, dtype=torch.bool).numpy(),
+            {0: (0, 0)},
+        ),
+    )
+    monkeypatch.setattr(inference_module, "get_split_hexel_window", lambda **_kwargs: None)
+
+    processed_dir = prepare_hexel_data(
+        data_dir=data_dir,
+        hex_id="01",
+        win_h=2,
+        win_w=2,
+        checkpoint_data_config={
+            "root_dir": str(training_root),
+            "input_sources": [
+                {
+                    "name": "spatialized_fire_size",
+                    "params": {
+                        "feature_names_list": ["LOG_SIZE_HA"],
+                        "global_fill_csv_name": "fire_size_global_fill.csv",
+                        "include_missing_firezone_mask": True,
+                    },
+                }
+            ],
+        },
+    )
+
+    fire_size = pd.read_csv(processed_dir / "df_fire_fru_processed.csv")
+    assert fire_size.columns.tolist() == ["GRIDCODE", "SIZE_HA", "LOG_SIZE_HA"]
+    assert set(fire_size["GRIDCODE"]) == {1}
+    assert not (processed_dir / "fire_size_norm_params.json").exists()
 
 
 class ConstantModel(torch.nn.Module):

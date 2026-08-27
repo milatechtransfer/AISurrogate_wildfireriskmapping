@@ -54,6 +54,9 @@ def _split_curve_stat(stat: torch.Tensor | None, curve_length: int, default_valu
 class MechanisticHybridV22(nn.Module):
     """1/8-resolution CNN encoder-decoder fused with a source-cohort physical travel-time model."""
 
+    MODEL_NAME = "MechanisticHybridV22"
+    FIRE_SIZE_CHANNEL_PREFIX = "spatialized_fire_size/NORM_LOG_SIZE_HA_q"
+
     DIRECTIONS = (
         (-1, 0),
         (-1, 1),
@@ -79,9 +82,9 @@ class MechanisticHybridV22(nn.Module):
         super().__init__()
         normalized_targets = [get_target_spec(name).name for name in target_names]
         if len(normalized_targets) != 3 or set(normalized_targets) != {"bp", "fi", "ros"}:
-            raise ValueError(f"MechanisticHybridV22 requires bp, fi, and ros targets, got {normalized_targets}.")
+            raise ValueError(f"{self.MODEL_NAME} requires bp, fi, and ros targets, got {normalized_targets}.")
         if model_config.output_head != "bp_behavior":
-            raise ValueError("MechanisticHybridV22 requires output_head='bp_behavior'.")
+            raise ValueError(f"{self.MODEL_NAME} requires output_head='bp_behavior'.")
         if len(spatial_input_names) != input_channels:
             raise ValueError(
                 f"Expected {input_channels} semantic spatial input names, got {len(spatial_input_names)}: {spatial_input_names}."
@@ -89,17 +92,17 @@ class MechanisticHybridV22(nn.Module):
         curve_length = len(model_config.propagation_isi_bins)
         if fuel_curve_input_dim != 2 * curve_length:
             raise ValueError(
-                "MechanisticHybridV22 requires concatenated iROS and HFI curves: "
+                f"{self.MODEL_NAME} requires concatenated iROS and HFI curves: "
                 f"expected {2 * curve_length} channels, got {fuel_curve_input_dim}."
             )
         if fuel_curve_embed_dim < 2:
-            raise ValueError("MechanisticHybridV22 requires fuel_curve_embed_dim >= 2 to embed iROS and HFI separately.")
+            raise ValueError(f"{self.MODEL_NAME} requires fuel_curve_embed_dim >= 2 to embed iROS and HFI separately.")
 
         self.spatial_input_names = list(spatial_input_names)
         self.target_names = normalized_targets
         self.curve_length = curve_length
         if model_config.propagation_downsample_factor != 8:
-            raise ValueError("MechanisticHybridV22 requires propagation_downsample_factor=8.")
+            raise ValueError(f"{self.MODEL_NAME} requires propagation_downsample_factor=8.")
         self.downsample_factor = model_config.propagation_downsample_factor
 
         self.ignition_indices = self._indices_with_suffix(("ignition_grid_human", "ignition_grid_lightning"))
@@ -110,7 +113,7 @@ class MechanisticHybridV22(nn.Module):
         self.wind_x_index = self._single_index("wind_x")
         self.wind_y_index = self._single_index("wind_y")
 
-        scenario_prefix = "spatialized_fire_size/NORM_LOG_SIZE_HA_q"
+        scenario_prefix = self.FIRE_SIZE_CHANNEL_PREFIX
         scenario_channels: list[tuple[float, int]] = []
         for index, name in enumerate(self.spatial_input_names):
             if name.startswith(scenario_prefix):
@@ -120,7 +123,7 @@ class MechanisticHybridV22(nn.Module):
                 scenario_channels.append((float(label) / 100.0, index))
         scenario_channels.sort()
         if not scenario_channels:
-            raise ValueError(f"MechanisticHybridV22 requires channels prefixed by {scenario_prefix!r}.")
+            raise ValueError(f"{self.MODEL_NAME} requires channels prefixed by {scenario_prefix!r}.")
         self.scenario_quantile_levels = [level for level, _ in scenario_channels]
         self.scenario_indices = [index for _, index in scenario_channels]
 
@@ -445,6 +448,32 @@ class MechanisticHybridV22(nn.Module):
         hazard = -torch.log1p(-physical_bp.clamp(0.0, 1.0 - 1e-7))
         return -torch.expm1(-hazard * torch.exp(delta))
 
+    def _neural_encoder_input(self, x: torch.Tensor) -> torch.Tensor:
+        return x
+
+    def _physical_fire_size_log10_ha(self, scenario_values: torch.Tensor) -> torch.Tensor:
+        return self.fire_size_log_min + scenario_values * (self.fire_size_log_max - self.fire_size_log_min)
+
+    def _coarse_scenario_values(
+        self,
+        x: torch.Tensor,
+        fine_burnability: torch.Tensor,
+        coarse_burnability: torch.Tensor,
+    ) -> torch.Tensor:
+        return self._weighted_pool(x[:, self.scenario_indices], fine_burnability, coarse_burnability).clamp_min(0.0)
+
+    def _calibrate_bp(
+        self,
+        *,
+        physical_bp: torch.Tensor,
+        decoded: torch.Tensor,
+        fine_burnability: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        del fine_burnability
+        delta = self.max_local_log_calibration * torch.tanh(self.bp_local_calibration(decoded))
+        probability = self._bp_hazard_correction(physical_bp, delta)
+        return probability, physical_bp.new_zeros(()), {}
+
     def diagnostic_metrics(self) -> dict[str, float]:
         metrics = {
             "wind_anisotropy": float(self.wind_anisotropy.detach().cpu()),
@@ -463,7 +492,7 @@ class MechanisticHybridV22(nn.Module):
 
     def forward(self, x: torch.Tensor, x_auxiliary: dict[str, torch.Tensor] | None = None) -> torch.Tensor:
         if x_auxiliary is None or "fuel_curve" not in x_auxiliary:
-            raise ValueError("MechanisticHybridV22 requires a 'fuel_curve' tensor.")
+            raise ValueError(f"{self.MODEL_NAME} requires a 'fuel_curve' tensor.")
         self._pending_regularization_loss = None
         fuel_curve = x_auxiliary["fuel_curve"]
         if fuel_curve.shape[1] != 2 * self.curve_length:
@@ -472,7 +501,7 @@ class MechanisticHybridV22(nn.Module):
         hfi_curve = fuel_curve[:, self.curve_length :]
 
         fuel_embedding = torch.cat([self.fuel_curve_encoder_ros(ros_curve), self.fuel_curve_encoder_hfi(hfi_curve)], dim=1)
-        full = self.full_encoder(torch.cat([x, fuel_embedding], dim=1))
+        full = self.full_encoder(torch.cat([self._neural_encoder_input(x), fuel_embedding], dim=1))
         half = self.half_encoder(full)
         quarter = self.quarter_encoder(half)
         eighth = self.eighth_encoder(quarter)
@@ -553,12 +582,12 @@ class MechanisticHybridV22(nn.Module):
         flat_base_speed = coarse_base_speed.detach().reshape(x.shape[0], 1, height * width)
         reference_speed = flat_base_speed.gather(2, source_indices.unsqueeze(1)).squeeze(1)  # (B, S)
 
-        normalized_fire_size = self._weighted_pool(x[:, self.scenario_indices], fine_burnability, coarse_burnability).clamp_min(0.0)
-        flat_fire_size = normalized_fire_size.reshape(x.shape[0], -1, height * width)
+        scenario_values = self._coarse_scenario_values(x, fine_burnability, coarse_burnability)
+        flat_fire_size = scenario_values.reshape(x.shape[0], -1, height * width)
         gathered_fire_size = flat_fire_size.gather(2, source_indices.unsqueeze(1).expand(-1, flat_fire_size.shape[1], -1))
         gathered_fire_size = gathered_fire_size.permute(0, 2, 1)  # (B, S, Q)
 
-        fire_size_log10_ha = self.fire_size_log_min + gathered_fire_size * (self.fire_size_log_max - self.fire_size_log_min)
+        fire_size_log10_ha = self._physical_fire_size_log10_ha(gathered_fire_size)
         fire_size_ha = (torch.pow(10.0, fire_size_log10_ha) - 1.0).clamp_min(0.0)
         equivalent_radius_m = torch.sqrt(fire_size_ha * 10_000.0 / math.pi + 1e-6) - 1e-3
         budget_hours = equivalent_radius_m / (60.0 * reference_speed.unsqueeze(-1).clamp_min(self.min_ros_m_per_min))
@@ -595,8 +624,11 @@ class MechanisticHybridV22(nn.Module):
         full_size = x.shape[-2:]
         physical_bp_full = F.interpolate(coarse_bp, size=full_size, mode="bilinear", align_corners=False)
         physical_bp_full = (physical_bp_full * fine_burnability).clamp(0.0, 1.0 - 1e-7)
-        delta = self.max_local_log_calibration * torch.tanh(self.bp_local_calibration(decoded))
-        bp_probability = self._bp_hazard_correction(physical_bp_full, delta)
+        bp_probability, bp_regularization, bp_diagnostics = self._calibrate_bp(
+            physical_bp=physical_bp_full,
+            decoded=decoded,
+            fine_burnability=fine_burnability,
+        )
         bp_logits = torch.logit(bp_probability, eps=self.bp_logit_eps)
 
         physical_hfi_full = F.interpolate(coarse_base_hfi, size=full_size, mode="bilinear", align_corners=False)
@@ -618,8 +650,10 @@ class MechanisticHybridV22(nn.Module):
         ros_residual = (ros_output - physical_ros_log_target) * self.ros_log_std
         consistency_ros = F.mse_loss(ros_residual, mean_log_speed_correction_full)
         kl_divergence = self._quantile_kl_divergence()
-        self._pending_regularization_loss = self.behavior_consistency_weight * (consistency_fi + consistency_ros) + (
-            self.quantile_kl_weight * kl_divergence
+        self._pending_regularization_loss = (
+            self.behavior_consistency_weight * (consistency_fi + consistency_ros)
+            + (self.quantile_kl_weight * kl_divergence)
+            + bp_regularization
         )
 
         outputs_by_target = {"bp": bp_logits, "fi": fi_output, "ros": ros_output}
@@ -630,4 +664,5 @@ class MechanisticHybridV22(nn.Module):
             "mean_abs_log_speed_correction": log_speed_correction.detach().abs().mean(),
             "quantile_kl": kl_divergence.detach(),
         }
+        self._last_diagnostics.update(bp_diagnostics)
         return torch.cat([outputs_by_target[name] for name in self.target_names], dim=1)

@@ -16,6 +16,7 @@ from src.config import (
     LoggerConfig,
     ModelConfig,
     OptimizerConfig,
+    SpatializedTabularParams,
     TargetConfig,
     TargetLossConfig,
     TrainingConfig,
@@ -336,7 +337,7 @@ def test_hybrid_v22_normalization_requires_native_matching_physics_artifacts(tmp
         '"fuel_curve_HFI": {"log_mean": 3.0, "log_std": 2.0}}\n'
     )
     (tmp_path / "weather_norm_params.json").write_text(
-        '{"z_score": {"cols": ["InitialSpreadIndex", "wind_x", "wind_y"], ' '"mean": [9.0, -2.0, -3.0], "std": [4.0, 8.0, 7.0]}}\n'
+        '{"z_score": {"cols": ["InitialSpreadIndex", "wind_x", "wind_y"], "mean": [9.0, -2.0, -3.0], "std": [4.0, 8.0, 7.0]}}\n'
     )
 
     validate_mechanistic_normalization_params(config, "mechanistic_hybrid_v22")
@@ -344,6 +345,124 @@ def test_hybrid_v22_normalization_requires_native_matching_physics_artifacts(tmp
     config.model.propagation_wind_x_mean = -1.0
     with pytest.raises(ValueError, match="propagation_wind_x_mean"):
         validate_mechanistic_normalization_params(config, "mechanistic_hybrid_v22")
+
+
+def test_hybrid_v23_normalization_requires_direct_log_fire_size_artifacts(tmp_path):
+    grid_params = GridParams(
+        feature_names_list=["fuel_grid"],
+        fuel_feats_encoding="iROS_HFI",
+        targets=[
+            TargetConfig(name="bp", out_norm="none"),
+            TargetConfig(name="fi", out_norm="log_standard", log_mean=7.0, log_std=1.2),
+            TargetConfig(name="ros", out_norm="log_standard", log_mean=2.0, log_std=0.5),
+        ],
+    )
+    config = _make_config(
+        tmp_path,
+        grid_params=grid_params,
+        num_classes=3,
+        output_head="bp_behavior",
+        optimizer_config=OptimizerConfig(
+            target_losses={
+                "bp": TargetLossConfig(loss="kl"),
+                "fi": TargetLossConfig(loss="huber"),
+                "ros": TargetLossConfig(loss="huber"),
+            }
+        ),
+    )
+    config.data.input_sources.append(
+        DataSourceConfig(
+            name="spatialized_fire_size",
+            params=SpatializedTabularParams(
+                csv_name="df_fire_fru_processed.csv",
+                feature_names_list=["LOG_SIZE_HA"],
+                fire_weather_zone_id_col="GRIDCODE",
+                quantiles=[0.1, 0.5, 0.9],
+                include_missing_firezone_mask=True,
+                missing_value_strategy="global_mean",
+                global_fill_csv_name="fire_size_global_fill.csv",
+            ),
+        )
+    )
+    config.model.architecture = "mechanistic_hybrid_v23"
+    config.model.propagation_downsample_factor = 8
+    config.model.propagation_steps = 1
+    config.model.propagation_cell_size_m = 100.0
+    config.model.propagation_scenario_mode = "fire_size"
+    config.model.propagation_count_log_mean_min = 0.5
+    config.model.propagation_count_log_mean_max = 2.5
+    config.model.propagation_count_cv_min = 0.4
+    config.model.propagation_count_cv_max = 1.4
+    config.model.propagation_fire_size_neural_mean = 2.7
+    config.model.propagation_fire_size_neural_std = 0.8
+    config.model.propagation_elevation_min_m = -10.0
+    config.model.propagation_elevation_max_m = 1_000.0
+    config.model.propagation_isi_mean = 9.0
+    config.model.propagation_isi_std = 4.0
+    config.model.propagation_wind_x_mean = -2.0
+    config.model.propagation_wind_x_std = 8.0
+    config.model.propagation_wind_y_mean = -3.0
+    config.model.propagation_wind_y_std = 7.0
+    config.model.interpretable_fi_log_mean = 7.0
+    config.model.interpretable_fi_log_std = 1.2
+    config.model.interpretable_ros_log_mean = 2.0
+    config.model.interpretable_ros_log_std = 0.5
+    config.data.root_dir = str(tmp_path)
+    config.data_prep = DataPrepConfig(
+        win_h=32,
+        win_w=32,
+        target_crop_h=16,
+        target_crop_w=16,
+        preserve_native_grid=True,
+    )
+    (tmp_path / "ignition_count_norm_params.json").write_text(
+        '{"log1p_mean_minimum": 0.5, "log1p_mean_maximum": 2.5, "cv_minimum": 0.4, "cv_maximum": 1.4}\n'
+    )
+    (tmp_path / "dataset_norm_stats.json").write_text(
+        '{"elevation": {"min": -10.0, "max": 1000.0}, '
+        '"fire_intensity": {"log_mean": 7.0, "log_std": 1.2}, '
+        '"fire_ros": {"log_mean": 2.0, "log_std": 0.5}, '
+        '"fuel_curve_iROS": {"log_mean": 1.0, "log_std": 0.5}, '
+        '"fuel_curve_HFI": {"log_mean": 3.0, "log_std": 2.0}}\n'
+    )
+    (tmp_path / "weather_norm_params.json").write_text(
+        '{"z_score": {"cols": ["InitialSpreadIndex", "wind_x", "wind_y"], "mean": [9.0, -2.0, -3.0], "std": [4.0, 8.0, 7.0]}}\n'
+    )
+    (tmp_path / "fire_size_global_fill.csv").write_text("GRIDCODE,LOG_SIZE_HA\n1,2.0\n")
+    (tmp_path / "fire_size_log_stats.json").write_text(
+        '{"contract": "log10_1p_hectares", "feature_name": "LOG_SIZE_HA", '
+        '"quantiles": [0.1, 0.5, 0.9], "excluded_gridcodes": [36], '
+        '"neural_mean": 2.7, "neural_std": 0.8}\n'
+    )
+
+    validate_mechanistic_normalization_params(config, "mechanistic_hybrid_v23")
+
+    config.model.propagation_fire_size_neural_mean = 2.6
+    with pytest.raises(ValueError, match="propagation_fire_size_neural_mean"):
+        validate_mechanistic_normalization_params(config, "mechanistic_hybrid_v23")
+
+
+def test_hybrid_v23_uses_separate_iros_and_hfi_encoder_statistics(tmp_path):
+    grid_params = GridParams(
+        feature_names_list=["fuel_grid"],
+        fuel_feats_encoding="iROS_HFI",
+    )
+    config = _make_config(tmp_path, grid_params=grid_params)
+    config.model.architecture = "mechanistic_hybrid_v23"
+    config.data.root_dir = str(tmp_path)
+    (tmp_path / "dataset_norm_stats.json").write_text(
+        '{"fuel_curve_iROS": {"log_mean": 1.0, "log_std": 0.5}, '
+        '"fuel_curve_HFI": {"log_mean": 3.0, "log_std": 2.0}, '
+        '"fuel_curve_iROS_HFI": {"log_mean": 9.0, "log_std": 8.0}}\n'
+    )
+    trainer = Trainer.__new__(Trainer)
+    trainer.config = config
+    trainer.train_dataset = None
+
+    stats = trainer._get_fuel_curve_stats()
+
+    assert torch.equal(stats["fuel_curve_mean"], torch.tensor([1.0, 3.0]))
+    assert torch.equal(stats["fuel_curve_std"], torch.tensor([0.5, 2.0]))
 
 
 def test_interpretable_normalization_constants_must_match_behavior_targets(tmp_path):
