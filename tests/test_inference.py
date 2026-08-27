@@ -1,13 +1,16 @@
 import pytest
 import torch
 
+from data_preparation.utils import RAW_FIRE_SIZE_ZSCORE_PARAMS
 from inference.predictor import BurnRiskPredictor
 from inference.run_ai_surrogate_model_hexel_inference import (
+    _uses_raw_hectares_zscore,
     create_dataset,
     get_grid_params_from_data_config,
     get_target_params_from_grid_config,
     get_target_spec_from_data_config,
     get_target_specs_from_data_config,
+    prepare_hexel_data,
     resolve_target_normalization,
     run_single_hexel_pipeline,
 )
@@ -19,6 +22,96 @@ def test_inference_target_spec_defaults_to_bp_for_old_checkpoints():
 
     assert target.name == "bp"
     assert target.output_type == "fire_burn_probability"
+
+
+def test_inference_detects_raw_hectare_zscore_contract():
+    assert _uses_raw_hectares_zscore(
+        {
+            "input_sources": [
+                {
+                    "name": "spatialized_fire_size",
+                    "params": {"feature_names_list": ["ZSCORE_SIZE_HA"]},
+                }
+            ]
+        }
+    )
+    assert not _uses_raw_hectares_zscore(
+        {
+            "input_sources": [
+                {
+                    "name": "spatialized_fire_size",
+                    "params": {"feature_names_list": ["NORM_LOG_SIZE_HA"]},
+                }
+            ]
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("feature_name", "expected_processor"),
+    [
+        ("ZSCORE_SIZE_HA", "raw"),
+        ("NORM_LOG_SIZE_HA", "legacy"),
+    ],
+)
+def test_prepare_hexel_data_dispatches_fire_size_contract(tmp_path, monkeypatch, feature_name, expected_processor):
+    (tmp_path / "df_fire_fru_25ha_1970_2023.csv").touch()
+    calls = []
+    params_path = tmp_path / "frozen_params.json"
+    if expected_processor == "raw":
+        params_path.touch()
+
+    monkeypatch.setattr("inference.run_ai_surrogate_model_hexel_inference.build_weather_table", lambda **_kwargs: None)
+
+    def raw_processor(**_kwargs):
+        calls.append("raw")
+        raise RuntimeError("stop after fire-size processing")
+
+    def legacy_processor(**_kwargs):
+        calls.append("legacy")
+        raise RuntimeError("stop after fire-size processing")
+
+    monkeypatch.setattr(
+        "inference.run_ai_surrogate_model_hexel_inference.process_raw_fire_size_zscore_distribution_table",
+        raw_processor,
+    )
+    monkeypatch.setattr(
+        "inference.run_ai_surrogate_model_hexel_inference.process_fire_size_distribution_table",
+        legacy_processor,
+    )
+
+    with pytest.raises(RuntimeError, match="stop after fire-size processing"):
+        prepare_hexel_data(
+            data_dir=tmp_path,
+            hex_id="01",
+            fire_size_norm_params_path=params_path,
+            checkpoint_data_config={
+                "input_sources": [
+                    {
+                        "name": "spatialized_fire_size",
+                        "params": {"feature_names_list": [feature_name]},
+                    }
+                ]
+            },
+        )
+
+    assert calls == [expected_processor]
+
+
+def test_prepare_hexel_data_refuses_to_fit_raw_hectare_stats_on_inference_data(tmp_path):
+    with pytest.raises(FileNotFoundError, match="Frozen raw-hectare z-score artifact not found"):
+        prepare_hexel_data(
+            data_dir=tmp_path,
+            hex_id="01",
+            checkpoint_data_config={
+                "input_sources": [
+                    {
+                        "name": "spatialized_fire_size",
+                        "params": {"feature_names_list": ["ZSCORE_SIZE_HA"]},
+                    }
+                ]
+            },
+        )
 
 
 def test_inference_target_spec_uses_checkpoint_target_name():
@@ -180,6 +273,53 @@ def test_inference_resolves_existing_prepared_data(tmp_path, monkeypatch, local_
         )
 
     assert captured["processed_data_dir"] == (local_data_dir if local_exists else configured_root)
+
+
+def test_inference_reuses_raw_hectare_training_artifact(tmp_path, monkeypatch):
+    training_root = tmp_path / "training_data"
+    training_root.mkdir()
+    artifact_path = training_root / RAW_FIRE_SIZE_ZSCORE_PARAMS
+    artifact_path.touch()
+    captured = {}
+    monkeypatch.setattr(
+        "inference.run_ai_surrogate_model_hexel_inference.torch.load",
+        lambda *_args, **_kwargs: {
+            "config": {
+                "data": {
+                    "root_dir": str(training_root),
+                    "input_sources": [
+                        {
+                            "name": "spatialized_fire_size",
+                            "params": {"feature_names_list": ["ZSCORE_SIZE_HA"]},
+                        }
+                    ],
+                },
+                "data_prep": {
+                    "win_h": 256,
+                    "win_w": 256,
+                    "overlap_ratio": 0.2,
+                    "modelling_approach": 1,
+                },
+            }
+        },
+    )
+
+    def capture_params(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop after resolving normalization artifact")
+
+    monkeypatch.setattr("inference.run_ai_surrogate_model_hexel_inference.prepare_hexel_data", capture_params)
+
+    with pytest.raises(RuntimeError, match="stop after resolving normalization artifact"):
+        run_single_hexel_pipeline(
+            checkpoint_path=tmp_path / "best.pth",
+            data_dir=tmp_path / "raw",
+            hex_id="01",
+            prepare_data=True,
+        )
+
+    assert captured["fire_size_norm_params_path"] == artifact_path
+    assert captured["checkpoint_data_config"]["root_dir"] == str(training_root)
 
 
 class ConstantModel(torch.nn.Module):

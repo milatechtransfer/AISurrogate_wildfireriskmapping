@@ -12,7 +12,12 @@ import numpy as np
 import pandas as pd
 
 from data_preparation.tabular.weather import load_weather_list, preprocess_weather_list
-from data_preparation.utils import aggregate_csv_by_pattern, find_file_path, process_fire_size_df
+from data_preparation.utils import (
+    aggregate_csv_by_pattern,
+    find_file_path,
+    process_fire_size_df,
+    process_raw_fire_size_zscore_df,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -167,6 +172,27 @@ def process_fire_size_distribution_table(
     df_fire_size_processed.to_csv(output_path, index=False)
     logger.info(
         f"Processed fire size distribution data saved to {output_path} with shape {df_fire_size_processed.shape} and columns: {df_fire_size_processed.columns.tolist()}"
+    )
+
+
+def process_raw_fire_size_zscore_distribution_table(
+    input_path: Path,
+    output_path: Path,
+    train_firezone_ids: set[int] | None = None,
+    norm_params_path: Path | None = None,
+) -> None:
+    """Standardize raw-hectare q features with frozen training-zone mean/std statistics."""
+    processed = process_raw_fire_size_zscore_df(
+        pd.read_csv(input_path),
+        train_firezone_ids=train_firezone_ids,
+        norm_params_path=norm_params_path,
+    )
+    processed.to_csv(output_path, index=False)
+    logger.info(
+        "Raw-hectare z-score data saved to %s with shape %s and columns: %s",
+        output_path,
+        processed.shape,
+        processed.columns.tolist(),
     )
 
 

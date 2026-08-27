@@ -22,6 +22,9 @@ feature_names_weighted_ignition = [
     "ros_out_grid",
 ]
 FIRE_SIZE_FEATURE_COLS = ["GRIDCODE", "SIZE_HA"]
+RAW_FIRE_SIZE_ZSCORE_FEATURE = "ZSCORE_SIZE_HA"
+RAW_FIRE_SIZE_ZSCORE_PARAMS = "fire_size_raw_hectares_zscore_params.json"
+FIRE_SIZE_QUANTILES = (0.1, 0.5, 0.9)
 
 
 def find_file_path(filename: str, *search_dirs: Path) -> Path:
@@ -53,6 +56,104 @@ def load_fire_size_normalization_params(path: str | Path) -> tuple[float, float]
     with open(path) as f:
         raw = json.load(f)
     return float(raw["log_size_min"]), float(raw["log_size_max"])
+
+
+def save_raw_fire_size_zscore_params(mean: float, std: float, path: str | Path) -> None:
+    """Save the frozen raw-hectare q-feature z-score contract."""
+    import json
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as handle:
+        json.dump(
+            {
+                "transform": "identity",
+                "normalization": "z_score",
+                "feature_name": RAW_FIRE_SIZE_ZSCORE_FEATURE,
+                "reference_weighting": "equal_training_zone_quantiles",
+                "quantiles": list(FIRE_SIZE_QUANTILES),
+                "size_ha_mean": float(mean),
+                "size_ha_std": float(std),
+            },
+            handle,
+            indent=2,
+        )
+
+
+def load_raw_fire_size_zscore_params(path: str | Path) -> tuple[float, float]:
+    """Load and validate the frozen raw-hectare q-feature z-score contract."""
+    import json
+
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Raw-hectare z-score params not found: {path}")
+    with path.open() as handle:
+        raw = json.load(handle)
+    expected = {
+        "transform": "identity",
+        "normalization": "z_score",
+        "feature_name": RAW_FIRE_SIZE_ZSCORE_FEATURE,
+        "reference_weighting": "equal_training_zone_quantiles",
+        "quantiles": list(FIRE_SIZE_QUANTILES),
+    }
+    mismatches = {key: (raw.get(key), value) for key, value in expected.items() if raw.get(key) != value}
+    if mismatches:
+        raise ValueError(f"Invalid raw-hectare z-score contract in {path}: {mismatches}")
+    mean = float(raw["size_ha_mean"])
+    std = float(raw["size_ha_std"])
+    if not np.isfinite(mean) or not np.isfinite(std) or std <= 0.0:
+        raise ValueError(f"Invalid raw-hectare z-score statistics in {path}: mean={mean}, std={std}")
+    return mean, std
+
+
+def process_raw_fire_size_zscore_df(
+    df_fire_size: pd.DataFrame,
+    train_firezone_ids: set[int] | None = None,
+    norm_params_path: str | Path | None = None,
+) -> pd.DataFrame:
+    """Z-score raw hectares using q10/q50/q90 values from equally weighted training zones."""
+    aliases = {"FRU": "GRIDCODE", "Fsize": "SIZE_HA"}
+    cols_to_rename = {old: new for old, new in aliases.items() if old in df_fire_size.columns and new not in df_fire_size.columns}
+    if cols_to_rename:
+        df_fire_size = df_fire_size.rename(columns=cols_to_rename)
+
+    missing_cols = [col for col in FIRE_SIZE_FEATURE_COLS if col not in df_fire_size.columns]
+    if missing_cols:
+        raise ValueError(
+            f"Missing required column(s) in fire size DataFrame: {missing_cols}. "
+            f"Expected columns: {FIRE_SIZE_FEATURE_COLS}. "
+            f"Available columns: {list(df_fire_size.columns)}"
+        )
+    processed = df_fire_size[FIRE_SIZE_FEATURE_COLS].copy()
+    if (processed["SIZE_HA"] < 0).any():
+        raise ValueError("Fire size hectares must be non-negative.")
+    if 36 not in processed["GRIDCODE"].values:
+        processed = pd.concat(
+            [processed, pd.DataFrame([{"GRIDCODE": 36, "SIZE_HA": 0}])],
+            ignore_index=True,
+        )
+
+    if norm_params_path is not None and Path(norm_params_path).exists():
+        mean, std = load_raw_fire_size_zscore_params(norm_params_path)
+    else:
+        fit_rows = processed
+        if train_firezone_ids is not None:
+            fit_rows = processed[processed["GRIDCODE"].astype(int).isin(train_firezone_ids)]
+            if fit_rows.empty:
+                raise ValueError(f"No fire-size rows match train split GRIDCODE values: {sorted(train_firezone_ids)[:20]}")
+        zone_quantiles = fit_rows.groupby("GRIDCODE")["SIZE_HA"].quantile(FIRE_SIZE_QUANTILES).unstack()
+        if zone_quantiles.empty or zone_quantiles.isna().any().any():
+            raise ValueError("Could not compute complete raw-hectare q10/q50/q90 values for the training zones.")
+        reference_values = zone_quantiles.to_numpy(dtype=np.float64).reshape(-1)
+        mean = float(reference_values.mean())
+        std = float(reference_values.std(ddof=0))
+        if not np.isfinite(mean) or not np.isfinite(std) or std <= 0.0:
+            raise ValueError(f"Invalid raw-hectare z-score statistics: mean={mean}, std={std}")
+        if norm_params_path is not None:
+            save_raw_fire_size_zscore_params(mean, std, norm_params_path)
+
+    processed[RAW_FIRE_SIZE_ZSCORE_FEATURE] = (processed["SIZE_HA"] - mean) / std
+    return processed
 
 
 def process_fire_size_df(

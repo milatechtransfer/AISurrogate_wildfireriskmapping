@@ -25,6 +25,7 @@ ROS_CONFIG = Path("configs/ros_spatial_weather.yaml")
 MULTI_OUTPUT_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
 Q3_CONTEXT_CONFIG = Path("configs/context_models/unet_512_crop_256_firesize_q3.yaml")
 Q3_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3.yaml")
+Q3_256_RAW_HECTARES_CONFIG = Path("configs/context_models/unet_256_firesize_q3_raw_hectares_zscore.yaml")
 HAZARD_EVAL_CONFIG = Path("configs/hazard_eval_spatial_weather.yaml")
 HAZARD_MODEL_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
 COMMON_INPUT_PIPELINE_CONFIGS = [BP_CONFIG, FI_CONFIG, ROS_CONFIG]
@@ -224,6 +225,28 @@ def test_q3_256_config_matches_shared_checkpoint_recipe():
     assert config.evaluation.best_ckpt_metrics == ["bp/ccc", "fi/ccc", "ros/ccc"]
     assert config.data_prep.resolved_target_crop() == (256, 256)
     assert config.data_prep.context_crop_enabled is False
+
+
+def test_q3_256_raw_hectares_zscore_changes_only_fire_size_contract_and_outputs():
+    baseline = _load_config(Q3_256_CONFIG)
+    raw_hectares = _load_config(Q3_256_RAW_HECTARES_CONFIG)
+
+    assert raw_hectares.seed == baseline.seed == 42
+    assert raw_hectares.model == baseline.model
+    assert raw_hectares.optimizer == baseline.optimizer
+    assert raw_hectares.lr_scheduler == baseline.lr_scheduler
+    assert raw_hectares.training == baseline.training
+    assert raw_hectares.evaluation == baseline.evaluation
+    assert raw_hectares.metrics == baseline.metrics
+    assert raw_hectares.data_prep == baseline.data_prep
+    assert raw_hectares.data.batch_size == baseline.data.batch_size == 64
+    assert raw_hectares.data.root_dir.endswith("data_samples_v4_raw_hectares_zscore")
+    fire_size = next(source.params for source in raw_hectares.data.input_sources if source.name == "spatialized_fire_size")
+    assert isinstance(fire_size, SpatializedTabularParams)
+    assert fire_size.feature_names_list == ["ZSCORE_SIZE_HA"]
+    assert fire_size.quantiles == [0.1, 0.5, 0.9]
+    assert raw_hectares.save_dir != baseline.save_dir
+    assert raw_hectares.logger.experiment_name != baseline.logger.experiment_name
 
 
 def test_multi_output_config_round_trips_through_checkpoint_dump():
