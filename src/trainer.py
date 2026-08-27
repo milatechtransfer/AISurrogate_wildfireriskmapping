@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from data_preparation.spatial.utils import NORM_STATS_JSON, get_output_log_stats_cached, get_range_output_cached, read_split_hex_ids
-from src.config import Config, GridParams
+from src.config import Config, GridParams, SpatializedTabularParams
 from src.datasets.context_crop import centered_crop_slices, validate_context_crop_metadata
 from src.datasets.fuel_utils import FUEL_CURVE_ENCODINGS
 from src.datasets.targets import TargetName, activate_target_predictions, get_target_specs
@@ -44,20 +44,22 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
         "gray_box_mechanistic",
     }
     hybrid_v22_architectures = {"mechanistic_hybrid_v22", "cnn_physics_hybrid_v22"}
+    hybrid_v23_architectures = {"mechanistic_hybrid_v23", "cnn_physics_hybrid_v23"}
+    hybrid_architectures = hybrid_v22_architectures | hybrid_v23_architectures
     count_aware_interpretable_architectures = interpretable_v2_architectures | interpretable_v3_architectures
-    count_aware_architectures = count_aware_interpretable_architectures | hybrid_v22_architectures
+    count_aware_architectures = count_aware_interpretable_architectures | hybrid_architectures
     all_interpretable_architectures = interpretable_architectures | count_aware_interpretable_architectures
-    physical_behavior_architectures = all_interpretable_architectures | hybrid_v22_architectures
+    physical_behavior_architectures = all_interpretable_architectures | hybrid_architectures
     if resolved_architecture not in travel_time_architectures | physical_behavior_architectures:
         return
 
-    if resolved_architecture in hybrid_v22_architectures:
+    if resolved_architecture in hybrid_architectures:
         if not config.data_prep.preserve_native_grid:
-            raise ValueError("Mechanistic hybrid v2.2 requires data_prep.preserve_native_grid=true.")
+            raise ValueError("Native mechanistic hybrids require data_prep.preserve_native_grid=true.")
         if config.model.propagation_downsample_factor != 8:
-            raise ValueError("Mechanistic hybrid v2.2 requires model.propagation_downsample_factor=8.")
+            raise ValueError("Native mechanistic hybrids require model.propagation_downsample_factor=8.")
         if not np.isclose(config.model.propagation_cell_size_m, 100.0):
-            raise ValueError("Mechanistic hybrid v2.2 requires native 100 m pixels.")
+            raise ValueError("Native mechanistic hybrids require native 100 m pixels.")
         crop_h, crop_w = config.data_prep.resolved_target_crop()
         context_pixels = min((config.data_prep.win_h - crop_h) // 2, (config.data_prep.win_w - crop_w) // 2)
         max_context_steps = context_pixels // config.model.propagation_downsample_factor
@@ -100,7 +102,7 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
                 count_checks,
             )
         )
-    if config.model.propagation_scenario_mode == "fire_size":
+    if config.model.propagation_scenario_mode == "fire_size" and resolved_architecture not in hybrid_v23_architectures:
         checks.append(
             (
                 "fire_size_norm_params.json",
@@ -117,6 +119,63 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
             )
         )
 
+    if resolved_architecture in hybrid_v23_architectures:
+        fire_size_params = next(
+            (
+                source.params
+                for source in config.data.input_sources
+                if source.name == "spatialized_fire_size" and isinstance(source.params, SpatializedTabularParams)
+            ),
+            None,
+        )
+        if fire_size_params is None:
+            raise ValueError("Mechanistic hybrid v2.3 requires a spatialized_fire_size source.")
+        if fire_size_params.feature_names_list != ["LOG_SIZE_HA"]:
+            raise ValueError("Mechanistic hybrid v2.3 requires spatialized_fire_size.feature_names_list=['LOG_SIZE_HA'].")
+        if fire_size_params.quantiles != [0.1, 0.5, 0.9]:
+            raise ValueError("Mechanistic hybrid v2.3 requires fire-size quantiles [0.1, 0.5, 0.9].")
+        if not fire_size_params.include_missing_firezone_mask:
+            raise ValueError("Mechanistic hybrid v2.3 requires include_missing_firezone_mask=true.")
+        if fire_size_params.missing_value_strategy != "global_mean" or fire_size_params.global_fill_csv_name is None:
+            raise ValueError("Mechanistic hybrid v2.3 requires a frozen global-mean fire-size fill CSV.")
+        global_fill_path = os.path.join(config.data.root_dir, fire_size_params.global_fill_csv_name)
+        if not os.path.isfile(global_fill_path):
+            raise FileNotFoundError(f"Mechanistic fire-size fallback table does not exist: {global_fill_path}")
+
+        fire_size_stats_path = os.path.join(config.data.root_dir, "fire_size_log_stats.json")
+        if not os.path.isfile(fire_size_stats_path):
+            raise FileNotFoundError(f"Mechanistic fire-size statistics do not exist: {fire_size_stats_path}")
+        with open(fire_size_stats_path) as handle:
+            fire_size_stats = json.load(handle)
+        if fire_size_stats.get("contract") != "log10_1p_hectares":
+            raise ValueError(f"Mechanistic fire-size statistics {fire_size_stats_path} do not use the log10_1p_hectares contract.")
+        if fire_size_stats.get("feature_name") != "LOG_SIZE_HA":
+            raise ValueError(f"Mechanistic fire-size statistics {fire_size_stats_path} do not describe LOG_SIZE_HA.")
+        if fire_size_stats.get("quantiles") != fire_size_params.quantiles:
+            raise ValueError(
+                f"Mechanistic fire-size statistics {fire_size_stats_path} quantiles={fire_size_stats.get('quantiles')} "
+                f"do not match configured quantiles={fire_size_params.quantiles}."
+            )
+        if 36 not in fire_size_stats.get("excluded_gridcodes", []):
+            raise ValueError(f"Mechanistic fire-size statistics {fire_size_stats_path} must exclude synthetic GRIDCODE 36.")
+        fire_size_checks = {
+            "neural_mean": (
+                "model.propagation_fire_size_neural_mean",
+                config.model.propagation_fire_size_neural_mean,
+            ),
+            "neural_std": (
+                "model.propagation_fire_size_neural_std",
+                config.model.propagation_fire_size_neural_std,
+            ),
+        }
+        for stat_name, (config_name, configured_value) in fire_size_checks.items():
+            try:
+                artifact_value = float(fire_size_stats[stat_name])
+            except KeyError as exc:
+                raise ValueError(f"Mechanistic fire-size statistics {fire_size_stats_path} are missing {stat_name!r}.") from exc
+            if not np.isclose(configured_value, artifact_value, rtol=1e-9, atol=1e-12):
+                raise ValueError(f"{config_name}={configured_value} does not match {fire_size_stats_path}:{stat_name}={artifact_value}.")
+
     if resolved_architecture in physical_behavior_architectures:
         grid_params = next(
             (source.params for source in config.data.input_sources if source.name == "grid" and isinstance(source.params, GridParams)),
@@ -124,8 +183,8 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
         )
         if grid_params is None:
             raise ValueError("Physical behavior mechanism requires a configured grid data source.")
-        if resolved_architecture in hybrid_v22_architectures and grid_params.fuel_feats_encoding != "iROS_HFI":
-            raise ValueError("Mechanistic hybrid v2.2 requires grid.fuel_feats_encoding='iROS_HFI'.")
+        if resolved_architecture in hybrid_architectures and grid_params.fuel_feats_encoding != "iROS_HFI":
+            raise ValueError("Native mechanistic hybrids require grid.fuel_feats_encoding='iROS_HFI'.")
         targets_by_name = {target.name: target for target in grid_params.resolved_targets()}
         expected_norms: dict[TargetName, str] = {"bp": "none", "fi": "log_standard", "ros": "log_standard"}
         for target_name, expected_norm in expected_norms.items():
@@ -158,7 +217,7 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
                 config.model.interpretable_ros_log_std,
             ),
         }
-        if resolved_architecture in hybrid_v22_architectures:
+        if resolved_architecture in hybrid_architectures:
             target_checks.update(
                 {
                     ("elevation", "min"): (
@@ -183,7 +242,7 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
                     "Update the config or regenerate the matching normalization artifact."
                 )
 
-        if resolved_architecture in hybrid_v22_architectures:
+        if resolved_architecture in hybrid_architectures:
             for curve_name in ("fuel_curve_iROS", "fuel_curve_HFI"):
                 entry = payload.get(curve_name)
                 if not isinstance(entry, dict) or "log_mean" not in entry or "log_std" not in entry:
@@ -481,7 +540,12 @@ class Trainer:
             return {"fuel_curve_mean": None, "fuel_curve_std": None}
 
         resolved_architecture = resolve_model_architecture(self.config.model)
-        if resolved_architecture in {"mechanistic_hybrid_v22", "cnn_physics_hybrid_v22"}:
+        if resolved_architecture in {
+            "mechanistic_hybrid_v22",
+            "cnn_physics_hybrid_v22",
+            "mechanistic_hybrid_v23",
+            "cnn_physics_hybrid_v23",
+        }:
             cache_path = os.path.join(self.config.data.root_dir, NORM_STATS_JSON)
             with open(cache_path) as handle:
                 cached = json.load(handle)
