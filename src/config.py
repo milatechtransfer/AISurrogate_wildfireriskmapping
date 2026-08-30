@@ -69,6 +69,10 @@ class ModelConfig(BaseModel):
     propagation_initial_additive_bp_hazard: float = Field(default=1e-4, gt=0.0)
     propagation_max_additive_bp_hazard: float = Field(default=0.2231435513142097, gt=0.0)
     propagation_additive_bp_hazard_weight: float = Field(default=0.1, ge=0.0)
+    propagation_initial_bp_hazard_residual: float = Field(default=1e-4, ge=0.0)
+    propagation_max_bp_hazard_residual: float = Field(default=2e-3, gt=0.0)
+    propagation_max_bp_hazard_attenuation: float = Field(default=0.9, ge=0.0, lt=1.0)
+    propagation_bp_hazard_residual_weight: float = Field(default=0.0, ge=0.0)
     propagation_coarse_bp_supervision_weight: float = Field(default=0.0, ge=0.0)
     propagation_budget_hours_per_step: float = Field(default=2.0, gt=0.0)
     propagation_budget_temperature_hours: float = Field(default=2.0, gt=0.0)
@@ -139,6 +143,8 @@ class ModelConfig(BaseModel):
             raise ValueError("propagation_fire_size_log_max must exceed propagation_fire_size_log_min.")
         if self.propagation_initial_additive_bp_hazard >= self.propagation_max_additive_bp_hazard:
             raise ValueError("propagation_initial_additive_bp_hazard must be below propagation_max_additive_bp_hazard.")
+        if self.propagation_initial_bp_hazard_residual >= self.propagation_max_bp_hazard_residual:
+            raise ValueError("propagation_initial_bp_hazard_residual must be below propagation_max_bp_hazard_residual.")
         if self.propagation_budget_max_hours <= self.propagation_budget_min_hours:
             raise ValueError("propagation_budget_max_hours must exceed propagation_budget_min_hours.")
         if len(self.propagation_isi_bins) < 2:

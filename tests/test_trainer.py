@@ -74,6 +74,24 @@ class CoarseBpDummyModel(torch.nn.Module):
         return coarse_probability
 
 
+class BpHazardResidualDummyModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.residual = torch.nn.Parameter(torch.ones(1, 1, 32, 32))
+        self._pending_residual = None
+
+    def forward(self, inputs, auxiliary_data):
+        del auxiliary_data
+        residual = self.residual.expand(inputs.shape[0], -1, -1, -1)
+        self._pending_residual = (residual, torch.ones_like(residual))
+        return torch.zeros_like(inputs)
+
+    def pop_bp_hazard_residual(self):
+        residual = self._pending_residual
+        self._pending_residual = None
+        return residual
+
+
 def dummy_metric(predictions, targets, masks):
     return torch.tensor(0.5)
 
@@ -367,7 +385,8 @@ def test_hybrid_v22_normalization_requires_native_matching_physics_artifacts(tmp
         validate_mechanistic_normalization_params(config, "mechanistic_hybrid_v22")
 
 
-def test_hybrid_v23_normalization_requires_direct_log_fire_size_artifacts(tmp_path):
+@pytest.mark.parametrize("architecture", ["mechanistic_hybrid_v23", "mechanistic_hybrid_v24"])
+def test_direct_log_hybrid_normalization_requires_fire_size_artifacts(tmp_path, architecture):
     grid_params = GridParams(
         feature_names_list=["fuel_grid"],
         fuel_feats_encoding="iROS_HFI",
@@ -404,7 +423,7 @@ def test_hybrid_v23_normalization_requires_direct_log_fire_size_artifacts(tmp_pa
             ),
         )
     )
-    config.model.architecture = "mechanistic_hybrid_v23"
+    config.model.architecture = architecture
     config.model.propagation_downsample_factor = 8
     config.model.propagation_steps = 1
     config.model.propagation_cell_size_m = 100.0
@@ -455,20 +474,21 @@ def test_hybrid_v23_normalization_requires_direct_log_fire_size_artifacts(tmp_pa
         '"neural_mean": 2.7, "neural_std": 0.8}\n'
     )
 
-    validate_mechanistic_normalization_params(config, "mechanistic_hybrid_v23")
+    validate_mechanistic_normalization_params(config, architecture)
 
     config.model.propagation_fire_size_neural_mean = 2.6
     with pytest.raises(ValueError, match="propagation_fire_size_neural_mean"):
-        validate_mechanistic_normalization_params(config, "mechanistic_hybrid_v23")
+        validate_mechanistic_normalization_params(config, architecture)
 
 
-def test_hybrid_v23_uses_separate_iros_and_hfi_encoder_statistics(tmp_path):
+@pytest.mark.parametrize("architecture", ["mechanistic_hybrid_v23", "mechanistic_hybrid_v24"])
+def test_direct_log_hybrid_uses_separate_iros_and_hfi_encoder_statistics(tmp_path, architecture):
     grid_params = GridParams(
         feature_names_list=["fuel_grid"],
         fuel_feats_encoding="iROS_HFI",
     )
     config = _make_config(tmp_path, grid_params=grid_params)
-    config.model.architecture = "mechanistic_hybrid_v23"
+    config.model.architecture = architecture
     config.data.root_dir = str(tmp_path)
     (tmp_path / "dataset_norm_stats.json").write_text(
         '{"fuel_curve_iROS": {"log_mean": 1.0, "log_std": 0.5}, '
@@ -726,6 +746,32 @@ def test_trainer_adds_center_cropped_coarse_bp_supervision(tmp_path, monkeypatch
     assert trainer.model.coarse_logits.grad[..., 1:3, 1:3].abs().sum() > 0.0
     border_grad = trainer.model.coarse_logits.grad.clone()
     border_grad[..., 1:3, 1:3] = 0.0
+    assert torch.equal(border_grad, torch.zeros_like(border_grad))
+
+
+def test_trainer_regularizes_bp_hazard_residual_only_inside_target_crop(tmp_path, monkeypatch):
+    config = _make_config(tmp_path)
+    config.model.propagation_bp_hazard_residual_weight = 0.1
+    config.data_prep = DataPrepConfig(win_h=32, win_w=32, target_crop_h=16, target_crop_w=16)
+    model = BpHazardResidualDummyModel()
+    monkeypatch.setattr("src.trainer.build_model", lambda **_kwargs: model)
+    trainer = Trainer(config, spatial_input_channels=1)
+    trainer.loss_fn = DummyLoss()
+    batch = next(iter(DataLoader(GridDataset(size=2), batch_size=2)))
+
+    _, loss, loss_parts, _, _ = trainer._step(batch)
+
+    assert loss.item() == pytest.approx(1.1)
+    assert loss_parts is not None
+    assert loss_parts["model/bp_hazard_residual_l2"].item() == pytest.approx(1.0)
+    assert loss_parts["model/bp_hazard_residual_weighted"].item() == pytest.approx(0.1)
+    assert trainer.model.pop_bp_hazard_residual() is None
+    loss.backward()
+    assert trainer.model.residual.grad is not None
+    center_grad = trainer.model.residual.grad[..., 8:24, 8:24]
+    assert center_grad.abs().sum() > 0.0
+    border_grad = trainer.model.residual.grad.clone()
+    border_grad[..., 8:24, 8:24] = 0.0
     assert torch.equal(border_grad, torch.zeros_like(border_grad))
 
 

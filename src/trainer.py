@@ -46,7 +46,9 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
     }
     hybrid_v22_architectures = {"mechanistic_hybrid_v22", "cnn_physics_hybrid_v22"}
     hybrid_v23_architectures = {"mechanistic_hybrid_v23", "cnn_physics_hybrid_v23"}
-    hybrid_architectures = hybrid_v22_architectures | hybrid_v23_architectures
+    hybrid_v24_architectures = {"mechanistic_hybrid_v24", "cnn_physics_hybrid_v24"}
+    direct_log_hybrid_architectures = hybrid_v23_architectures | hybrid_v24_architectures
+    hybrid_architectures = hybrid_v22_architectures | direct_log_hybrid_architectures
     count_aware_interpretable_architectures = interpretable_v2_architectures | interpretable_v3_architectures
     count_aware_architectures = count_aware_interpretable_architectures | hybrid_architectures
     all_interpretable_architectures = interpretable_architectures | count_aware_interpretable_architectures
@@ -103,7 +105,7 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
                 count_checks,
             )
         )
-    if config.model.propagation_scenario_mode == "fire_size" and resolved_architecture not in hybrid_v23_architectures:
+    if config.model.propagation_scenario_mode == "fire_size" and resolved_architecture not in direct_log_hybrid_architectures:
         checks.append(
             (
                 "fire_size_norm_params.json",
@@ -120,7 +122,7 @@ def validate_mechanistic_normalization_params(config: Config, resolved_architect
             )
         )
 
-    if resolved_architecture in hybrid_v23_architectures:
+    if resolved_architecture in direct_log_hybrid_architectures:
         fire_size_params = next(
             (
                 source.params
@@ -441,6 +443,7 @@ class Trainer:
 
         self.loss_fn = self._build_loss()
         self._coarse_bp_supervision_weight = self.config.model.propagation_coarse_bp_supervision_weight
+        self._bp_hazard_residual_weight = self.config.model.propagation_bp_hazard_residual_weight
         self._coarse_bp_loss: WeightedLoss | None = None
         if self._coarse_bp_supervision_weight > 0.0:
             if "bp" not in self._target_names:
@@ -454,6 +457,11 @@ class Trainer:
                 },
                 weights={"kl": 0.5, "ccc": 0.5},
             )
+        if self._bp_hazard_residual_weight > 0.0:
+            if "bp" not in self._target_names:
+                raise ValueError("BP hazard residual regularization requires a configured BP target.")
+            if not callable(getattr(self.model, "pop_bp_hazard_residual", None)):
+                raise ValueError("model.propagation_bp_hazard_residual_weight requires a model exposing pop_bp_hazard_residual().")
 
         # Setup optimizer
         opt_name = self.config.optimizer.name
@@ -560,6 +568,8 @@ class Trainer:
             "cnn_physics_hybrid_v22",
             "mechanistic_hybrid_v23",
             "cnn_physics_hybrid_v23",
+            "mechanistic_hybrid_v24",
+            "cnn_physics_hybrid_v24",
         }:
             cache_path = os.path.join(self.config.data.root_dir, NORM_STATS_JSON)
             with open(cache_path) as handle:
@@ -863,6 +873,43 @@ class Trainer:
         }
         return weighted_loss, loss_parts
 
+    def _compute_bp_hazard_residual_regularization(
+        self,
+        residual_fraction: torch.Tensor,
+        burnability: torch.Tensor,
+        masks: torch.Tensor,
+        full_spatial_shape: tuple[int, int],
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        if residual_fraction.shape != burnability.shape:
+            raise ValueError(
+                f"BP hazard residual shape {tuple(residual_fraction.shape)} does not match burnability {tuple(burnability.shape)}."
+            )
+        if residual_fraction.shape[-2:] != full_spatial_shape:
+            raise ValueError(
+                f"BP hazard residual shape {tuple(residual_fraction.shape[-2:])} does not match model output {full_spatial_shape}."
+            )
+
+        target_h, target_w = masks.shape[-2:]
+        if (target_h, target_w) != full_spatial_shape:
+            row_slice, col_slice = centered_crop_slices(
+                full_spatial_shape[0],
+                full_spatial_shape[1],
+                target_h,
+                target_w,
+            )
+            residual_fraction = residual_fraction[..., row_slice, col_slice]
+            burnability = burnability[..., row_slice, col_slice]
+
+        bp_idx = self._target_names.index("bp")
+        valid = masks[:, bp_idx : bp_idx + 1].to(dtype=residual_fraction.dtype) * burnability
+        valid_pixels = valid.sum().clamp_min(1.0)
+        residual_l2 = (residual_fraction.square() * valid).sum() / valid_pixels
+        weighted_loss = self._bp_hazard_residual_weight * residual_l2
+        return weighted_loss, {
+            "model/bp_hazard_residual_l2": residual_l2,
+            "model/bp_hazard_residual_weighted": weighted_loss,
+        }
+
     def _step(self, batch: Any) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor] | None, torch.Tensor, torch.Tensor]:
         """
         Default step. Expects batch -> {'grid': (inputs, targets, masks), 'tabular_weather': ...}.
@@ -886,6 +933,8 @@ class Trainer:
         full_spatial_shape = predictions.shape[-2:]
         pop_coarse_bp_probability = getattr(self.model, "pop_coarse_bp_probability", None)
         coarse_bp_probability = pop_coarse_bp_probability() if callable(pop_coarse_bp_probability) else None
+        pop_bp_hazard_residual = getattr(self.model, "pop_bp_hazard_residual", None)
+        bp_hazard_residual = pop_bp_hazard_residual() if callable(pop_bp_hazard_residual) else None
         if predictions.shape[-2:] != targets.shape[-2:] or targets.shape[-2:] != masks.shape[-2:]:
             raise ValueError(
                 "Predictions, targets, and masks must share spatial dimensions before context cropping, got "
@@ -938,6 +987,20 @@ class Trainer:
             total_loss = total_loss + coarse_bp_loss
             loss_parts = dict(loss_parts or {})
             loss_parts.update(coarse_bp_parts)
+
+        if self._bp_hazard_residual_weight > 0.0:
+            if bp_hazard_residual is None:
+                raise RuntimeError("Model did not provide the BP hazard residual required for regularization.")
+            residual_fraction, residual_burnability = bp_hazard_residual
+            residual_loss, residual_parts = self._compute_bp_hazard_residual_regularization(
+                residual_fraction=residual_fraction,
+                burnability=residual_burnability,
+                masks=masks,
+                full_spatial_shape=full_spatial_shape,
+            )
+            total_loss = total_loss + residual_loss
+            loss_parts = dict(loss_parts or {})
+            loss_parts.update(residual_parts)
 
         metric_predictions = activate_target_predictions(predictions, self._target_specs)
         return metric_predictions, total_loss, loss_parts, targets, masks

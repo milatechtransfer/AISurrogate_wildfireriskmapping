@@ -475,6 +475,39 @@ class MechanisticHybridV22(nn.Module):
         probability = self._bp_hazard_correction(physical_bp, delta)
         return probability, physical_bp.new_zeros(()), {}
 
+    @staticmethod
+    def _decode_features(
+        fused: torch.Tensor,
+        skips: list[torch.Tensor],
+        decoder_blocks: nn.ModuleList,
+    ) -> torch.Tensor:
+        decoded = fused
+        for decoder_block, skip in zip(decoder_blocks, skips, strict=True):
+            decoded = decoder_block(decoded, skip)
+        return decoded
+
+    def _decode_task_features(
+        self,
+        *,
+        coarse_features: torch.Tensor,
+        per_fire_reach: torch.Tensor,
+        coarse_bp: torch.Tensor,
+        mean_log_speed_correction_coarse: torch.Tensor,
+        skips: list[torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        fused = self.mechanistic_fusion(torch.cat([coarse_features, per_fire_reach, coarse_bp, mean_log_speed_correction_coarse], dim=1))
+        decoded = self._decode_features(fused, skips, self.decoder_blocks)
+        return decoded, decoded
+
+    def _behavior_reference_fields(
+        self,
+        *,
+        log1p_hfi_full: torch.Tensor,
+        log1p_ros_full: torch.Tensor,
+        mean_log_speed_correction_full: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return log1p_hfi_full, log1p_ros_full, mean_log_speed_correction_full
+
     def diagnostic_metrics(self) -> dict[str, float]:
         metrics = {
             "wind_anisotropy": float(self.wind_anisotropy.detach().cpu()),
@@ -624,17 +657,21 @@ class MechanisticHybridV22(nn.Module):
         self._pending_coarse_bp_probability = coarse_bp
 
         mean_log_speed_correction_coarse = log_speed_correction.mean(dim=1, keepdim=True)
-        decoded = self.mechanistic_fusion(torch.cat([coarse_features, per_fire_reach, coarse_bp, mean_log_speed_correction_coarse], dim=1))
         skips = [quarter, half, full]
-        for decoder_block, skip in zip(self.decoder_blocks, skips, strict=True):
-            decoded = decoder_block(decoded, skip)
+        bp_decoded, behavior_decoded = self._decode_task_features(
+            coarse_features=coarse_features,
+            per_fire_reach=per_fire_reach,
+            coarse_bp=coarse_bp,
+            mean_log_speed_correction_coarse=mean_log_speed_correction_coarse,
+            skips=skips,
+        )
 
         full_size = x.shape[-2:]
         physical_bp_full = F.interpolate(coarse_bp, size=full_size, mode="bilinear", align_corners=False)
         physical_bp_full = (physical_bp_full * fine_burnability).clamp(0.0, 1.0 - 1e-7)
         bp_probability, bp_regularization, bp_diagnostics = self._calibrate_bp(
             physical_bp=physical_bp_full,
-            decoded=decoded,
+            decoded=bp_decoded,
             fine_burnability=fine_burnability,
         )
         bp_logits = torch.logit(bp_probability, eps=self.bp_logit_eps)
@@ -646,17 +683,24 @@ class MechanisticHybridV22(nn.Module):
         )
         log1p_hfi_full = torch.log1p(physical_hfi_full.clamp_min(0.0))
         log1p_ros_full = torch.log1p(physical_ros_full.clamp_min(0.0))
-        behavior = self.behavior_head(torch.cat([decoded, log1p_hfi_full, log1p_ros_full, mean_log_speed_correction_full], dim=1))
+        behavior_hfi_reference, behavior_ros_reference, behavior_speed_reference = self._behavior_reference_fields(
+            log1p_hfi_full=log1p_hfi_full,
+            log1p_ros_full=log1p_ros_full,
+            mean_log_speed_correction_full=mean_log_speed_correction_full,
+        )
+        behavior = self.behavior_head(
+            torch.cat([behavior_decoded, behavior_hfi_reference, behavior_ros_reference, behavior_speed_reference], dim=1)
+        )
         fi_output = behavior[:, 0:1]
         ros_output = behavior[:, 1:2]
 
-        physical_fi_log_target = (log1p_hfi_full - self.fi_log_mean) / self.fi_log_std
-        physical_ros_log_target = (log1p_ros_full - self.ros_log_mean) / self.ros_log_std
+        physical_fi_log_target = (behavior_hfi_reference - self.fi_log_mean) / self.fi_log_std
+        physical_ros_log_target = (behavior_ros_reference - self.ros_log_mean) / self.ros_log_std
         consistency_fi = F.mse_loss(fi_output, physical_fi_log_target)
         # The ROS "residual" is destandardized back into raw log-ratio units before comparing it to
         # the CNN's own mean log speed correction, since the two are not on the same scale.
         ros_residual = (ros_output - physical_ros_log_target) * self.ros_log_std
-        consistency_ros = F.mse_loss(ros_residual, mean_log_speed_correction_full)
+        consistency_ros = F.mse_loss(ros_residual, behavior_speed_reference)
         kl_divergence = self._quantile_kl_divergence()
         self._pending_regularization_loss = (
             self.behavior_consistency_weight * (consistency_fi + consistency_ros)

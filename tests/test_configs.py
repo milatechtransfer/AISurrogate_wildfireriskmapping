@@ -36,6 +36,7 @@ MECHANISTIC_V4_CONFIG = Path("configs/mechanistic/mechanistic_travel_time_v4_512
 GRAY_BOX_PHYSICS_V3_CONFIG = Path("configs/mechanistic/gray_box_physics_v3_512_crop_256_firesize_q3.yaml")
 MECHANISTIC_HYBRID_V22_CONFIG = Path("configs/mechanistic/mechanistic_hybrid_v22_native_512_crop_256_firesize_q3.yaml")
 MECHANISTIC_HYBRID_V23_CONFIG = Path("configs/mechanistic/mechanistic_hybrid_v23_native_512_crop_256_firesize_q3.yaml")
+MECHANISTIC_HYBRID_V24_CONFIG = Path("configs/mechanistic/mechanistic_hybrid_v24_native_512_crop_256_firesize_q3.yaml")
 COUNT_UNET_CONFIG = Path("configs/context_models/unet_512_crop_256_firesize_q3_ignition_count.yaml")
 FIRE_SIZE_UNET_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3.yaml")
 COUNT_UNET_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3_ignition_count.yaml")
@@ -269,6 +270,23 @@ def test_mechanistic_hybrid_v23_config_uses_direct_log_fire_size_and_additive_ha
     assert fire_size.quantiles == [0.1, 0.5, 0.9]
     assert fire_size.include_missing_firezone_mask
     assert fire_size.global_fill_csv_name == "fire_size_global_fill.csv"
+    assert config.evaluation.best_ckpt_metrics == ["hex/mean/ccc"]
+
+
+def test_mechanistic_hybrid_v24_config_decouples_tasks_and_uses_signed_hazard_residual() -> None:
+    config = load_resolved_config(MECHANISTIC_HYBRID_V24_CONFIG)
+
+    assert config.model.architecture == "mechanistic_hybrid_v24"
+    assert config.seed == 42
+    assert config.training.initial_checkpoint is None
+    assert config.data_prep.preserve_native_grid
+    assert config.data_prep.resolved_target_crop() == (256, 256)
+    assert config.model.propagation_additive_bp_hazard_weight == 0.0
+    assert config.model.propagation_initial_bp_hazard_residual == pytest.approx(1e-4)
+    assert config.model.propagation_max_bp_hazard_residual == pytest.approx(2e-3)
+    assert config.model.propagation_max_bp_hazard_attenuation == pytest.approx(0.9)
+    assert config.model.propagation_bp_hazard_residual_weight == pytest.approx(1e-2)
+    assert config.model.propagation_coarse_bp_supervision_weight == pytest.approx(0.05)
     assert config.evaluation.best_ckpt_metrics == ["hex/mean/ccc"]
 
 

@@ -1,0 +1,39 @@
+extends: "mechanistic_hybrid_v23_native_512_crop_256_firesize_q3.yaml"
+
+save_dir: "experiments/mechanistic/mechanistic_hybrid_v24_native_512_crop_256_firesize_q3"
+
+model:
+  architecture: "mechanistic_hybrid_v24"
+  propagation_additive_bp_hazard_weight: 0.0
+  propagation_initial_bp_hazard_residual: 1.0e-4
+  propagation_max_bp_hazard_residual: 2.0e-3
+  propagation_max_bp_hazard_attenuation: 0.9
+  propagation_bp_hazard_residual_weight: 1.0e-2
+
+logger:
+  experiment_name: "mechanistic_hybrid_v24_native_512_crop_256_firesize_q3"
+  tags:
+    - "mechanistic_hybrid_v24"
+    - "training=scratch"
+    - "seed=42"
+    - "grid=native_100m"
+    - "input_patch=512"
+    - "target_crop=256"
+    - "effective_batch=64"
+    - "fuel=iROS_HFI"
+    - "ignition=exact_probability_mass"
+    - "ignition_count=mean_plus_cv_pgf"
+    - "propagation=source_factorized_travel_time"
+    - "propagation_steps=16"
+    - "fire_size=direct_log_hectares_q10_q50_q90"
+    - "fire_size_neural_stats=frozen_equal_zone"
+    - "fire_size_missing_mask=true"
+    - "decoder=separate_bp_and_behavior"
+    - "behavior_physics_gradients=detached"
+    - "bp=bounded_multiplicative_plus_signed_hazard_residual"
+    - "bp_hazard_residual_max=0.002"
+    - "bp_hazard_attenuation_max=0.9"
+    - "bp_hazard_residual_l2_weight=0.01"
+    - "bp_supervision=final_plus_coarse_kl_ccc"
+    - "coarse_bp_supervision_weight=0.05"
+    - "best_ckpt=stitched_validation_hex_mean_ccc"
