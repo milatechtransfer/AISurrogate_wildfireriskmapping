@@ -19,9 +19,13 @@ from tqdm import tqdm
 from data_preparation.hexel_loader import load_spatial_features_per_hexel
 from data_preparation.paths import MASK_SCOPE_CHOICES, Paths, normalize_mask_scope, prepared_mask_scope
 from data_preparation.process_hexels_into_grids import get_split_hexel_window
-from data_preparation.process_tabular_data import build_weather_table, process_fire_size_distribution_table
+from data_preparation.process_tabular_data import (
+    build_weather_table,
+    process_fire_size_distribution_table,
+    process_raw_fire_size_zscore_distribution_table,
+)
 from data_preparation.spatial.utils import NORM_STATS_JSON, get_output_log_stats_cached, get_range_output_cached, read_split_hex_ids
-from data_preparation.utils import find_hex_ids
+from data_preparation.utils import RAW_FIRE_SIZE_ZSCORE_FEATURE, RAW_FIRE_SIZE_ZSCORE_PARAMS, find_hex_ids
 from inference.predictor import BurnRiskPredictor
 from src.datasets.context_crop import configured_target_crop, validate_context_crop_metadata
 from src.datasets.dataset import MultiSourceDataset
@@ -60,6 +64,13 @@ class TargetNormalization:
     log_std: float | None = None
 
 
+def _uses_raw_hectares_zscore(data_config: dict[str, Any] | None) -> bool:
+    for source in (data_config or {}).get("input_sources", []):
+        if source.get("name") == "spatialized_fire_size":
+            return source.get("params", {}).get("feature_names_list") == [RAW_FIRE_SIZE_ZSCORE_FEATURE]
+    return False
+
+
 def prepare_hexel_data(
     data_dir: Path,
     hex_id: str,
@@ -74,6 +85,7 @@ def prepare_hexel_data(
     mask_scope: str = "actual",
     weather_norm_params_path: Path | None = None,
     fire_size_norm_params_path: Path | None = None,
+    checkpoint_data_config: dict[str, Any] | None = None,
 ) -> Path:
     """
     Prepare data patches for a single hexel.
@@ -98,6 +110,7 @@ def prepare_hexel_data(
         fire_size_norm_params_path: Path to a JSON file with fire size normalization parameters.
             Same semantics as ``weather_norm_params_path``. Defaults to
             ``fire_size_norm_params.json`` inside the processed data directory.
+        checkpoint_data_config: Training data configuration used to select the fire-size contract.
 
     Returns:
         Path to the output directory containing patches and metadata CSV.
@@ -110,8 +123,12 @@ def prepare_hexel_data(
 
     if weather_norm_params_path is None:
         weather_norm_params_path = processed_data_dir / "weather_norm_params.json"
+    raw_hectares_zscore = _uses_raw_hectares_zscore(checkpoint_data_config)
     if fire_size_norm_params_path is None:
-        fire_size_norm_params_path = processed_data_dir / "fire_size_norm_params.json"
+        filename = RAW_FIRE_SIZE_ZSCORE_PARAMS if raw_hectares_zscore else "fire_size_norm_params.json"
+        fire_size_norm_params_path = processed_data_dir / filename
+    if raw_hectares_zscore and not fire_size_norm_params_path.is_file():
+        raise FileNotFoundError(f"Frozen raw-hectare z-score artifact not found: {fire_size_norm_params_path}")
 
     weather_table_path = processed_data_dir / "weather_table_processed.csv"
     logger.info("Building weather table...")
@@ -121,9 +138,18 @@ def prepare_hexel_data(
     fire_size_output = processed_data_dir / "df_fire_fru_processed.csv"
     if fire_size_input.exists():
         logger.info("Processing fire size distribution table...")
-        process_fire_size_distribution_table(
-            input_path=fire_size_input, output_path=fire_size_output, norm_params_path=fire_size_norm_params_path
-        )
+        if raw_hectares_zscore:
+            process_raw_fire_size_zscore_distribution_table(
+                input_path=fire_size_input,
+                output_path=fire_size_output,
+                norm_params_path=fire_size_norm_params_path,
+            )
+        else:
+            process_fire_size_distribution_table(
+                input_path=fire_size_input,
+                output_path=fire_size_output,
+                norm_params_path=fire_size_norm_params_path,
+            )
 
     # Load features for the hexel
     feature_channel_map_path = processed_data_dir / f"feature_channel_map_{modelling_approach}.json"
@@ -349,6 +375,10 @@ def run_single_hexel_pipeline(
     # Step 2: Prepare the Data (if requested)
     if prepare_data:
         logger.info("Step 2: Preparing Hexel Data...")
+        if _uses_raw_hectares_zscore(data_config):
+            fire_size_norm_params_path = Path(data_config["root_dir"]) / RAW_FIRE_SIZE_ZSCORE_PARAMS
+            if not fire_size_norm_params_path.is_file():
+                raise FileNotFoundError(f"Checkpoint raw-hectare z-score artifact not found: {fire_size_norm_params_path}")
         processed_data_dir = prepare_hexel_data(
             data_dir=data_dir,
             hex_id=hex_id,
@@ -361,6 +391,7 @@ def run_single_hexel_pipeline(
             mask_scope=data_scope,
             weather_norm_params_path=weather_norm_params_path,
             fire_size_norm_params_path=fire_size_norm_params_path,
+            checkpoint_data_config=data_config,
         )
     else:
         suffix = "" if data_scope == "actual" else f"_{data_scope}"

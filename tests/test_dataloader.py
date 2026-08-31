@@ -10,7 +10,13 @@ import torch
 import torchvision.transforms.functional as F
 
 from data_preparation.tabular.weather import preprocess_weather_list
-from data_preparation.utils import process_fire_size_df
+from data_preparation.utils import (
+    FIRE_SIZE_QUANTILES,
+    RAW_FIRE_SIZE_ZSCORE_FEATURE,
+    load_raw_fire_size_zscore_params,
+    process_fire_size_df,
+    process_raw_fire_size_zscore_df,
+)
 from src.config import (
     DataConfig,
     DataSourceConfig,
@@ -548,6 +554,47 @@ def test_fire_size_processing_normalizes_with_train_gridcodes_only():
     assert processed.loc[processed["GRIDCODE"].eq(1), "NORM_LOG_SIZE_HA"].item() == pytest.approx(0.0)
     assert processed.loc[processed["GRIDCODE"].eq(2), "NORM_LOG_SIZE_HA"].item() == pytest.approx(1.0, abs=2e-5)
     assert processed.loc[processed["GRIDCODE"].eq(3), "NORM_LOG_SIZE_HA"].item() > 1.5
+
+
+def test_raw_fire_size_zscore_uses_equal_training_zone_quantiles(tmp_path):
+    fire_size = pd.DataFrame(
+        {
+            "GRIDCODE": [1, 1, 1, 2, 2, 2, 3, 3, 3],
+            "SIZE_HA": [10.0, 20.0, 30.0, 100.0, 200.0, 300.0, 1_000.0, 2_000.0, 3_000.0],
+        }
+    )
+    params_path = tmp_path / "raw_zscore.json"
+
+    processed = process_raw_fire_size_zscore_df(
+        fire_size,
+        train_firezone_ids={1, 2},
+        norm_params_path=params_path,
+    )
+
+    training_quantiles = (
+        fire_size[fire_size["GRIDCODE"].isin({1, 2})].groupby("GRIDCODE")["SIZE_HA"].quantile(FIRE_SIZE_QUANTILES).unstack()
+    )
+    reference_values = training_quantiles.to_numpy().reshape(-1)
+    expected_mean = float(reference_values.mean())
+    expected_std = float(reference_values.std(ddof=0))
+    mean, std = load_raw_fire_size_zscore_params(params_path)
+    assert mean == pytest.approx(expected_mean)
+    assert std == pytest.approx(expected_std)
+    assert set(processed.columns) == {"GRIDCODE", "SIZE_HA", RAW_FIRE_SIZE_ZSCORE_FEATURE}
+
+    transformed_quantiles = processed.groupby("GRIDCODE")[RAW_FIRE_SIZE_ZSCORE_FEATURE].quantile(FIRE_SIZE_QUANTILES).unstack()
+    assert transformed_quantiles.loc[[1, 2]].to_numpy() == pytest.approx((training_quantiles.to_numpy() - expected_mean) / expected_std)
+    assert transformed_quantiles.loc[3, 0.5] > transformed_quantiles.loc[2, 0.9]
+    assert processed.loc[processed["SIZE_HA"].eq(3_000.0), RAW_FIRE_SIZE_ZSCORE_FEATURE].item() == pytest.approx(
+        (3_000.0 - expected_mean) / expected_std
+    )
+
+    reused = process_raw_fire_size_zscore_df(
+        pd.DataFrame({"GRIDCODE": [9], "SIZE_HA": [expected_mean + expected_std]}),
+        train_firezone_ids={999},
+        norm_params_path=params_path,
+    )
+    assert reused.loc[reused["GRIDCODE"].eq(9), RAW_FIRE_SIZE_ZSCORE_FEATURE].item() == pytest.approx(1.0)
 
 
 def test_build_dataset_appends_spatialized_tabular_channels_to_grid(temp_data_dir, monkeypatch):
