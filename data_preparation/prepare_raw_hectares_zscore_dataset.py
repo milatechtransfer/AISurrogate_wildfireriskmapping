@@ -1,4 +1,10 @@
-"""Create a lightweight dataset view using z-scored raw-hectare q10/q50/q90 inputs."""
+"""Create a lightweight dataset view using z-scored raw-hectare q10/q50/q90 inputs.
+
+If ``fire_size_raw_hectares_zscore_params.json`` already exists at ``destination_root``, its
+mean/std are loaded and applied as-is (no refitting, no training-zone resolution) and only
+``df_fire_fru_processed.csv`` is regenerated from it. Otherwise, statistics are fit from
+``source_root``'s training zones and saved to that file.
+"""
 
 from __future__ import annotations
 
@@ -65,11 +71,14 @@ def prepare_raw_hectares_zscore_dataset(source_root: Path, destination_root: Pat
     if legacy_params_path.is_file() or legacy_params_path.is_symlink():
         legacy_params_path.unlink()
     params_path = destination_root / RAW_FIRE_SIZE_ZSCORE_PARAMS
-    if params_path.is_file() or params_path.is_symlink():
-        params_path.unlink()
+    # If frozen params already exist at the destination, reuse them (load-and-apply) instead
+    # of refitting: skip deleting the file and skip resolving training fire-zone IDs, which is
+    # only needed to fit new statistics.
+    reuse_existing_params = params_path.is_file()
+    train_firezone_ids = None if reuse_existing_params else _training_firezone_ids(source_root)
     processed = process_raw_fire_size_zscore_df(
         pd.read_csv(source_root / FIRE_SIZE_TABLE),
-        train_firezone_ids=_training_firezone_ids(source_root),
+        train_firezone_ids=train_firezone_ids,
         norm_params_path=params_path,
     )
     processed.to_csv(destination_root / FIRE_SIZE_TABLE, index=False)
@@ -89,8 +98,10 @@ def main() -> None:
     parser.add_argument("--destination-root", type=Path, required=True)
     args = parser.parse_args()
 
+    reused_params = (args.destination_root / RAW_FIRE_SIZE_ZSCORE_PARAMS).is_file()
     mean, std = prepare_raw_hectares_zscore_dataset(args.source_root, args.destination_root)
-    print(f"Prepared raw-hectare z-score dataset at {args.destination_root}: mean={mean:.15g}, std={std:.15g}")
+    mode = "reused existing" if reused_params else "fitted new"
+    print(f"Prepared raw-hectare z-score dataset at {args.destination_root} ({mode} params): mean={mean:.15g}, std={std:.15g}")
 
 
 if __name__ == "__main__":
