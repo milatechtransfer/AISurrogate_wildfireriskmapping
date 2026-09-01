@@ -1,0 +1,29 @@
+raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+save_dir: "experiments/counterfactual_fire_size_spread_days_multi_output_hex16"
+hex_ids: ["16"]
+nonfuel_ids: [100, 101, 102, 105, 106, 110]
+
+# One q3 multi-output checkpoint jointly predicts BP/FI/ROS. Endpoint aliases preserve
+# the existing plotting interface while evaluation deduplicates the underlying model run.
+endpoints:
+  bp:
+    config_path: "configs/context_models/unet_256_firesize_q3.yaml"
+  fi:
+    config_path: "configs/context_models/unet_256_firesize_q3.yaml"
+  ros:
+    config_path: "configs/context_models/unet_256_firesize_q3.yaml"
+
+scenarios:
+  - name: "baseline"
+    kind: "baseline"
+    description: "Unmodified q10/q50/q90 fire-size inputs."
+
+  - name: "spread_days_q50_plus_0p4_q90_plus_5_beta2"
+    kind: "fire_size"
+    description: "Keep ignition-derived seasonal likelihoods fixed, form each fire zone's exact spread-event-day mixture, add 0.4 days to mixture q50 and 5 days to mixture q90, and scale the corresponding fire-size quantiles with exponent beta=2. q10 remains unchanged. Beta=2 is an explicit radial-growth sensitivity assumption, not a fitted coefficient attributed to Wang et al."
+    params:
+      mode: "spread_day_quantile_scaling"
+      spread_day_delta_q50_days: 0.4
+      spread_day_delta_q90_days: 5.0
+      size_scaling_exponent: 2.0
+      pmf_total_tolerance_percent: 1.0
