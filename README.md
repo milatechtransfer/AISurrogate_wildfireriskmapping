@@ -1,5 +1,9 @@
 ## Canada-Wide WildFire Risk Mapping
 
+### Reference CNN-physics hybrid v2.4
+
+See [`docs/mechanistic_hybrid_v24.md`](docs/mechanistic_hybrid_v24.md) for the shared checkpoint and data locations plus direct smoke, training, and stitched-evaluation commands.
+
 ### Installation & Setup
 
 Install `uv`: https://docs.astral.sh/uv/getting-started/installation.

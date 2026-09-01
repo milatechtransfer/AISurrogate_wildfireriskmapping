@@ -12,7 +12,7 @@ experiments/
 logs/
 *.log
 # --- UV ---
-.venv/
+.venv
 .uv/
 
 # --- Build ---
