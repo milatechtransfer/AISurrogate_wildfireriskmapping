@@ -4,6 +4,7 @@ Orchestrates data preparation, dataset building, and prediction.
 """
 
 import argparse
+import copy
 import logging
 import shutil
 import time
@@ -21,6 +22,7 @@ from tqdm import tqdm
 from data_preparation.hexel_loader import load_spatial_features_per_hexel
 from data_preparation.paths import MASK_SCOPE_CHOICES, Paths, normalize_mask_scope, prepared_mask_scope
 from data_preparation.process_hexels_into_grids import get_split_hexel_window
+from data_preparation.process_ignition_count import add_normalized_count_columns, build_hex_ignition_count_rows
 from data_preparation.process_tabular_data import build_weather_table, process_fire_size_distribution_table
 from data_preparation.spatial.utils import get_output_log_stats_cached, get_range_output_cached, read_split_hex_ids
 from data_preparation.utils import find_hex_ids
@@ -124,6 +126,8 @@ def _copy_ignition_count_artifacts(
     data_config: dict[str, Any],
     processed_data_dir: Path,
     hex_id: str,
+    raw_data_dir: Path | None = None,
+    mask_scope: str = "actual",
 ) -> None:
     source = _configured_source(data_config, "spatialized_ignition_count")
     if source is None:
@@ -139,23 +143,63 @@ def _copy_ignition_count_artifacts(
     if not source_table.is_file():
         raise FileNotFoundError(f"Checkpoint ignition-count table not found: {source_table}")
 
-    hex_id_col = params.get("hex_id_col")
-    if hex_id_col:
-        table = pd.read_csv(source_table, usecols=[str(hex_id_col)])
-        table_hex_ids = pd.to_numeric(table[str(hex_id_col)], errors="coerce")
-        if not table_hex_ids.eq(int(hex_id)).any():
-            raise ValueError(f"Ignition-count table {source_table} does not contain hex {hex_id}.")
-
     destination_table = processed_data_dir / str(csv_name)
-    if source_table.resolve() != destination_table.resolve():
-        shutil.copy2(source_table, destination_table)
-
     source_norm = training_root / "ignition_count_norm_params.json"
     if not source_norm.is_file():
         raise FileNotFoundError(f"Checkpoint ignition-count normalization artifact not found: {source_norm}")
+
+    hex_id_col = params.get("hex_id_col")
+    source_frame = pd.read_csv(source_table)
+    source_hex_ids = (
+        pd.to_numeric(source_frame[str(hex_id_col)], errors="coerce")
+        if hex_id_col and str(hex_id_col) in source_frame
+        else pd.Series(dtype=float)
+    )
+    if raw_data_dir is not None:
+        if hex_id_col != "hex_id" or "hex_id" not in source_frame:
+            raise ValueError("Regional ignition-count preparation requires params.hex_id_col='hex_id'.")
+        if source_table.resolve() == destination_table.resolve():
+            raise ValueError("Regional ignition-count preparation cannot write into the training artifact table.")
+        regional_hex_ids = sorted(find_hex_ids(str(raw_data_dir)))
+        if hex_id not in regional_hex_ids:
+            raise ValueError(f"Regional raw data root {raw_data_dir} does not contain hex {hex_id}.")
+        regional_frame = pd.concat(
+            [build_hex_ignition_count_rows(raw_data_dir, regional_hex_id, mask_scope=mask_scope) for regional_hex_id in regional_hex_ids],
+            ignore_index=True,
+        )
+        regional_frame, _ = add_normalized_count_columns(
+            regional_frame,
+            train_hex_ids={int(regional_hex_id) for regional_hex_id in regional_hex_ids},
+            norm_params_path=source_norm,
+        )
+        regional_ids = pd.to_numeric(regional_frame["hex_id"], errors="raise").unique()
+        source_frame = source_frame.loc[~source_hex_ids.isin(regional_ids)]
+        output_frame = pd.concat([source_frame, regional_frame], ignore_index=True)
+        output_frame.to_csv(destination_table, index=False)
+    elif source_hex_ids.eq(int(hex_id)).any():
+        if source_table.resolve() != destination_table.resolve():
+            shutil.copy2(source_table, destination_table)
+    else:
+        raise ValueError(f"Ignition-count table {source_table} does not contain hex {hex_id}.")
+
     destination_norm = processed_data_dir / source_norm.name
     if source_norm.resolve() != destination_norm.resolve():
         shutil.copy2(source_norm, destination_norm)
+
+
+def _checkpoint_data_config(
+    checkpoint: dict[str, Any],
+    training_data_root: Path | None,
+    inference_raw_data_root: Path | None = None,
+) -> dict[str, Any]:
+    data_config = copy.deepcopy(checkpoint["config"]["data"])
+    if training_data_root is not None:
+        if not training_data_root.is_dir():
+            raise FileNotFoundError(f"Training artifact root not found: {training_data_root}")
+        data_config["root_dir"] = str(training_data_root)
+    if inference_raw_data_root is not None:
+        data_config["raw_data_dir"] = str(inference_raw_data_root)
+    return data_config
 
 
 def prepare_hexel_data(
@@ -176,6 +220,7 @@ def prepare_hexel_data(
     weather_norm_params_path: Path | None = None,
     fire_size_norm_params_path: Path | None = None,
     checkpoint_data_config: dict[str, Any] | None = None,
+    build_ignition_count_from_raw: bool = False,
 ) -> Path:
     """
     Prepare data patches for a single hexel.
@@ -202,6 +247,8 @@ def prepare_hexel_data(
         fire_size_norm_params_path: Path to a JSON file with fire size normalization parameters.
             Same semantics as ``weather_norm_params_path``. Defaults to
             ``fire_size_norm_params.json`` inside the processed data directory.
+        build_ignition_count_from_raw: Rebuild regional ignition-count rows from ``data_dir``
+            and normalize them with the checkpoint's training artifact.
 
     Returns:
         Path to the output directory containing patches and metadata CSV.
@@ -218,7 +265,13 @@ def prepare_hexel_data(
     if fire_size_norm_params_path is None and not direct_log_fire_size:
         fire_size_norm_params_path = processed_data_dir / "fire_size_norm_params.json"
     if checkpoint_data_config is not None:
-        _copy_ignition_count_artifacts(checkpoint_data_config, processed_data_dir, hex_id)
+        _copy_ignition_count_artifacts(
+            checkpoint_data_config,
+            processed_data_dir,
+            hex_id,
+            raw_data_dir=data_dir if build_ignition_count_from_raw else None,
+            mask_scope=scope,
+        )
         _copy_direct_log_fire_size_artifacts(checkpoint_data_config, processed_data_dir)
 
     weather_table_path = processed_data_dir / "weather_table_processed.csv"
@@ -432,6 +485,7 @@ def run_single_hexel_pipeline(
     mask_scope: str = "actual",
     weather_norm_params_path: Path | None = None,
     fire_size_norm_params_path: Path | None = None,
+    training_data_root: Path | None = None,
 ) -> tuple[np.ndarray | dict[str, np.ndarray], Any]:
     """
     Orchestrate the end-to-end (data preparation + inference + post-processing) for one specific hexel.
@@ -454,6 +508,8 @@ def run_single_hexel_pipeline(
             forwarded to `prepare_hexel_data` when `prepare_data` is True.
         fire_size_norm_params_path: Path to a JSON file with fire size normalization parameters,
             forwarded to `prepare_hexel_data` when `prepare_data` is True.
+        training_data_root: Optional replacement for the training artifact root embedded in
+            the checkpoint. Regional raw files still come from ``data_dir``.
 
     Returns:
         Reconstructed target hexel grid (denormalized), and the ground truth elevation grid profile.
@@ -464,7 +520,11 @@ def run_single_hexel_pipeline(
     data_scope = prepared_mask_scope(scope)
     artifact_save_dir = Path(get_mask_scope_save_dir(str(save_dir), scope))
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    data_config = checkpoint["config"]["data"]  # We use this to build dataset class
+    data_config = _checkpoint_data_config(
+        checkpoint,
+        training_data_root,
+        inference_raw_data_root=data_dir if training_data_root is not None else None,
+    )
     data_prep_config = checkpoint["config"]["data_prep"]  # We use this to prepare data
     preserve_native_grid = data_prep_config.get("preserve_native_grid", False)
 
@@ -502,6 +562,7 @@ def run_single_hexel_pipeline(
             weather_norm_params_path=weather_norm_params_path,
             fire_size_norm_params_path=fire_size_norm_params_path,
             checkpoint_data_config=data_config,
+            build_ignition_count_from_raw=training_data_root is not None,
         )
     else:
         suffix = "" if data_scope == "actual" else f"_{data_scope}"
@@ -689,6 +750,12 @@ def main():
         default=None,
         help="Path to JSON file with fire size normalization parameters to reuse at inference (overrides config).",
     )
+    parser.add_argument(
+        "--training_data_root",
+        type=str,
+        default=None,
+        help="Training artifact root containing the checkpoint's normalization files and fuel curves (overrides config).",
+    )
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -709,8 +776,10 @@ def main():
     fire_size_norm_params_path = (
         args.fire_size_norm_params_path if args.fire_size_norm_params_path is not None else config.get("fire_size_norm_params_path")
     )
+    training_data_root = args.training_data_root if args.training_data_root is not None else config.get("training_data_root")
     weather_norm_params_path = Path(weather_norm_params_path) if weather_norm_params_path else None
     fire_size_norm_params_path = Path(fire_size_norm_params_path) if fire_size_norm_params_path else None
+    training_data_root = Path(training_data_root) if training_data_root else None
 
     # Resolve "all" into the list of available hex IDs
     if hex_id == "all":
@@ -734,6 +803,7 @@ def main():
             mask_scope=mask_scope,
             weather_norm_params_path=weather_norm_params_path,
             fire_size_norm_params_path=fire_size_norm_params_path,
+            training_data_root=training_data_root,
         )
 
     elapsed_time = time.time() - start_time

@@ -36,6 +36,7 @@ Note: All arguments follow values from `config.yaml` but if CLI arguments are pr
 | `--prepare_data` | Run data preparation step | `True` |
 | `--batch_size` | Batch size for inference | From config |
 | `--num_workers` | DataLoader workers | From config |
+| `--training_data_root` | Training normalization, fuel-curve, and preprocessing artifact root | Checkpoint value |
 
 
 
@@ -59,6 +60,7 @@ Edit `config.yaml`:
 # Paths
 data_dir: "/path/to/hexel/data"
 checkpoint_path: "/path/to/model/best.pth"
+training_data_root: "/path/to/training/artifacts"
 save_dir: "/path/to/output/"  # Predictions saved as predictions_hexel_{hex_id}.npy
 
 # Hexel configuration
@@ -86,6 +88,8 @@ If `prepare_data=True`, the pipeline will:
 4. Reproduce the checkpoint's ignition weighting, fuel representation, and native-grid setting
 5. Split the hexel into patches
 6. Generate metadata CSV
+
+`training_data_root` is useful when a checkpoint embeds a machine-local training path. It overrides only the training-artifact location; regional raw data still come from `data_dir`. See `docs/mechanistic_hybrid_v24.md` and `mechanistic_hybrid_v24.yaml` for the v2.4 regional-data contract.
 
 Note: The data preparation has to be done at least once before running inference, as it creates the necessary datasets for the prediction loop. If you have already prepared the data, you can set `prepare_data=False` to skip this step in subsequent runs. If you add more hexels later, you can run with `prepare_data=True` with the `hex_id` set to the new hexel to prepare just that hexel's data.
 

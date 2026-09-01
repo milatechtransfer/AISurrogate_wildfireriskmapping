@@ -5,6 +5,7 @@ import torch
 from inference import run_ai_surrogate_model_hexel_inference as inference_module
 from inference.predictor import BurnRiskPredictor
 from inference.run_ai_surrogate_model_hexel_inference import (
+    _checkpoint_data_config,
     _copy_direct_log_fire_size_artifacts,
     _copy_ignition_count_artifacts,
     _uses_direct_log_fire_size,
@@ -153,6 +154,9 @@ def test_inference_copies_checkpoint_ignition_count_artifacts(tmp_path):
     processed_dir = tmp_path / "processed"
     training_root.mkdir()
     processed_dir.mkdir()
+    (processed_dir / "ignition_count_processed.csv").write_text(
+        "hex_id,GRIDCODE,NORM_LOG1P_IGNITION_COUNT_MEAN,NORM_IGNITION_COUNT_CV\n88,10,0.9,0.9\n"
+    )
     (training_root / "ignition_count_processed.csv").write_text(
         "hex_id,GRIDCODE,NORM_LOG1P_IGNITION_COUNT_MEAN,NORM_IGNITION_COUNT_CV\n1,10,0.5,0.25\n"
     )
@@ -177,6 +181,100 @@ def test_inference_copies_checkpoint_ignition_count_artifacts(tmp_path):
 
     assert (processed_dir / "ignition_count_processed.csv").read_text() == (training_root / "ignition_count_processed.csv").read_text()
     assert (processed_dir / "ignition_count_norm_params.json").read_text() == '{"version": 1}\n'
+
+
+def test_inference_builds_regional_ignition_count_with_training_normalization(tmp_path, monkeypatch):
+    training_root = tmp_path / "training"
+    processed_dir = tmp_path / "processed"
+    raw_data_dir = tmp_path / "regional"
+    training_root.mkdir()
+    processed_dir.mkdir()
+    raw_data_dir.mkdir()
+    (raw_data_dir / "hex99").mkdir()
+    (training_root / "ignition_count_processed.csv").write_text(
+        "hex_id,GRIDCODE,IGNITION_COUNT_MEAN,IGNITION_COUNT_SD,IGNITION_COUNT_CV,"
+        "LOG1P_IGNITION_COUNT_MEAN,NORM_LOG1P_IGNITION_COUNT_MEAN,NORM_IGNITION_COUNT_CV\n"
+        "1,10,4,1,0.25,1.5,0.25,0.125\n"
+        "99,20,9,3,0.333,2.3,0.65,0.333\n"
+    )
+    (processed_dir / "ignition_count_processed.csv").write_text(
+        "hex_id,GRIDCODE,IGNITION_COUNT_MEAN,IGNITION_COUNT_SD,IGNITION_COUNT_CV,"
+        "LOG1P_IGNITION_COUNT_MEAN,NORM_LOG1P_IGNITION_COUNT_MEAN,NORM_IGNITION_COUNT_CV\n"
+        "88,30,10,2,0.2,2.4,0.7,0.0\n"
+    )
+    (training_root / "ignition_count_norm_params.json").write_text(
+        '{"log1p_mean_minimum": 1.0, "log1p_mean_maximum": 3.0, "cv_minimum": 0.2, "cv_maximum": 0.6}\n'
+    )
+    captured = {}
+
+    def fake_build(raw_root, hex_id, *, mask_scope):
+        captured.update(raw_root=raw_root, hex_id=hex_id, mask_scope=mask_scope)
+        return pd.DataFrame(
+            {
+                "hex_id": [99],
+                "GRIDCODE": [20],
+                "IGNITION_COUNT_MEAN": [6.0],
+                "IGNITION_COUNT_SD": [2.4],
+                "IGNITION_COUNT_CV": [0.4],
+                "LOG1P_IGNITION_COUNT_MEAN": [2.0],
+            }
+        )
+
+    monkeypatch.setattr(inference_module, "build_hex_ignition_count_rows", fake_build)
+    _copy_ignition_count_artifacts(
+        {
+            "root_dir": str(training_root),
+            "input_sources": [
+                {
+                    "name": "spatialized_ignition_count",
+                    "params": {
+                        "csv_name": "ignition_count_processed.csv",
+                        "hex_id_col": "hex_id",
+                    },
+                }
+            ],
+        },
+        processed_dir,
+        "99",
+        raw_data_dir=raw_data_dir,
+        mask_scope="actual",
+    )
+
+    result = pd.read_csv(processed_dir / "ignition_count_processed.csv")
+    regional = result[result["hex_id"].eq(99)].iloc[0]
+    assert set(result["hex_id"]) == {1, 99}
+    assert len(result[result["hex_id"].eq(99)]) == 1
+    assert regional["IGNITION_COUNT_MEAN"] == pytest.approx(6.0)
+    assert regional["NORM_LOG1P_IGNITION_COUNT_MEAN"] == pytest.approx(0.5)
+    assert regional["NORM_IGNITION_COUNT_CV"] == pytest.approx(0.5)
+    assert captured == {"raw_root": raw_data_dir, "hex_id": "99", "mask_scope": "actual"}
+
+
+def test_inference_overrides_checkpoint_training_and_regional_raw_roots(tmp_path):
+    training_root = tmp_path / "training"
+    regional_root = tmp_path / "regional"
+    training_root.mkdir()
+    regional_root.mkdir()
+    checkpoint = {
+        "config": {
+            "data": {
+                "root_dir": "/old/personal/training",
+                "raw_data_dir": "/old/national/raw",
+                "input_sources": [],
+            }
+        }
+    }
+
+    data_config = _checkpoint_data_config(
+        checkpoint,
+        training_data_root=training_root,
+        inference_raw_data_root=regional_root,
+    )
+
+    assert data_config["root_dir"] == str(training_root)
+    assert data_config["raw_data_dir"] == str(regional_root)
+    assert checkpoint["config"]["data"]["root_dir"] == "/old/personal/training"
+    assert checkpoint["config"]["data"]["raw_data_dir"] == "/old/national/raw"
 
 
 def test_inference_copies_checkpoint_direct_log_fire_size_artifacts(tmp_path):
@@ -255,6 +353,54 @@ def test_inference_preparation_forwards_checkpoint_spatial_modes(tmp_path, monke
     assert captured["ignition_weighting"] == "probability_mass"
     assert captured["fuel_representation"] == "raw"
     assert captured["preserve_native_grid"] is True
+
+
+@pytest.mark.parametrize(
+    ("build_from_raw", "expected_raw_root"),
+    [(False, None), (True, "data_dir")],
+)
+def test_inference_preparation_only_rebuilds_ignition_count_when_requested(
+    tmp_path,
+    monkeypatch,
+    build_from_raw,
+    expected_raw_root,
+):
+    (tmp_path / "hex01").mkdir()
+    captured = {}
+
+    monkeypatch.setattr(inference_module, "build_weather_table", lambda **_kwargs: None)
+    monkeypatch.setattr(inference_module, "find_hex_ids", lambda _root: ["01"])
+    monkeypatch.setattr(
+        inference_module,
+        "_copy_ignition_count_artifacts",
+        lambda _config, _output, _hex_id, *, raw_data_dir, mask_scope: captured.update(
+            raw_data_dir=raw_data_dir,
+            mask_scope=mask_scope,
+        ),
+    )
+    monkeypatch.setattr(inference_module, "_copy_direct_log_fire_size_artifacts", lambda *_args: None)
+    monkeypatch.setattr(
+        inference_module,
+        "load_spatial_features_per_hexel",
+        lambda **_kwargs: (
+            torch.zeros(1, 2, 2, 1).numpy(),
+            torch.ones(1, 2, 2, dtype=torch.bool).numpy(),
+            {0: (0, 0)},
+        ),
+    )
+    monkeypatch.setattr(inference_module, "get_split_hexel_window", lambda **_kwargs: None)
+
+    prepare_hexel_data(
+        data_dir=tmp_path,
+        hex_id="01",
+        win_h=2,
+        win_w=2,
+        checkpoint_data_config={"input_sources": []},
+        build_ignition_count_from_raw=build_from_raw,
+    )
+
+    expected = tmp_path if expected_raw_root else None
+    assert captured == {"raw_data_dir": expected, "mask_scope": "actual"}
 
 
 def test_inference_prepares_direct_log_fire_size_without_zone36_or_minmax(tmp_path, monkeypatch):

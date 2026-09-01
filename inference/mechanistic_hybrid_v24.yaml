@@ -1,0 +1,15 @@
+data_dir: "./inference/data_dir"
+checkpoint_path: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/mechanistic_hybrid_v24_native_512_crop_256_firesize_q3/best.pth"
+training_data_root: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v6_native_context_512_crop_256_ignition_probability_mass_log_firesize"
+save_dir: "./inference/outputs/mechanistic_hybrid_v24"
+
+hex_id: "01"
+mask_scope: "actual"
+prepare_data: true
+
+# Null means: reuse the normalization artifacts under training_data_root.
+weather_norm_params_path: null
+fire_size_norm_params_path: null
+
+batch_size: 4
+num_workers: 4
