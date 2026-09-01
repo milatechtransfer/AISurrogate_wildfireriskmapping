@@ -7,6 +7,7 @@ import pytest
 from data_preparation.prepare_raw_hectares_zscore_dataset import (
     FIRE_SIZE_TABLE,
     prepare_raw_hectares_zscore_dataset,
+    regenerate_fire_size_csv,
 )
 from data_preparation.utils import RAW_FIRE_SIZE_ZSCORE_FEATURE, RAW_FIRE_SIZE_ZSCORE_PARAMS
 
@@ -86,3 +87,43 @@ def test_prepare_raw_hectares_zscore_dataset_reuses_existing_params(tmp_path):
     assert processed.loc[processed["GRIDCODE"] == 1, RAW_FIRE_SIZE_ZSCORE_FEATURE].tolist() == pytest.approx(
         [(10.0 - 12.0) / 3.0, (20.0 - 12.0) / 3.0, (30.0 - 12.0) / 3.0]
     )
+
+
+def test_regenerate_fire_size_csv_writes_only_output_file(tmp_path):
+    source_df = tmp_path / "input" / "df_fire_fru_raw.csv"
+    source_df.parent.mkdir(parents=True)
+    pd.DataFrame({"GRIDCODE": [1, 1, 2], "SIZE_HA": [10.0, 20.0, 100.0]}).to_csv(source_df, index=False)
+
+    params_path = tmp_path / "params" / RAW_FIRE_SIZE_ZSCORE_PARAMS
+    params_path.parent.mkdir(parents=True)
+    frozen_params = {
+        "transform": "identity",
+        "normalization": "z_score",
+        "feature_name": RAW_FIRE_SIZE_ZSCORE_FEATURE,
+        "reference_weighting": "equal_training_zone_quantiles",
+        "quantiles": [0.1, 0.5, 0.9],
+        "size_ha_mean": 10.0,
+        "size_ha_std": 5.0,
+    }
+    params_path.write_text(json.dumps(frozen_params))
+
+    output_df = tmp_path / "output" / "df_fire_fru_processed.csv"
+
+    mean, std = regenerate_fire_size_csv(source_df, output_df, params_path)
+
+    assert mean == pytest.approx(10.0)
+    assert std == pytest.approx(5.0)
+    # Only the output file was created; the params file is untouched and nothing else appeared.
+    assert json.loads(params_path.read_text()) == frozen_params
+    assert list((tmp_path / "output").iterdir()) == [output_df]
+    processed = pd.read_csv(output_df)
+    assert processed.loc[processed["GRIDCODE"].isin([1, 2]), RAW_FIRE_SIZE_ZSCORE_FEATURE].tolist() == pytest.approx([0.0, 2.0, 18.0])
+    assert 36 in set(processed["GRIDCODE"])  # zone-36 zero-size row still gets imputed
+
+
+def test_regenerate_fire_size_csv_requires_existing_params(tmp_path):
+    source_df = tmp_path / "df_fire_fru_raw.csv"
+    pd.DataFrame({"GRIDCODE": [1], "SIZE_HA": [10.0]}).to_csv(source_df, index=False)
+
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        regenerate_fire_size_csv(source_df, tmp_path / "out.csv", tmp_path / "missing_params.json")

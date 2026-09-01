@@ -92,12 +92,53 @@ def prepare_raw_hectares_zscore_dataset(source_root: Path, destination_root: Pat
     return mean, std
 
 
+def regenerate_fire_size_csv(source_df: Path, output_df: Path, params_path: Path) -> tuple[float, float]:
+    """Regenerate only the z-scored fire-size CSV: reads ``source_df``, writes ``output_df``.
+
+    Nothing else on disk is read, written, or touched (no numpy_files symlink, no copying
+    other dataset files). ``params_path`` must already contain frozen mean/std from an earlier
+    ``prepare_raw_hectares_zscore_dataset`` run; they are loaded and applied as-is, with no
+    refitting and no training-zone resolution.
+    """
+    source_df = Path(source_df)
+    output_df = Path(output_df)
+    params_path = Path(params_path)
+    if not params_path.is_file():
+        raise FileNotFoundError(
+            f"{params_path} does not exist. This mode only applies already-frozen z-score params; "
+            "run this script with --source-root/--destination-root first to fit and save them."
+        )
+    processed = process_raw_fire_size_zscore_df(pd.read_csv(source_df), norm_params_path=params_path)
+    output_df.parent.mkdir(parents=True, exist_ok=True)
+    processed.to_csv(output_df, index=False)
+    return load_raw_fire_size_zscore_params(params_path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-root", type=Path, required=True)
-    parser.add_argument("--destination-root", type=Path, required=True)
+    parser.add_argument("--source-root", type=Path, help="Prepared dataset root to build a full raw-hectare z-score dataset view from.")
+    parser.add_argument("--destination-root", type=Path, help="Destination root for the full dataset view (used with --source-root).")
+    parser.add_argument("--source-df", type=Path, help="Input fire-size CSV to regenerate in isolation; nothing else is touched.")
+    parser.add_argument("--output-df", type=Path, help="Output path for the regenerated fire-size CSV (used with --source-df).")
+    parser.add_argument(
+        "--params-path",
+        type=Path,
+        help="Path to an existing fire_size_raw_hectares_zscore_params.json with frozen mean/std to apply "
+        "(required with --source-df/--output-df).",
+    )
     args = parser.parse_args()
 
+    if args.source_df or args.output_df or args.params_path:
+        if args.source_root or args.destination_root:
+            parser.error("--source-df/--output-df/--params-path cannot be combined with --source-root/--destination-root.")
+        if not (args.source_df and args.output_df and args.params_path):
+            parser.error("--source-df, --output-df, and --params-path must all be provided together.")
+        mean, std = regenerate_fire_size_csv(args.source_df, args.output_df, args.params_path)
+        print(f"Regenerated {args.output_df} using frozen params from {args.params_path}: mean={mean:.15g}, std={std:.15g}")
+        return
+
+    if not (args.source_root and args.destination_root):
+        parser.error("Provide either --source-root and --destination-root, or --source-df, --output-df, and --params-path.")
     reused_params = (args.destination_root / RAW_FIRE_SIZE_ZSCORE_PARAMS).is_file()
     mean, std = prepare_raw_hectares_zscore_dataset(args.source_root, args.destination_root)
     mode = "reused existing" if reused_params else "fitted new"
