@@ -1,5 +1,5 @@
 # Joint BP/FI/ROS U-Net with q10/q50/q90 fire-size channels.
-save_dir: "experiments/context_models/unet_256_firesize_q3"
+save_dir: "experiments/multi_output_spatial_weather_firesize_q3"
 
 modelling_approach: "1"
 
@@ -116,7 +116,6 @@ data:
         csv_name: "df_fire_fru_processed.csv"
         feature_names_list: ["NORM_LOG_SIZE_HA"]
         fire_weather_zone_id_col: "GRIDCODE"
-        aggregation: "mean"
         quantiles: [0.1, 0.5, 0.9]
         missing_value_strategy: "global_mean"
 
@@ -124,7 +123,7 @@ logger:
   enabled: true
   project_name: "nrcan05-wildfireriskmapping"
   workspace: "mila-amlrt"
-  experiment_name: "unet_256_firesize_q3"
+  experiment_name: "multi_output_spatial_weather_firesize_q3"
   tags:
     - "full_data"
     - "modelling_approach=1"

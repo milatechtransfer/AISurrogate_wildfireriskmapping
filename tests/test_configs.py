@@ -23,7 +23,7 @@ BP_CONFIG = Path("configs/bp_spatial_weather.yaml")
 FI_CONFIG = Path("configs/fi_spatial_weather.yaml")
 ROS_CONFIG = Path("configs/ros_spatial_weather.yaml")
 MULTI_OUTPUT_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
-Q3_256_CONFIG = Path("configs/context_models/unet_256_firesize_q3.yaml")
+MULTI_OUTPUT_FIRE_SIZE_Q3_CONFIG = Path("configs/multi_output_spatial_weather_firesize_q3.yaml")
 HAZARD_EVAL_CONFIG = Path("configs/hazard_eval_spatial_weather.yaml")
 HAZARD_MODEL_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
 COMMON_INPUT_PIPELINE_CONFIGS = [BP_CONFIG, FI_CONFIG, ROS_CONFIG]
@@ -200,9 +200,9 @@ def test_multi_output_common_input_pipeline_config():
     assert config.data.include_patch_metadata is True
 
 
-def test_q3_256_config_adds_only_fire_size_quantiles():
+def test_multi_output_fire_size_q3_config_adds_only_fire_size_quantiles():
     baseline = _load_config(MULTI_OUTPUT_CONFIG)
-    config = _load_config(Q3_256_CONFIG)
+    config = _load_config(MULTI_OUTPUT_FIRE_SIZE_Q3_CONFIG)
     fire_size = next(source.params for source in config.data.input_sources if source.name == "spatialized_fire_size")
 
     assert config.model == baseline.model
@@ -218,7 +218,15 @@ def test_q3_256_config_adds_only_fire_size_quantiles():
     assert fire_size.quantiles == [0.1, 0.5, 0.9]
 
 
-@pytest.mark.parametrize("quantiles", [[], [0.0], [1.0], [0.5, 0.1], [0.5, 0.5]])
+@pytest.mark.parametrize("quantiles", [None, []])
+def test_spatialized_tabular_empty_quantiles_preserve_configured_aggregation(quantiles):
+    params = SpatializedTabularParams(feature_names_list=["value"], aggregation="max", quantiles=quantiles)
+
+    assert params.quantiles is None
+    assert params.aggregation == "max"
+
+
+@pytest.mark.parametrize("quantiles", [[0.0], [1.0], [0.5, 0.1], [0.5, 0.5]])
 def test_spatialized_tabular_quantiles_must_be_sorted_unique_probabilities(quantiles):
     with pytest.raises(ValidationError):
         SpatializedTabularParams(feature_names_list=["value"], quantiles=quantiles)

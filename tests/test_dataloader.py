@@ -570,6 +570,26 @@ def test_spatialized_fire_size_rasterizes_empirical_quantiles(temp_data_dir):
     assert sample[:, 1, 1].tolist() == pytest.approx([10.0, 50.0, 100.0])
 
 
+def test_spatialized_fire_size_empty_quantiles_use_configured_aggregation(temp_data_dir):
+    tmpdir, _, _, _, _, _, fire_size_csv, _ = temp_data_dir
+    source = SpatializedTabularSource(
+        root_dir=tmpdir,
+        params=SpatializedTabularParams(
+            csv_name=fire_size_csv,
+            feature_names_list=["size"],
+            fire_weather_zone_id_col="grid_code",
+            aggregation="max",
+            quantiles=[],
+        ),
+        modelling_approach="1",
+    )
+
+    sample = source.get_sample({"file_path": os.path.join(tmpdir, "sample_0.npy")})
+
+    assert source.input_dim() == 1
+    assert sample[0, 0, 0].item() == pytest.approx(100.0)
+
+
 def test_build_dataset_appends_spatialized_tabular_channels_to_grid(temp_data_dir, monkeypatch):
     tmpdir, train_csv, _, _, weather_csv, weather_feats, _, _ = temp_data_dir
     monkeypatch.setattr("src.datasets.sources.grids.get_range_output_cached", lambda *_args, **_kwargs: (1.0, 0.0))
