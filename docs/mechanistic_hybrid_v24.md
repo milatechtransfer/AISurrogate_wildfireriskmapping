@@ -6,7 +6,7 @@ Mechanistic hybrid v2.4 is a native-grid CNN-physics model that jointly predicts
 
 | Artifact | Location |
 | --- | --- |
-| Release branch | `release/mechanistic-hybrid-v24` |
+| Release branch | `mechanistic-hybrid-v24-release` |
 | Config | `configs/mechanistic_hybrid_v24_reference.yaml` |
 | Prepared data | `/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v6_native_context_512_crop_256_ignition_probability_mass_log_firesize` |
 | Checkpoint bundle | `/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/mechanistic_hybrid_v24_native_512_crop_256_firesize_q3` |
@@ -17,7 +17,7 @@ The config is standalone: it has no `extends` chain and already points to the sh
 ## Setup
 
 ```bash
-git switch release/mechanistic-hybrid-v24
+git switch mechanistic-hybrid-v24-release
 uv sync
 mkdir -p logs
 ```

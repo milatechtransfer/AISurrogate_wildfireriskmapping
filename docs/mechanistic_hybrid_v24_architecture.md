@@ -9,7 +9,7 @@ the regional-data contract remain in
 
 | Item | Value |
 | --- | --- |
-| Release branch | `release/mechanistic-hybrid-v24` |
+| Release branch | `mechanistic-hybrid-v24-release` |
 | Release commit | `04c2c83` |
 | Training implementation commit | `e7570ca` |
 | Reference config | `configs/mechanistic_hybrid_v24_reference.yaml` |
