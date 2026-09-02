@@ -245,6 +245,21 @@ class SpatializedTabularParams(TabularParams):
     include_missing_firezone_mask: bool = False
     missing_value_strategy: str = "global_mean"
     global_fill_csv_name: str | None = None
+    # Non-empty values replace scalar aggregation; None or [] uses aggregation.
+    quantiles: list[float] | None = None
+
+    @field_validator("quantiles")
+    @classmethod
+    def validate_quantiles(cls, values: list[float] | None) -> list[float] | None:
+        if values is None:
+            return None
+        if not values:
+            return None
+        if any(not 0.0 < value < 1.0 for value in values):
+            raise ValueError("quantiles must lie strictly between 0 and 1.")
+        if values != sorted(set(values)):
+            raise ValueError("quantiles must be sorted and unique.")
+        return values
 
 
 class DataSourceConfig(BaseModel):
