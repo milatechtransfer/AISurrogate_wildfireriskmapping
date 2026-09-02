@@ -172,3 +172,4 @@ data_prep:
   overlap_ratio: 0.2
   ignition_weighting: "distribution"
   fuel_representation: "raw"
+  mask_scope: "actual"
