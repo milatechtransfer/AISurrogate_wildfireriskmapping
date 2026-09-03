@@ -30,6 +30,18 @@ class ModelConfig(BaseModel):
     output_head: Literal["shared", "bp_behavior"] = "shared"
     hidden_features: list[int] = [64, 128, 256, 512]
 
+    # Depth/width of the BP-specific conv trunk in the "bp_behavior" output head,
+    # applied before the final 1x1 projection to BP logits. Ignored for "shared".
+    bp_head_depth: int = 2
+    bp_head_hidden_channels: int | None = None
+
+    # When True (and output_head="bp_behavior"), BP gets its own decoder branch
+    # (separate upsampling + skip-fusion convs) instead of sharing the single
+    # decoder used for FI/ROS. Encoder and bottleneck stay shared either way.
+    # Use this if a deeper bp_head alone doesn't close the gap to a BP-only
+    # baseline (a sign of negative transfer in the shared decoder).
+    bp_split_decoder: bool = False
+
     # Controls if we use MultiSourceUNet or BaselineUNet
     # Use ["spatial"] for base unet
     # Extra tabular features are detected automatically from the dataset config.
@@ -50,6 +62,12 @@ class ModelConfig(BaseModel):
     # Unused by src/models/factory.py; consumed only by src/train_tabular_baseline.py's
     # build_baseline_model dispatch.
     params: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_bp_split_decoder(self) -> "ModelConfig":
+        if self.bp_split_decoder and self.output_head != "bp_behavior":
+            raise ValueError("model.bp_split_decoder=True requires model.output_head='bp_behavior'.")
+        return self
 
 
 class TargetLossConfig(BaseModel):

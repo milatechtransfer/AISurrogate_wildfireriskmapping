@@ -35,6 +35,32 @@ source .venv/bin/activate
 # Flush stdout/stderr immediately so log lines aren't lost if the job is
 # preempted before Python's internal buffers would otherwise flush.
 export PYTHONUNBUFFERED=1
+# Cap BLAS/OMP threads per process. Without this, NumPy/PyTorch CPU ops in the
+# main process AND in each of the `num_workers` DataLoader worker processes each
+# try to spawn one thread per visible core, oversubscribing the small
+# --cpus-per-task budget and starving the data loader (a common hidden cause of
+# low SM occupancy / GPU stalling per the Mila profiling guide's diagnosis flow:
+# https://docs.mila.quebec/userguides/compute_utilization_guidelines/profiling/).
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+# Lightweight self-diagnostic GPU utilization sampler (Method B from the Mila
+# profiling guide, done proactively instead of via interactive srun). Samples
+# SM/memory utilization every 30s to logs/gpu_util_<job_id>.csv so occupancy can
+# be reviewed after the run without needing an interactive session. Safe to
+# ignore/delete this file; it adds negligible overhead.
+GPU_LOG="logs/gpu_util_${SLURM_JOB_ID:-manual}.csv"
+if command -v nvidia-smi >/dev/null 2>&1; then
+    (
+        echo "timestamp,gpu_util_pct,mem_util_pct,mem_used_mib,mem_total_mib"
+        while true; do
+            nvidia-smi --query-gpu=timestamp,utilization.gpu,utilization.memory,memory.used,memory.total --format=csv,noheader,nounits
+            sleep 30
+        done
+    ) >"$GPU_LOG" 2>/dev/null &
+    GPU_LOG_PID=$!
+    trap 'kill "$GPU_LOG_PID" 2>/dev/null || true' EXIT
+fi
 LOGGER_ENABLED=$(python - "$CONFIG_FILE" <<'PY'
 import sys
 from pathlib import Path
