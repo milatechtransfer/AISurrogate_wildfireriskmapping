@@ -1,7 +1,7 @@
 # Joint BP/FI/ROS emulator on the shared spatial input pipeline.
 # The UNet backbone and decoder are shared. A BP head predicts probability
 # logits, while one two-channel behavior head predicts conditional FI and ROS.
-save_dir: "experiments/NWT_multi_output_spatial_weather_scenario_FireExcludeSpotting"
+save_dir: "experiments/NWT_multi_output_spatial_weather_scenario_FireExcludeSpotting_finetune"
 
 modelling_approach: "1"
 
@@ -16,7 +16,7 @@ model:
 
 optimizer:
   name: "AdamW"
-  lr: 7.0e-4
+  lr: 5.0e-5
   target_losses:
     bp:
       loss: ["kl", "ccc", "hex_mean_pairwise_rank", "hex_top10_pairwise_rank"]
@@ -44,8 +44,10 @@ lr_scheduler:
   warmup_epochs: 5
 
 training:
-  max_epochs: 25
+  max_epochs: 10
   log_every_n_epoch: 1
+  warm_start_checkpoint: "experiments/NWT_multi_output_spatial_weather_scenario_FireExcludeSpotting_finetune/best_base.pth"
+  #freeze_modules: ["encoder", "bottleneck"]
 
 evaluation:
   best_ckpt_metrics: ["bp/ccc", "fi/ccc", "ros/ccc"]
@@ -54,19 +56,21 @@ evaluation:
   bp_nodata_as_zero: true
   prediction_support_policy: "input"
   hazard_fi_cap: 10000.0
+  report_firezone_metrics: true
 
 data:
-  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_FireExcludeSpotting"
+  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_FireExcludeSpotting_v2"
   raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data"
 
-  train_split: ""
-  val_split: ""
+  train_split: "test_indices.csv"
+  val_split: "test_indices.csv"
   test_split: "test_indices.csv"
 
-  batch_size: 64
+  batch_size: 16
   num_workers: 2
   valid_mask_threshold: 0.01
   include_patch_metadata: true
+  norm_stats_filename: "dataset_norm_stats_national.json"
 
   input_sources:
     - name: "grid"
@@ -117,7 +121,7 @@ logger:
   enabled: true
   project_name: "nrcan-05-wildfires-nwt-data"
   workspace: "mila-amlrt"
-  experiment_name: "multi_task_NWT_data_scenario_baseline_FireExcludeSpotting"
+  experiment_name: "multi_task_NWT_data_scenario_baseline_FireExcludeSpotting_v2_data_national_stats_finetune"
   tags:
     - "full_data"
     - "modelling_approach=1"

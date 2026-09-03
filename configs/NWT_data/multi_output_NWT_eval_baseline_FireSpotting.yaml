@@ -1,7 +1,7 @@
 # Joint BP/FI/ROS emulator on the shared spatial input pipeline.
 # The UNet backbone and decoder are shared. A BP head predicts probability
 # logits, while one two-channel behavior head predicts conditional FI and ROS.
-save_dir: "experiments/NWT_multi_output_spatial_weather_scenario_FireSpottingDrought"
+save_dir: "experiments/NWT_multi_output_spatial_weather_baseline_FireSpotting"
 
 modelling_approach: "1"
 
@@ -50,13 +50,14 @@ training:
 evaluation:
   best_ckpt_metrics: ["bp/ccc", "fi/ccc", "ros/ccc"]
   best_ckpt_metrics_mode: ["max", "max", "max"]
-  checkpoint_filename: "best.pth"
+  checkpoint_filename: "best.pth" # change the checkpoint name whether it is base or finetuned
   bp_nodata_as_zero: true
   prediction_support_policy: "input"
   hazard_fi_cap: 10000.0
+  report_firezone_metrics: true
 
 data:
-  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_FireSpottingDrought"
+  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_baseline_FireSpotting_v2"
   raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data"
 
   train_split: ""
@@ -67,6 +68,7 @@ data:
   num_workers: 2
   valid_mask_threshold: 0.01
   include_patch_metadata: true
+  norm_stats_filename: "dataset_norm_stats_national.json"
 
   input_sources:
     - name: "grid"
@@ -88,6 +90,7 @@ data:
 
     - name: "spatialized_weather"
       params:
+      #zone_id_remap: {45: 26}
         csv_name: "weather_table_processed.csv"
         feature_names_list:
           - "Temperature"
@@ -117,7 +120,7 @@ logger:
   enabled: true
   project_name: "nrcan-05-wildfires-nwt-data"
   workspace: "mila-amlrt"
-  experiment_name: "multi_task_NWT_data_scenario_baseline_FireSpottingDrought"
+  experiment_name: "multi_task_NWT_data_scenario_baseline_FireSpotting_v2_data_national_stats"
   tags:
     - "full_data"
     - "modelling_approach=1"
@@ -163,5 +166,5 @@ data_prep:
   overlap_ratio: 0.2
   ignition_weighting: "distribution"
   fuel_representation: "raw"
-  scenario_name: "FireSpottingDrought"
+  scenario_name: "FireSpotting"
   mask_scope: None
