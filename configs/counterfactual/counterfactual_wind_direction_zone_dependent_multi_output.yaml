@@ -1,0 +1,75 @@
+raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+save_dir: "experiments/counterfactual_wind_direction_zone_dependent_multi_output_hex16"
+hex_ids: ["16"]
+nonfuel_ids: [100, 101, 102, 105, 106, 110]
+
+# Single multi-output checkpoint jointly predicting bp/fi/ros. See
+# counterfactual_windy_weather_zone_dependent_multi_output.yaml for details on this pattern.
+endpoints:
+  bp:
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+  fi:
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+  ros:
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+
+# Compass sweep: each hex16 WeatherZone keeps its own (same-zone) average wind speed
+# but has wind forced to blow from each compass direction in turn, instead of one
+# hex-wide average broadcast to every zone. wind_speed_percentile=0 includes every
+# donor row, so each zone uses its ordinary average wind magnitude rather than only
+# its windiest days.
+# self-donor only (donor_hex_ids == recipient_hex_ids): an external donor would
+# require matching WeatherZone IDs across hexes, which are not guaranteed to be
+# semantically comparable between hexels.
+scenarios:
+  - name: "baseline"
+    kind: "baseline"
+    description: "Unmodified prepared weather inputs."
+
+  - name: "wind_dir_000"
+    kind: "weather"
+    description: "Each hex16 WeatherZone's own average wind speed (all rows, wind_speed_percentile=0), wind forced to blow from 0 deg (N)."
+    params: {mode: "wind_direction_zone_dependent_transplant", donor_hex_ids: ["16"], wind_speed_percentile: 0, direction_degrees: 0}
+
+  - name: "wind_dir_045"
+    kind: "weather"
+    description: "Each hex16 WeatherZone's own average wind speed (all rows, wind_speed_percentile=0), wind forced to blow from 45 deg (NE)."
+    params: {mode: "wind_direction_zone_dependent_transplant", donor_hex_ids: ["16"], wind_speed_percentile: 0, direction_degrees: 45}
+
+  - name: "wind_dir_090"
+    kind: "weather"
+    description: "Each hex16 WeatherZone's own average wind speed (all rows, wind_speed_percentile=0), wind forced to blow from 90 deg (E)."
+    params: {mode: "wind_direction_zone_dependent_transplant", donor_hex_ids: ["16"], wind_speed_percentile: 0, direction_degrees: 90}
+
+  - name: "wind_dir_135"
+    kind: "weather"
+    description: "Each hex16 WeatherZone's own average wind speed (all rows, wind_speed_percentile=0), wind forced to blow from 135 deg (SE)."
+    params: {mode: "wind_direction_zone_dependent_transplant", donor_hex_ids: ["16"], wind_speed_percentile: 0, direction_degrees: 135}
+
+  - name: "wind_dir_180"
+    kind: "weather"
+    description: "Each hex16 WeatherZone's own average wind speed (all rows, wind_speed_percentile=0), wind forced to blow from 180 deg (S)."
+    params: {mode: "wind_direction_zone_dependent_transplant", donor_hex_ids: ["16"], wind_speed_percentile: 0, direction_degrees: 180}
+
+  - name: "wind_dir_225"
+    kind: "weather"
+    description: "Each hex16 WeatherZone's own average wind speed (all rows, wind_speed_percentile=0), wind forced to blow from 225 deg (SW)."
+    params: {mode: "wind_direction_zone_dependent_transplant", donor_hex_ids: ["16"], wind_speed_percentile: 0, direction_degrees: 225}
+
+  - name: "wind_dir_270"
+    kind: "weather"
+    description: "Each hex16 WeatherZone's own average wind speed (all rows, wind_speed_percentile=0), wind forced to blow from 270 deg (W)."
+    params: {mode: "wind_direction_zone_dependent_transplant", donor_hex_ids: ["16"], wind_speed_percentile: 0, direction_degrees: 270}
+
+  - name: "wind_dir_315"
+    kind: "weather"
+    description: "Each hex16 WeatherZone's own average wind speed (all rows, wind_speed_percentile=0), wind forced to blow from 315 deg (NW)."
+    params: {mode: "wind_direction_zone_dependent_transplant", donor_hex_ids: ["16"], wind_speed_percentile: 0, direction_degrees: 315}
+
+  - name: "wind_dir_360"
+    kind: "weather"
+    description: "Each hex16 WeatherZone's own average wind speed (all rows, wind_speed_percentile=0), wind forced to blow from 360 deg (=0/N, closes the compass loop for rose plots)."
+    params: {mode: "wind_direction_zone_dependent_transplant", donor_hex_ids: ["16"], wind_speed_percentile: 0, direction_degrees: 360}

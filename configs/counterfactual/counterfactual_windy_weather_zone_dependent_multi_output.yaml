@@ -1,0 +1,58 @@
+raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+save_dir: "experiments/counterfactual_windy_weather_zone_dependent_multi_output_hex16"
+hex_ids: ["16"]
+nonfuel_ids: [100, 101, 102, 105, 106, 110]
+
+# One 256 -> 256 q3 multi-output checkpoint jointly predicts BP/FI/ROS. The bp/fi/ros
+# endpoint aliases preserve the existing per-target plotting interface while evaluation
+# deduplicates the underlying model run. `checkpoint_dir` reads the shared released
+# checkpoint rather than the endpoint config's local training `save_dir`.
+endpoints:
+  bp:
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+  fi:
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+  ros:
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+
+# Each hex16 WeatherZone is assigned the mean processed-weather vector of its own
+# windiest rows, instead of one hex-wide donor mean broadcast to every zone, so
+# zone-to-zone wind climatology differences are preserved. `wind_speed_percentile`
+# is resolved within each zone's own WindSpeed distribution: 90 keeps its windiest
+# 10%; lower it (e.g. 75) to widen the donor pool, or raise it (e.g. 95) to narrow it.
+# self-donor only (donor_hex_ids == recipient_hex_ids): an external donor would
+# require matching WeatherZone IDs across hexes, which are not guaranteed to be
+# semantically comparable between hexels.
+scenarios:
+  - name: "baseline"
+    kind: "baseline"
+    description: "Unmodified prepared weather inputs."
+
+  - name: "windy_self_transplant_zone_dependent"
+    kind: "weather"
+    description: "Each hex16 WeatherZone receives the mean processed-weather vector of its own windiest rows (top 10%, wind_speed_percentile=90), pooled across all seasons."
+    params:
+      mode: "windy_mean_zone_dependent_transplant"
+      donor_hex_ids: ["16"]
+      wind_speed_percentile: 90
+
+  - name: "windy_self_transplant_zone_dependent_s1"
+    kind: "weather"
+    description: "Season-restricted variant: each hex16 WeatherZone's windiest rows (top 10%, wind_speed_percentile=90) resolved within Season 1 only (hex16_Seasons.csv: Julian day 121-211, ~Apr 30-Jul 29, spring/early summer)."
+    params:
+      mode: "windy_mean_zone_dependent_transplant"
+      donor_hex_ids: ["16"]
+      wind_speed_percentile: 90
+      season: 1
+
+  - name: "windy_self_transplant_zone_dependent_s2"
+    kind: "weather"
+    description: "Season-restricted variant: each hex16 WeatherZone's windiest rows (top 10%, wind_speed_percentile=90) resolved within Season 2 only (hex16_Seasons.csv: Julian day 212+, ~Jul 30 onward, summer/fall)."
+    params:
+      mode: "windy_mean_zone_dependent_transplant"
+      donor_hex_ids: ["16"]
+      wind_speed_percentile: 90
+      season: 2

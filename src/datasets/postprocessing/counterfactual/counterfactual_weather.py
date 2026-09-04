@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from data_preparation.tabular.weather import load_weather_list
+from data_preparation.tabular.weather import load_weather_list, load_weather_normalization_params, wind_to_components
 from data_preparation.utils import aggregate_csv_by_pattern
 from src.datasets.fuel_utils import normalize_hex_id
 
@@ -16,9 +17,21 @@ FWI_COLUMN = "FireWeatherIndex"
 HEX_ID_COLUMN = "hex_id"
 RAW_HEX_ID_COLUMN = "__hex_id"
 WEATHER_ZONE_COLUMN = "WeatherZone"
+WIND_SPEED_COLUMN = "WindSpeed"
+WIND_DIRECTION_COLUMN = "WindDirection"
+WIND_X_COLUMN = "wind_x"
+WIND_Y_COLUMN = "wind_y"
+WEATHER_NORM_PARAMS_FILENAME = "weather_norm_params.json"
 STRUCTURAL_COLUMNS: tuple[str, ...] = ("Order", "Season", HEX_ID_COLUMN, WEATHER_ZONE_COLUMN)
-NON_AVERAGE_COLUMNS: tuple[str, ...] = (*STRUCTURAL_COLUMNS, "WindDirection")
-WEATHER_EDIT_MODES = ("external_mean_zone_transplant",)
+NON_AVERAGE_COLUMNS: tuple[str, ...] = (*STRUCTURAL_COLUMNS, WIND_DIRECTION_COLUMN)
+EXTERNAL_MEAN_ZONE_TRANSPLANT_MODE = "external_mean_zone_transplant"
+WINDY_MEAN_ZONE_DEPENDENT_TRANSPLANT_MODE = "windy_mean_zone_dependent_transplant"
+WIND_DIRECTION_ZONE_DEPENDENT_TRANSPLANT_MODE = "wind_direction_zone_dependent_transplant"
+WEATHER_EDIT_MODES = (
+    EXTERNAL_MEAN_ZONE_TRANSPLANT_MODE,
+    WINDY_MEAN_ZONE_DEPENDENT_TRANSPLANT_MODE,
+    WIND_DIRECTION_ZONE_DEPENDENT_TRANSPLANT_MODE,
+)
 RAW_WEATHER_GLOB_PATTERN = "hex*/tabular/hex*_DailyWeather.csv"
 
 
@@ -36,6 +49,23 @@ class WeatherEditReport:
     donor_fwi_mean: float
     baseline_fwi_mean: float
     scenario_fwi_mean: float
+    # Set only for wind-filtered donor means (`windy_mean_zone_dependent_transplant`
+    # and `wind_direction_zone_dependent_transplant`); None otherwise.
+    # `wind_speed_percentile` is the configured cutoff (0 = every donor row);
+    # `wind_speed_threshold_kmh` is the raw WindSpeed value it resolved to for this
+    # donor pool, for reference.
+    wind_speed_percentile: float | None = None
+    wind_speed_threshold_kmh: float | None = None
+    # Set only for `wind_direction_zone_dependent_transplant`; None otherwise.
+    direction_degrees: float | None = None
+    # Set only for zone-dependent modes (one report row per recipient (hex_id,
+    # WeatherZone) pair); None for whole-hex modes.
+    weather_zone: int | None = None
+    # Set only when a `season` filter was applied (currently
+    # `windy_mean_zone_dependent_transplant`); restricts the donor pool to rows whose
+    # processed `Season` integer matches, before the wind_speed_percentile cutoff.
+    # None means no season restriction (every season pooled together).
+    season: int | None = None
 
 
 def _hex_id_from_weather_path(path: Path) -> str:
@@ -94,7 +124,7 @@ def _validate_raw_processed_alignment(raw_features: pd.DataFrame, processed: pd.
     hex_mismatch = raw_hex_ids.to_numpy() != processed_hex_ids.to_numpy()
     if hex_mismatch.any():
         row = int(np.flatnonzero(hex_mismatch)[0])
-        raise ValueError(f"Raw/processed hex_id mismatch at row {row}: " f"{raw_hex_ids.iloc[row]!r} != {processed_hex_ids.iloc[row]!r}.")
+        raise ValueError(f"Raw/processed hex_id mismatch at row {row}: {raw_hex_ids.iloc[row]!r} != {processed_hex_ids.iloc[row]!r}.")
 
     raw_zones = pd.to_numeric(raw_features[WEATHER_ZONE_COLUMN], errors="coerce")
     processed_zones = pd.to_numeric(processed[WEATHER_ZONE_COLUMN], errors="coerce")
@@ -112,6 +142,56 @@ def _validate_raw_processed_alignment(raw_features: pd.DataFrame, processed: pd.
     return processed_hex_ids
 
 
+def _donor_mask_from_hex_ids(processed_hex_ids: pd.Series, donor_hex_ids: list[str]) -> tuple[list[str], np.ndarray]:
+    normalized_donor_ids = [normalize_hex_id(hex_id) for hex_id in donor_hex_ids]
+    if not normalized_donor_ids:
+        raise ValueError("donor_hex_ids must be non-empty.")
+    donor_mask = processed_hex_ids.isin(normalized_donor_ids).to_numpy()
+    if not donor_mask.any():
+        raise ValueError(f"No weather rows found for donor_hex_ids={normalized_donor_ids}.")
+    return normalized_donor_ids, donor_mask
+
+
+def _percentile_wind_speed_filter(
+    wind_speed: np.ndarray,
+    base_mask: np.ndarray,
+    percentile: float,
+    *,
+    context: str,
+) -> tuple[np.ndarray, float]:
+    """Restrict `base_mask` to rows at/above the `percentile`-th WindSpeed value within it.
+
+    `percentile=0` resolves to the pool's minimum and therefore keeps every row in
+    `base_mask` (its ordinary/average wind speed); `percentile=90` keeps its windiest
+    10%. Returns the filtered mask and the raw WindSpeed cutoff it resolved to.
+    """
+    if not 0.0 <= percentile <= 100.0:
+        raise ValueError(f"wind_speed_percentile must be within [0, 100]; got {percentile} for {context}.")
+    if not base_mask.any():
+        raise ValueError(f"No weather rows available to compute a wind_speed_percentile for {context}.")
+    threshold_value = float(np.percentile(wind_speed[base_mask], percentile))
+    filtered_mask = base_mask & (wind_speed >= threshold_value)
+    if not filtered_mask.any():
+        raise ValueError(
+            f"No weather rows with {WIND_SPEED_COLUMN} >= {threshold_value} (the {percentile}th percentile) found for {context}."
+        )
+    return filtered_mask, threshold_value
+
+
+def _season_filter(
+    season_values: np.ndarray,
+    base_mask: np.ndarray,
+    season: int,
+    *,
+    context: str,
+) -> np.ndarray:
+    """Restrict `base_mask` to rows whose processed `Season` integer equals `season`."""
+    filtered_mask = base_mask & (season_values == season)
+    if not filtered_mask.any():
+        raise ValueError(f"No weather rows with Season={season} found for {context}.")
+    return filtered_mask
+
+
 def apply_external_mean_zone_transplant(
     raw_features: pd.DataFrame,
     processed: pd.DataFrame,
@@ -124,7 +204,8 @@ def apply_external_mean_zone_transplant(
 
     The returned table contains one row per ``(hex_id, WeatherZone)``. Baseline
     hex-zone means are retained everywhere except recipient hexels, whose zone rows
-    receive the donor mean exactly.
+    receive the donor mean exactly. `donor_hex_ids` may overlap or exactly match
+    `recipient_hex_ids` (e.g. a hexel can donate its own rows to itself).
     """
     if FWI_COLUMN not in raw_features.columns or FWI_COLUMN not in processed.columns:
         raise ValueError(f"Raw and processed weather tables must include {FWI_COLUMN!r}.")
@@ -138,12 +219,7 @@ def apply_external_mean_zone_transplant(
     if missing_recipients:
         raise ValueError(f"No weather rows found for recipient hex_id(s)={missing_recipients}.")
 
-    normalized_donor_ids = [normalize_hex_id(hex_id) for hex_id in donor_hex_ids]
-    if not normalized_donor_ids:
-        raise ValueError("donor_hex_ids must be non-empty.")
-    donor_mask = processed_hex_ids.isin(normalized_donor_ids).to_numpy()
-    if not donor_mask.any():
-        raise ValueError(f"No weather rows found for donor_hex_ids={normalized_donor_ids}.")
+    normalized_donor_ids, donor_mask = _donor_mask_from_hex_ids(processed_hex_ids, donor_hex_ids)
 
     mean_columns = [
         column for column in processed.columns if column not in NON_AVERAGE_COLUMNS and pd.api.types.is_numeric_dtype(processed[column])
@@ -166,7 +242,7 @@ def apply_external_mean_zone_transplant(
         reports.append(
             WeatherEditReport(
                 scenario_name=scenario_name,
-                mode="external_mean_zone_transplant",
+                mode=EXTERNAL_MEAN_ZONE_TRANSPLANT_MODE,
                 recipient_hex_id=recipient_hex_id,
                 n_recipient_rows=int(recipient_mask.sum()),
                 n_recipient_zones=int(processed.loc[recipient_mask, WEATHER_ZONE_COLUMN].nunique()),
@@ -180,6 +256,256 @@ def apply_external_mean_zone_transplant(
     return edited, reports
 
 
+def _load_wind_component_norm_params(norm_params_path: str | Path) -> tuple[float, float, float, float]:
+    """Return `(wind_x_mean, wind_x_std, wind_y_mean, wind_y_std)` z-score parameters."""
+    norm_params = load_weather_normalization_params(norm_params_path)
+    z_cols = list(norm_params["z_score"]["cols"])
+    if WIND_X_COLUMN not in z_cols or WIND_Y_COLUMN not in z_cols:
+        raise ValueError(f"{norm_params_path} does not define z-score parameters for {WIND_X_COLUMN!r}/{WIND_Y_COLUMN!r}.")
+    wind_x_mean = float(norm_params["z_score"]["mean"][z_cols.index(WIND_X_COLUMN)])
+    wind_x_std = float(norm_params["z_score"]["std"][z_cols.index(WIND_X_COLUMN)]) or 1.0
+    wind_y_mean = float(norm_params["z_score"]["mean"][z_cols.index(WIND_Y_COLUMN)])
+    wind_y_std = float(norm_params["z_score"]["std"][z_cols.index(WIND_Y_COLUMN)]) or 1.0
+    return wind_x_mean, wind_x_std, wind_y_mean, wind_y_std
+
+
+def _forced_direction_donor_mean(
+    processed: pd.DataFrame,
+    mean_columns: list[str],
+    donor_mask: np.ndarray,
+    *,
+    wind_speed: np.ndarray,
+    direction_degrees: float,
+    wind_component_norm_params: tuple[float, float, float, float],
+) -> pd.Series:
+    """Donor mean vector with `wind_x`/`wind_y` recomputed for a forced compass direction."""
+    wind_x_mean, wind_x_std, wind_y_mean, wind_y_std = wind_component_norm_params
+    donor_wind_speed = wind_speed[donor_mask]
+    forced_direction = np.full(donor_wind_speed.shape, float(direction_degrees), dtype=np.float64)
+    raw_wind_x, raw_wind_y = wind_to_components(ws=donor_wind_speed, wd=forced_direction)
+
+    donor_subset = processed.loc[donor_mask, mean_columns].copy()
+    donor_subset[WIND_X_COLUMN] = (raw_wind_x - wind_x_mean) / wind_x_std
+    donor_subset[WIND_Y_COLUMN] = (raw_wind_y - wind_y_mean) / wind_y_std
+    donor_mean = donor_subset.mean(axis=0)
+    if not np.isfinite(donor_mean.to_numpy(dtype=np.float64)).all():
+        raise ValueError("Donor mean weather vector contains non-finite values.")
+    return donor_mean
+
+
+def _apply_mean_zone_dependent_transplant(
+    raw_features: pd.DataFrame,
+    processed: pd.DataFrame,
+    *,
+    recipient_hex_ids: list[str],
+    donor_hex_ids: list[str],
+    scenario_name: str,
+    mode: str,
+    wind_speed_percentile: float,
+    direction_degrees: float | None = None,
+    norm_params_path: str | Path | None = None,
+    season: int | None = None,
+) -> tuple[pd.DataFrame, list[WeatherEditReport]]:
+    """Shared zone-scoped implementation for the `*_zone_dependent_transplant` modes.
+
+    Unlike `apply_external_mean_zone_transplant` (which pools donor rows across the
+    whole donor hex and broadcasts one identical vector to every recipient
+    WeatherZone), this groups the donor pool by
+    WeatherZone: each recipient `(hex_id, WeatherZone)` receives a donor mean
+    computed only from donor rows sharing that same WeatherZone id, so zone-to-zone
+    weather heterogeneity is preserved instead of collapsed to one hex-wide value.
+    `wind_speed_percentile` is resolved separately within each zone's own donor pool
+    (0 = every donor row in that zone, 90 = that zone's own windiest 10%), since
+    zones can have quite different wind climatologies. Pass `direction_degrees` (and
+    `norm_params_path`) to also force wind direction per zone (as
+    `wind_direction_zone_dependent_transplant` does); leave both `None` for a
+    zone-dependent windy-mean transplant. When `season` is set, each zone's donor
+    pool is first restricted to that processed `Season` integer before the
+    percentile is resolved (windiest days within that season alone, per zone).
+    Emits one `WeatherEditReport` per recipient `(hex_id, WeatherZone)` pair.
+    """
+    if FWI_COLUMN not in raw_features.columns or FWI_COLUMN not in processed.columns:
+        raise ValueError(f"Raw and processed weather tables must include {FWI_COLUMN!r}.")
+    if WIND_SPEED_COLUMN not in raw_features.columns:
+        raise ValueError(f"raw_features is missing {WIND_SPEED_COLUMN!r}, required for {mode!r}.")
+    wind_component_norm_params: tuple[float, float, float, float] | None = None
+    if direction_degrees is not None:
+        if WIND_X_COLUMN not in processed.columns or WIND_Y_COLUMN not in processed.columns:
+            raise ValueError(f"Processed weather table must include {WIND_X_COLUMN!r} and {WIND_Y_COLUMN!r}.")
+        if norm_params_path is None:
+            raise ValueError(f"{mode!r} requires norm_params_path to re-normalize the forced wind_x/wind_y vector.")
+        wind_component_norm_params = _load_wind_component_norm_params(norm_params_path)
+
+    processed_hex_ids = _validate_raw_processed_alignment(raw_features, processed)
+
+    normalized_recipient_ids = [normalize_hex_id(hex_id) for hex_id in recipient_hex_ids]
+    if not normalized_recipient_ids:
+        raise ValueError("recipient_hex_ids must be non-empty.")
+    recipient_masks = {hex_id: (processed_hex_ids == hex_id).to_numpy() for hex_id in normalized_recipient_ids}
+    missing_recipients = [hex_id for hex_id, mask in recipient_masks.items() if not mask.any()]
+    if missing_recipients:
+        raise ValueError(f"No weather rows found for recipient hex_id(s)={missing_recipients}.")
+
+    normalized_donor_ids, donor_mask = _donor_mask_from_hex_ids(processed_hex_ids, donor_hex_ids)
+
+    wind_speed = pd.to_numeric(raw_features[WIND_SPEED_COLUMN], errors="coerce").to_numpy(dtype=np.float64)
+    processed_zones = pd.to_numeric(processed[WEATHER_ZONE_COLUMN], errors="coerce").to_numpy(dtype=np.float64)
+    season_values = pd.to_numeric(processed["Season"], errors="coerce").to_numpy(dtype=np.float64) if season is not None else None
+
+    mean_columns = [
+        column for column in processed.columns if column not in NON_AVERAGE_COLUMNS and pd.api.types.is_numeric_dtype(processed[column])
+    ]
+
+    edited = processed.groupby([HEX_ID_COLUMN, WEATHER_ZONE_COLUMN], as_index=False)[mean_columns].mean()
+    edited_hex_ids = _validated_processed_hex_ids(edited)
+    edited_zones = pd.to_numeric(edited[WEATHER_ZONE_COLUMN], errors="coerce").to_numpy(dtype=np.float64)
+    edited_recipient_mask = edited_hex_ids.isin(normalized_recipient_ids).to_numpy()
+
+    any_recipient_mask = np.zeros(len(processed), dtype=bool)
+    for mask in recipient_masks.values():
+        any_recipient_mask |= mask
+    recipient_zone_ids = sorted({float(zone) for zone in processed_zones[any_recipient_mask] if np.isfinite(zone)})
+
+    donor_hex_label = ",".join(normalized_donor_ids)
+    reports: list[WeatherEditReport] = []
+    for zone in recipient_zone_ids:
+        zone_donor_mask = donor_mask & (processed_zones == zone)
+        if not zone_donor_mask.any():
+            raise ValueError(f"No donor weather rows found for WeatherZone={zone!r} among donor_hex_ids={normalized_donor_ids}.")
+
+        if season_values is not None:
+            assert season is not None
+            zone_donor_mask = _season_filter(
+                season_values, zone_donor_mask, season, context=f"donor_hex_ids={normalized_donor_ids}, WeatherZone={zone!r}"
+            )
+
+        filtered_zone_donor_mask, wind_speed_threshold_kmh = _percentile_wind_speed_filter(
+            wind_speed,
+            zone_donor_mask,
+            wind_speed_percentile,
+            context=f"donor_hex_ids={normalized_donor_ids}, WeatherZone={zone!r}",
+        )
+
+        if direction_degrees is not None:
+            assert wind_component_norm_params is not None
+            donor_mean = _forced_direction_donor_mean(
+                processed,
+                mean_columns,
+                filtered_zone_donor_mask,
+                wind_speed=wind_speed,
+                direction_degrees=direction_degrees,
+                wind_component_norm_params=wind_component_norm_params,
+            )
+        else:
+            donor_mean = processed.loc[filtered_zone_donor_mask, mean_columns].mean(axis=0)
+            if not np.isfinite(donor_mean.to_numpy(dtype=np.float64)).all():
+                raise ValueError("Donor mean weather vector contains non-finite values.")
+
+        zone_edit_mask = edited_recipient_mask & (edited_zones == zone)
+        for column in mean_columns:
+            edited.loc[zone_edit_mask, column] = float(donor_mean[column])
+
+        donor_fwi_mean = float(raw_features.loc[filtered_zone_donor_mask, FWI_COLUMN].mean())
+        for recipient_hex_id in normalized_recipient_ids:
+            recipient_zone_mask = recipient_masks[recipient_hex_id] & (processed_zones == zone)
+            if not recipient_zone_mask.any():
+                continue
+            reports.append(
+                WeatherEditReport(
+                    scenario_name=scenario_name,
+                    mode=mode,
+                    recipient_hex_id=recipient_hex_id,
+                    n_recipient_rows=int(recipient_zone_mask.sum()),
+                    n_recipient_zones=1,
+                    donor_hex_ids=donor_hex_label,
+                    n_donor_rows=int(filtered_zone_donor_mask.sum()),
+                    donor_fwi_mean=donor_fwi_mean,
+                    baseline_fwi_mean=float(raw_features.loc[recipient_zone_mask, FWI_COLUMN].mean()),
+                    scenario_fwi_mean=donor_fwi_mean,
+                    wind_speed_percentile=float(wind_speed_percentile),
+                    wind_speed_threshold_kmh=wind_speed_threshold_kmh,
+                    direction_degrees=float(direction_degrees) if direction_degrees is not None else None,
+                    weather_zone=int(zone),
+                    season=season,
+                )
+            )
+    return edited, reports
+
+
+def apply_windy_mean_zone_dependent_transplant(
+    raw_features: pd.DataFrame,
+    processed: pd.DataFrame,
+    *,
+    recipient_hex_ids: list[str],
+    donor_hex_ids: list[str],
+    wind_speed_percentile: float,
+    scenario_name: str,
+    season: int | None = None,
+) -> tuple[pd.DataFrame, list[WeatherEditReport]]:
+    """Give each recipient WeatherZone the mean of its own windiest donor rows.
+
+    Each recipient WeatherZone gets the mean processed-weather vector of its own
+    (donor-hex, same-zone) rows at/above `wind_speed_percentile` of that zone's own
+    raw WindSpeed distribution (0 = every donor row in the zone, 90 = its windiest
+    10%), instead of one hex-wide donor mean broadcast to every zone. When
+    `season` is set, each zone's windiest rows are additionally restricted to that
+    processed `Season` integer first (e.g. windiest spring days vs windiest
+    summer/fall days, within each zone). See `_apply_mean_zone_dependent_transplant`
+    for the shared implementation.
+    """
+    return _apply_mean_zone_dependent_transplant(
+        raw_features,
+        processed,
+        recipient_hex_ids=recipient_hex_ids,
+        donor_hex_ids=donor_hex_ids,
+        scenario_name=scenario_name,
+        mode=WINDY_MEAN_ZONE_DEPENDENT_TRANSPLANT_MODE,
+        wind_speed_percentile=wind_speed_percentile,
+        season=season,
+    )
+
+
+def apply_wind_direction_zone_dependent_transplant(
+    raw_features: pd.DataFrame,
+    processed: pd.DataFrame,
+    *,
+    recipient_hex_ids: list[str],
+    donor_hex_ids: list[str],
+    direction_degrees: float,
+    wind_speed_percentile: float,
+    norm_params_path: str | Path,
+    scenario_name: str,
+) -> tuple[pd.DataFrame, list[WeatherEditReport]]:
+    """Give each recipient WeatherZone its own wind magnitude forced to one compass direction.
+
+    Each recipient WeatherZone keeps its own (donor-hex, same-zone) wind magnitude
+    but has `WindDirection` overridden to `direction_degrees` before `wind_x`/`wind_y`
+    are recomputed and re-normalized with the same z-score parameters fit at training
+    time (loaded from `norm_params_path`, typically `weather_norm_params.json` next to
+    the processed weather table). All other weather columns are averaged unchanged.
+    See `_apply_mean_zone_dependent_transplant` for the shared implementation.
+    """
+    return _apply_mean_zone_dependent_transplant(
+        raw_features,
+        processed,
+        recipient_hex_ids=recipient_hex_ids,
+        donor_hex_ids=donor_hex_ids,
+        scenario_name=scenario_name,
+        mode=WIND_DIRECTION_ZONE_DEPENDENT_TRANSPLANT_MODE,
+        wind_speed_percentile=wind_speed_percentile,
+        direction_degrees=direction_degrees,
+        norm_params_path=norm_params_path,
+    )
+
+
+def _required_param(params: dict, key: str, *, scenario_name: str, mode: str, hint: str = "") -> Any:
+    value = params.get(key)
+    if value is None:
+        suffix = f" ({hint})" if hint else ""
+        raise ValueError(f"Weather scenario {scenario_name!r} with mode {mode!r} must define a numeric {key!r}{suffix}.")
+    return value
+
+
 def apply_weather_edit(
     raw_features: pd.DataFrame,
     processed: pd.DataFrame,
@@ -188,6 +514,7 @@ def apply_weather_edit(
     scenario_name: str,
     recipient_hex_ids: list[str],
     params: dict,
+    norm_params_path: str | Path | None = None,
 ) -> tuple[pd.DataFrame, list[WeatherEditReport]]:
     """Dispatch one configured weather edit."""
     if mode not in WEATHER_EDIT_MODES:
@@ -195,10 +522,55 @@ def apply_weather_edit(
     donor_hex_ids = params.get("donor_hex_ids")
     if not isinstance(donor_hex_ids, list | tuple) or not donor_hex_ids:
         raise ValueError(f"Weather scenario {scenario_name!r} must define a non-empty donor_hex_ids list.")
+    donor_hex_ids = [str(value) for value in donor_hex_ids]
+
+    if mode == WIND_DIRECTION_ZONE_DEPENDENT_TRANSPLANT_MODE:
+        direction_degrees = _required_param(params, "direction_degrees", scenario_name=scenario_name, mode=mode)
+        wind_speed_percentile = _required_param(
+            params,
+            "wind_speed_percentile",
+            scenario_name=scenario_name,
+            mode=mode,
+            hint="use 0 to include every donor row",
+        )
+        if norm_params_path is None:
+            raise ValueError(
+                f"Weather scenario {scenario_name!r} with mode {mode!r} requires norm_params_path to re-normalize the forced wind_x/wind_y vector."
+            )
+        return apply_wind_direction_zone_dependent_transplant(
+            raw_features,
+            processed,
+            recipient_hex_ids=recipient_hex_ids,
+            donor_hex_ids=donor_hex_ids,
+            direction_degrees=float(direction_degrees),
+            wind_speed_percentile=float(wind_speed_percentile),
+            norm_params_path=norm_params_path,
+            scenario_name=scenario_name,
+        )
+
+    if mode == WINDY_MEAN_ZONE_DEPENDENT_TRANSPLANT_MODE:
+        wind_speed_percentile = _required_param(
+            params,
+            "wind_speed_percentile",
+            scenario_name=scenario_name,
+            mode=mode,
+            hint="use 0 to include every donor row",
+        )
+        season = params.get("season")
+        return apply_windy_mean_zone_dependent_transplant(
+            raw_features,
+            processed,
+            recipient_hex_ids=recipient_hex_ids,
+            donor_hex_ids=donor_hex_ids,
+            wind_speed_percentile=float(wind_speed_percentile),
+            scenario_name=scenario_name,
+            season=int(season) if season is not None else None,
+        )
+
     return apply_external_mean_zone_transplant(
         raw_features,
         processed,
         recipient_hex_ids=recipient_hex_ids,
-        donor_hex_ids=[str(value) for value in donor_hex_ids],
+        donor_hex_ids=donor_hex_ids,
         scenario_name=scenario_name,
     )

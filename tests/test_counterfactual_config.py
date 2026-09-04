@@ -74,6 +74,43 @@ def test_load_counterfactual_config_supports_weather_scenarios(tmp_path: Path) -
         config.scenario("missing")
 
 
+def test_load_counterfactual_config_supports_fire_size_scenarios(tmp_path: Path) -> None:
+    path = tmp_path / "counterfactual.yaml"
+    _write_config(
+        path,
+        {
+            "raw_data_dir": "/raw",
+            "save_dir": "/experiment",
+            "hex_ids": ["16"],
+            "endpoints": {"bp": {"config_path": "bp.yaml"}},
+            "scenarios": [
+                {"name": "baseline", "kind": "baseline"},
+                {
+                    "name": "spread_day_fire_size",
+                    "kind": "fire_size",
+                    "params": {
+                        "mode": "spread_day_quantile_scaling",
+                        "spread_day_delta_q50_days": 0.4,
+                        "spread_day_delta_q90_days": 5.0,
+                        "size_scaling_exponent": 2.0,
+                    },
+                },
+            ],
+        },
+    )
+
+    config = load_counterfactual_config(path)
+
+    assert config.scenarios[1].fire_size_edit() == {
+        "mode": "spread_day_quantile_scaling",
+        "spread_day_delta_q50_days": 0.4,
+        "spread_day_delta_q90_days": 5.0,
+        "size_scaling_exponent": 2.0,
+    }
+    assert config.scenarios[1].fuel_edit() is None
+    assert config.scenarios[1].weather_edit() is None
+
+
 def test_resolve_counterfactual_paths_uses_config_defaults_and_overrides(tmp_path: Path) -> None:
     path = tmp_path / "counterfactual.yaml"
     _write_config(
@@ -152,3 +189,61 @@ def test_load_counterfactual_config_requires_standard_baseline_name(tmp_path: Pa
 
     with pytest.raises(ValueError, match="named 'baseline'"):
         load_counterfactual_config(path)
+
+
+def test_endpoint_checkpoint_dir_defaults_to_none_and_parses_when_set(tmp_path: Path) -> None:
+    path = tmp_path / "counterfactual.yaml"
+    _write_config(
+        path,
+        {
+            "raw_data_dir": "/raw",
+            "save_dir": "/experiment",
+            "hex_ids": ["16"],
+            "endpoints": {
+                "bp": {"config_path": "bp.yaml"},
+                "fi": {"config_path": "fi.yaml", "checkpoint_dir": "/shared/checkpoints/unet"},
+            },
+            "scenarios": [{"name": "baseline", "kind": "baseline"}],
+        },
+    )
+
+    config = load_counterfactual_config(path)
+
+    assert config.endpoints["bp"].checkpoint_dir is None
+    assert config.endpoints["fi"].checkpoint_dir == Path("/shared/checkpoints/unet")
+
+
+SHARED_Q3_CHECKPOINT_DIR = Path("/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3")
+SHIPPED_ZONE_DEPENDENT_CONFIGS = {
+    Path("configs/counterfactual/counterfactual_windy_weather_zone_dependent_multi_output.yaml"): (
+        "weather",
+        "windy_mean_zone_dependent_transplant",
+    ),
+    Path("configs/counterfactual/counterfactual_wind_direction_zone_dependent_multi_output.yaml"): (
+        "weather",
+        "wind_direction_zone_dependent_transplant",
+    ),
+    Path("configs/counterfactual/counterfactual_fire_size_spread_days_multi_output.yaml"): (
+        "fire_size",
+        "spread_day_quantile_scaling",
+    ),
+}
+
+
+@pytest.mark.parametrize(("config_path", "expected"), sorted(SHIPPED_ZONE_DEPENDENT_CONFIGS.items()))
+def test_shipped_counterfactual_configs_target_shared_q3_checkpoint(config_path: Path, expected: tuple[str, str]) -> None:
+    expected_kind, expected_mode = expected
+    config = load_counterfactual_config(config_path)
+
+    assert config.hex_ids == ["16"]
+    assert set(config.endpoints) == {"bp", "fi", "ros"}
+    for endpoint in config.endpoints.values():
+        assert endpoint.config_path == Path("configs/multi_output_spatial_weather_firesize_q3.yaml")
+        assert endpoint.checkpoint_dir == SHARED_Q3_CHECKPOINT_DIR
+
+    edited = [scenario for scenario in config.scenarios if scenario.kind != "baseline"]
+    assert edited, f"{config_path} defines no non-baseline scenarios."
+    for scenario in edited:
+        assert scenario.kind == expected_kind
+        assert scenario.params["mode"] == expected_mode
+        assert scenario.description
