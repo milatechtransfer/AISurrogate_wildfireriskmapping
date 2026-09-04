@@ -232,6 +232,10 @@ SHIPPED_MULTI_OUTPUT_CONFIGS = {
         "fuel",
         "burnable_to_burnable_fixed",
     ),
+    Path("configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml"): (
+        "fuel",
+        "burnable_to_burnable_fixed",
+    ),
     Path("configs/counterfactual/counterfactual_mean_weather_multi_output.yaml"): (
         "weather",
         "external_mean_zone_transplant",

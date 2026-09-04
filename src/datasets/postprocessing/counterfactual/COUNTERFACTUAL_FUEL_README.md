@@ -106,10 +106,61 @@ scenarios:
   | `nonfuel_to_burnable_fixed` | barrier removal | `nonfuel_ids`, `replacement_fuel_id` | Every non-fuel pixel is replaced by a single fixed fuel id. |
   | `burnable_to_nonfuel` | barrier insertion | `nonfuel_ids`, `insertion_mask` | Replaces burnable pixels under a caller-supplied mask with non-fuel. |
   | `burnable_components_to_nonfuel_random` | barrier insertion | `nonfuel_ids`, `replacement_nonfuel_id`, `target_burnable_area_fraction`, `seed` | Randomly samples whole burnable connected components (weighted by area) until their combined area reaches `target_burnable_area_fraction` of total burnable area, then replaces them with a fixed non-fuel id. |
-  | `burnable_to_burnable_fixed` | fuel-type substitution | `nonfuel_ids`, `source_fuel_ids`, `replacement_fuel_id` | Every burnable pixel whose fuel id is in `source_fuel_ids` is replaced by a single fixed burnable fuel id. |
+  | `burnable_to_burnable_fixed` | fuel-type substitution | `nonfuel_ids`, `replacement_fuel_id` | Every burnable pixel whose fuel id is in `source_fuel_ids` is replaced by a single fixed burnable fuel id. Omitting `source_fuel_ids` targets **all** burnable pixels (an empty list is rejected as a likely mistake); combine with `fire_polygons` to restrict the edit spatially. |
 
   Adding a new scenario `mode` means adding a branch in `apply_fuel_edit` and a matching
   entry in this table.
+
+### Restricting an edit to fire perimeters (`fire_polygons`)
+
+Any `fuel` scenario may add a `fire_polygons` block. It rasterizes BurnP3+ fire
+perimeters onto the model grid and passes the result as the scenario's `edit_mask`, so
+the fuel change applies only inside the burned areas:
+
+```yaml
+params:
+  mode: "burnable_to_burnable_fixed"
+  nonfuel_ids: [100, 101, 102, 105, 106, 110]
+  replacement_fuel_id: 13
+  fire_polygons:
+    path: "/path/to/burn-perimeters.gpkg"   # may contain "{hex_id}"
+    layer: "daily_burn_perimeters"
+    final_perimeter_only: true
+    buffer_m: 0
+    # select:                     # optional, at most one key; omit to pool every fire
+    #   iteration: 2              #   one simulated season
+    #   fire_ids: [[1, 4], [2, 9]]  #   explicit [iteration, fire_id] pairs
+    #   top_k_by_area: 20        #   the k largest final footprints
+```
+
+Two properties of the perimeter files are handled in `fire_polygon_mask.py` and are easy
+to get wrong when working with them directly:
+
+- **Perimeters are daily and cumulative.** A fire has one row per burn day, each
+  containing every earlier day. `final_perimeter_only: true` (the default) reduces each
+  `(Iteration, FireID)` to its maximum `BurnDay`, which is the fire's final footprint.
+  Set it to `false` to keep every daily step.
+- **They are written in the simulation's own projection**, not the model grid's. They are
+  reprojected onto the reference raster's CRS automatically; a file whose perimeters do
+  not intersect the hexel raises rather than silently producing an empty mask.
+
+`select` is optional. `iteration` and `fire_ids` stay stable if the perimeter file is
+regenerated; `top_k_by_area` re-resolves against whatever is in the file. Pooling all
+iterations represents accumulated fire scars rather than a single season, since BurnP3+
+fires never overlap within an iteration.
+
+Each run writes `fuel_intervention/hex<ID>_fire_polygon_mask_summary.csv` with one row
+per selected fire (`iteration`, `fire_id`, `final_area_ha`, `buffered_area_ha`,
+`mask_pixels`, `fully_within_grid`), so coverage and reprojection can be checked without
+re-deriving them. Comparing `final_area_ha` against `mask_pixels` × the pixel area is a
+cheap confirmation that the reprojection landed correctly, and `fully_within_grid`
+flags fires clipped by the hexel boundary.
+
+The shipped example is `configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml`,
+which converts every burnable pixel inside the pooled perimeters to fuel 13 (the D-1/D-2
+aspen pair, blended per hexel by its season weights). Fuel 12 (pure D-2, green aspen) is
+deliberately **not** used as a replacement: its FBP curves are identically zero, so the
+model cannot distinguish it from a non-fuel spread barrier.
 
 ## Running
 

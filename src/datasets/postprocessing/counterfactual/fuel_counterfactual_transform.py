@@ -16,6 +16,7 @@ from data_preparation.spatial.utils import load_spatial_raster
 from src.datasets.fuel_utils import normalize_hex_id
 from src.datasets.postprocessing.counterfactual.counterfactual_base import ScenarioConfig
 from src.datasets.postprocessing.counterfactual.counterfactual_fuel import FUEL_NODATA, apply_fuel_edit
+from src.datasets.postprocessing.counterfactual.fire_polygon_mask import build_fire_polygon_mask, fire_polygon_mask_csv_path
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,9 @@ class FuelCounterfactualTransform:
         params = dict(scenario.fuel_edit() or {})
         mode = str(params.pop("mode", "nonfuel_to_burnable_local_adjacent_modal"))
         nonfuel_ids = params.pop("nonfuel_ids", None)
+        fire_polygons = params.pop("fire_polygons", None)
+        if fire_polygons is not None and not isinstance(fire_polygons, dict):
+            raise ValueError(f"Fuel scenario {scenario.name!r} must define fire_polygons as a mapping.")
         if not isinstance(nonfuel_ids, list | tuple) or not nonfuel_ids:
             raise ValueError(f"Fuel scenario {scenario.name!r} must define nonfuel_ids.")
         if "hex_id" not in metadata.columns:
@@ -144,12 +148,22 @@ class FuelCounterfactualTransform:
             profile = reference_profile
             baseline = np.ma.filled(fuel_grid.astype(np.float32), np.nan)
 
+            hex_params = dict(params)
+            polygon_mask = None
+            if fire_polygons is not None:
+                polygon_mask = build_fire_polygon_mask(
+                    params=fire_polygons,
+                    reference_profile=reference_profile,
+                    hex_id=hex_id,
+                )
+                hex_params["edit_mask"] = polygon_mask.mask
+
             result = apply_fuel_edit(
                 baseline,
                 [int(value) for value in nonfuel_ids],
                 mode=mode,
                 scenario_name=scenario.name,
-                params=params,
+                params=hex_params,
             )
             edited_hexels[hex_id] = np.asarray(result.fuel, dtype=np.float32)
 
@@ -167,9 +181,18 @@ class FuelCounterfactualTransform:
                     prediction_dir=prediction_dir,
                     hex_id=hex_id,
                 )
+                if polygon_mask is not None:
+                    csv_path = fire_polygon_mask_csv_path(prediction_dir, hex_id)
+                    csv_path.parent.mkdir(parents=True, exist_ok=True)
+                    polygon_mask.summary.to_csv(csv_path, index=False)
 
             summary = asdict(result.report)
             summary["hex_id"] = hex_id
+            if polygon_mask is not None:
+                summary["fire_polygon_fires"] = polygon_mask.n_fires
+                summary["fire_polygon_mask_pixels"] = polygon_mask.masked_pixels
+                summary["fire_polygon_source_crs"] = polygon_mask.source_crs
+                summary["fire_polygon_buffer_m"] = polygon_mask.buffer_m
             summary_rows.append(summary)
             if not result.components.empty:
                 components = result.components.copy()

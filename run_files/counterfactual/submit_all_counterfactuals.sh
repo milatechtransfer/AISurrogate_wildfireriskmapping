@@ -26,6 +26,7 @@ done
 # name : eval script : plot script
 EXPERIMENTS=(
     "fuel:counterfactual_fuel_iROS.sh:counterfactual_fuel_plots.sh"
+    "fuel_polygons:counterfactual_fuel_polygons_iROS.sh:counterfactual_fuel_polygons_plots.sh"
     "mean_weather:counterfactual_mean_weather_iROS.sh:counterfactual_mean_weather_plots.sh"
     "windy_weather:counterfactual_windy_weather_zone_dependent_iROS.sh:counterfactual_windy_weather_zone_dependent_plots.sh"
     "wind_direction:counterfactual_wind_direction_zone_dependent_iROS.sh:counterfactual_wind_direction_zone_dependent_plots.sh"
