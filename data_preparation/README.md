@@ -19,8 +19,6 @@ python -m data_preparation.process_hexels_into_grids --root_dir="/network/projec
 
 `--fuel_grid_representation` controls the fuel grid representation: `raw` (default) produces raw class values, while `group` groups similar classes together using `FUEL_GROUP_MAP` and saves the grid as 0-N values.
 
-`--scenario_name="FireSpotting"` is used in case of non-national data with multiple scenarios, this matters for fuel rasters as well as output rasters. In this case, omit: `--mask_scope="actual"`
-
 Step 2: Create training, validation and test splits.
 
 - Run the `get_stratified_data_split` function in `data_preparation/utils.py` to run stratified sampling over the available hex_ids. This will give a train, val, test split with 37,5,5 hexels in each respectively
@@ -31,8 +29,6 @@ Step 2: Create training, validation and test splits.
 ```bash
 python -m data_preparation.split_data --data_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4" --val_hex_id 02 23 33 18 46 --test_hex_id 01 12 39 16 49
 ```
-
-In case of NWT data, while all data is for evaluation, use `--test_only`
 
 Step 3: Create tabular files (weather + fire-size)
 

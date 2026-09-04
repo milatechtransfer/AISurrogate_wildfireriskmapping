@@ -3,9 +3,6 @@ from typing import Any
 import numpy as np
 
 from data_preparation.paths import Paths
-
-# from data_preparation.spatial.ignition import load_ignition_grid, load_ignition_grid_weighted
-# from data_preparation.visualizations import visualize_elevation_grid, visualize_fuel_grid
 from data_preparation.spatial.utils import FUEL_GROUP_MAP, load_spatial_raster
 
 
@@ -42,33 +39,3 @@ def load_fuel_grid(
         return np.ma.masked_array(grouped, mask=mask)
 
     return np.ma.masked_array(data, mask=mask)
-
-
-# if __name__ == "__main__":
-#     root_dir = "../NWT_data/fortsimpson_data_Jun2026"
-#     hex_id="100"
-#     scenario_name="FireSpotting"
-#     all_paths = Paths(hex_id=hex_id, root_dir=root_dir)
-#     elevation_grid, reference_profile = load_spatial_raster(path=all_paths.elevation_grid(hex_id=hex_id))
-#     # visualize_elevation_grid(elevation_grid)
-#     arr = load_fuel_grid(root_dir, hex_id=hex_id, scenario_name="FireSpotting", reference_profile=reference_profile)
-#     # visualize_fuel_grid(arr)
-#     # bp_out_grid, _ = load_spatial_raster(
-#     #     all_paths.output_ros(scenario_name=scenario_name),
-#     #     reference_profile=reference_profile,
-#     # )
-#     # visualize_elevation_grid(bp_out_grid)
-#     print(arr.shape)
-#     firezones_grid, _ = load_spatial_raster(
-#         path=all_paths.firezones_grid(hex_id=hex_id),
-#         reference_profile=reference_profile,
-#     )
-#     ignition_grid = load_ignition_grid_weighted(
-#         root_dir=root_dir,
-#         hex_id=hex_id,
-#         firezones_grid=firezones_grid,
-#         reference_profile=reference_profile,
-#     )
-#     print(ignition_grid.shape)
-#     visualize_elevation_grid(ignition_grid[:,:,0:1])
-#     visualize_elevation_grid(ignition_grid[:, :, 1:2])

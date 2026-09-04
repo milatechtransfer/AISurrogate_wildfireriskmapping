@@ -268,26 +268,3 @@ def load_spatial_features_per_hexel(
 
     # modelling approach 2
     raise ValueError("Data Season mapping not supported yet!")
-
-
-# if __name__ == "__main__":
-#     root_dir = "../NWT_data/fortsimpson_data_Jun2026"
-#     hex_id = "100"
-#     scenario_name = "FireSpotting"
-#     arr, mask, _ = load_spatial_features_per_hexel(
-#         root_dir=root_dir,
-#         hex_id=hex_id,
-#         scenario_name=scenario_name,
-#         feature_channel_map_path="../burnp3plus/data_samples_v3/feature_channel_map_1.json",
-#     )
-#     assert arr is not None and mask is not None
-#     print(arr.shape)
-#     print(mask.shape)
-#     visualize_elevation_grid(mask[0])
-#     visualize_elevation_grid(arr[0, :, :, 1])
-#     visualize_elevation_grid(arr[0, :, :, 2])
-#     visualize_elevation_grid(arr[0, :, :, 3])
-#     visualize_elevation_grid(arr[0, :, :, 4])
-#     visualize_elevation_grid(arr[0, :, :, 5])
-#     visualize_elevation_grid(arr[0, :, :, 6])
-#     visualize_elevation_grid(arr[0, :, :, 7])

@@ -93,11 +93,8 @@ class SchedulerConfig(BaseModel):
 class TrainingConfig(BaseModel):
     max_epochs: int = 50
     log_every_n_epoch: int = 1
-    # Path to a checkpoint (e.g. a previous run's best.pth) to warm-start model weights
-    # from when starting a *new* run (fresh optimizer/scheduler/epoch/best-metric state).
-    # Unlike resuming from last.pth (for SLURM preemption continuity of the same run),
-    # this is intended for fine-tuning on a different dataset/config. Ignored if this
-    # run's own save_dir already has a last.pth to resume from.
+    # Path to a checkpoint (e.g. a previous run's best.pth) to warm-start model weights.
+    # The same directory shouldn't have a last.pth, otherwise, it will resume from there (needed for job rqueue)
     warm_start_checkpoint: str | None = None
     # Names of top-level model submodules (e.g. "encoder", "bottleneck") to freeze:
     # their parameters are excluded from the optimizer and kept in eval() mode
@@ -114,14 +111,11 @@ class EvaluationConfig(BaseModel):
     bp_nodata_as_zero: bool = True
     prediction_support_policy: str = "input"
     hazard_fi_cap: float | None = Field(default=DEFAULT_FI_CAP, gt=0.0)
-    # When True, additionally break down hexel-level metrics by firezone ID
+    # Optional: When True, additionally break down hexel-level metrics by firezone ID
     # (read from data_preparation.paths.Paths.firezones_grid), restricted to
     # `firezone_metric_names`, and report them as e.g. "all/firezone3_bp_ccc".
     report_firezone_metrics: bool = False
     firezone_metric_names: list[str] = ["ccc", "spearman", "auc_iou_top10"]
-    # Optional remap applied to firezone ids loaded for the breakdown above, e.g. {45: 26} to merge
-    # fru45 into fru26. Empty dict (default) means no remapping is performed.
-    firezone_id_remap: dict[int, int] = Field(default_factory=dict)
 
 
 class TargetConfig(BaseModel):

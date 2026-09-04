@@ -58,11 +58,9 @@ This saves csv file in the root_dir called `fbp_curves_national_fuel.csv`. You c
 
 Step 5:
 
-Copy `dataset_norm_stats.json` into the `save_dir` based on national data.
+Copy `dataset_norm_stats.json` as `dataset_norm_stats_national.json` into the `save_dir` based on national data. If file is not there, see step 5 under `README.md`
 
-or Re-generate normalization stats for new NWT data (output only - for input: use same national input stats)
-
-The `log_standard` target normalization needs train-only log1p mean/std constants. The `min/max normalization` for burn probability and elevation needs train-only data, as well as fuel curves features. These are otherwise recomputed by scanning the raw rasters on every run; computing them once offline writes a `dataset_norm_stats.json` into the `save_dir` so training/eval/inference just read the cached values.
+To re-generate normalization stats for new NWT data (output only - if needed for calibration): output local normalization stats can be are recomputed by scanning the raw rasters on every run.
 
 ```bash
 python -m data_preparation.compute_dataset_normalization_stats \
