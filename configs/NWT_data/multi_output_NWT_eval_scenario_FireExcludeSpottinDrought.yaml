@@ -55,6 +55,7 @@ evaluation:
   prediction_support_policy: "input"
   hazard_fi_cap: 10000.0
   report_firezone_metrics: true
+  report_to_comet: true
 
 data:
   root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_FireExcludeSpottingDrought_v2"

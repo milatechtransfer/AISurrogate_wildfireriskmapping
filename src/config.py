@@ -116,6 +116,9 @@ class EvaluationConfig(BaseModel):
     # `firezone_metric_names`, and report them as e.g. "all/firezone3_bp_ccc".
     report_firezone_metrics: bool = False
     firezone_metric_names: list[str] = ["ccc", "spearman", "auc_iou_top10"]
+    # Optional: whether src.evaluate_hexels should log metrics/params to Comet.
+    # Set to False to run evaluation without a Comet experiment (e.g. local/offline runs).
+    report_to_comet: bool = False
 
 
 class TargetConfig(BaseModel):
