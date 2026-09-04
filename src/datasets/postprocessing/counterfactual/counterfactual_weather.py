@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -169,7 +168,14 @@ def _percentile_wind_speed_filter(
         raise ValueError(f"wind_speed_percentile must be within [0, 100]; got {percentile} for {context}.")
     if not base_mask.any():
         raise ValueError(f"No weather rows available to compute a wind_speed_percentile for {context}.")
-    threshold_value = float(np.percentile(wind_speed[base_mask], percentile))
+    donor_wind_speed = wind_speed[base_mask]
+    non_finite = int((~np.isfinite(donor_wind_speed)).sum())
+    if non_finite:
+        raise ValueError(
+            f"{WIND_SPEED_COLUMN} has {non_finite} missing/non-finite value(s) in the donor pool for {context}; "
+            "clean the raw weather data before resolving a wind_speed_percentile."
+        )
+    threshold_value = float(np.percentile(donor_wind_speed, percentile))
     filtered_mask = base_mask & (wind_speed >= threshold_value)
     if not filtered_mask.any():
         raise ValueError(
@@ -256,6 +262,14 @@ def apply_external_mean_zone_transplant(
     return edited, reports
 
 
+def _z_score_std(raw_value: object, column: str, norm_params_path: str | Path) -> float:
+    """Return a usable z-score std, rejecting values that would corrupt the forced wind vector."""
+    std = float(raw_value)  # type: ignore[arg-type]
+    if not np.isfinite(std) or std <= 0.0:
+        raise ValueError(f"{norm_params_path} defines a non-finite or non-positive z-score std ({std}) for {column!r}.")
+    return std
+
+
 def _load_wind_component_norm_params(norm_params_path: str | Path) -> tuple[float, float, float, float]:
     """Return `(wind_x_mean, wind_x_std, wind_y_mean, wind_y_std)` z-score parameters."""
     norm_params = load_weather_normalization_params(norm_params_path)
@@ -263,9 +277,9 @@ def _load_wind_component_norm_params(norm_params_path: str | Path) -> tuple[floa
     if WIND_X_COLUMN not in z_cols or WIND_Y_COLUMN not in z_cols:
         raise ValueError(f"{norm_params_path} does not define z-score parameters for {WIND_X_COLUMN!r}/{WIND_Y_COLUMN!r}.")
     wind_x_mean = float(norm_params["z_score"]["mean"][z_cols.index(WIND_X_COLUMN)])
-    wind_x_std = float(norm_params["z_score"]["std"][z_cols.index(WIND_X_COLUMN)]) or 1.0
+    wind_x_std = _z_score_std(norm_params["z_score"]["std"][z_cols.index(WIND_X_COLUMN)], WIND_X_COLUMN, norm_params_path)
     wind_y_mean = float(norm_params["z_score"]["mean"][z_cols.index(WIND_Y_COLUMN)])
-    wind_y_std = float(norm_params["z_score"]["std"][z_cols.index(WIND_Y_COLUMN)]) or 1.0
+    wind_y_std = _z_score_std(norm_params["z_score"]["std"][z_cols.index(WIND_Y_COLUMN)], WIND_Y_COLUMN, norm_params_path)
     return wind_x_mean, wind_x_std, wind_y_mean, wind_y_std
 
 
@@ -498,12 +512,21 @@ def apply_wind_direction_zone_dependent_transplant(
     )
 
 
-def _required_param(params: dict, key: str, *, scenario_name: str, mode: str, hint: str = "") -> Any:
+def _required_param(params: dict, key: str, *, scenario_name: str, mode: str, hint: str = "") -> float:
+    """Return `key` parsed as a finite float, rejecting missing, boolean and non-numeric values."""
+    suffix = f" ({hint})" if hint else ""
     value = params.get(key)
-    if value is None:
-        suffix = f" ({hint})" if hint else ""
+    if value is None or isinstance(value, bool):
         raise ValueError(f"Weather scenario {scenario_name!r} with mode {mode!r} must define a numeric {key!r}{suffix}.")
-    return value
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"Weather scenario {scenario_name!r} with mode {mode!r} must define a numeric {key!r}{suffix}; got {value!r}."
+        ) from error
+    if not np.isfinite(number):
+        raise ValueError(f"Weather scenario {scenario_name!r} with mode {mode!r} must define a finite {key!r}{suffix}; got {value!r}.")
+    return number
 
 
 def apply_weather_edit(
@@ -542,8 +565,8 @@ def apply_weather_edit(
             processed,
             recipient_hex_ids=recipient_hex_ids,
             donor_hex_ids=donor_hex_ids,
-            direction_degrees=float(direction_degrees),
-            wind_speed_percentile=float(wind_speed_percentile),
+            direction_degrees=direction_degrees,
+            wind_speed_percentile=wind_speed_percentile,
             norm_params_path=norm_params_path,
             scenario_name=scenario_name,
         )
@@ -562,7 +585,7 @@ def apply_weather_edit(
             processed,
             recipient_hex_ids=recipient_hex_ids,
             donor_hex_ids=donor_hex_ids,
-            wind_speed_percentile=float(wind_speed_percentile),
+            wind_speed_percentile=wind_speed_percentile,
             scenario_name=scenario_name,
             season=int(season) if season is not None else None,
         )

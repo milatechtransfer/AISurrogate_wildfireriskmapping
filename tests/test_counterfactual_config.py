@@ -269,7 +269,8 @@ def test_counterfactual_run_scripts_reference_existing_configs(script_path: Path
     """Every config path named in a SLURM script must exist on disk."""
     text = script_path.read_text()
     referenced = set(_SHELL_CONFIG_PATTERN.findall(text))
-    assert referenced, f"{script_path} references no config."
+    if not referenced:
+        pytest.skip(f"{script_path} references no config directly.")
     for config_path in referenced:
         assert Path(config_path).is_file(), f"{script_path} references missing config {config_path}."
 
@@ -291,3 +292,18 @@ def test_counterfactual_plot_scripts_only_reference_declared_scenarios(script_pa
 
     unknown = scripted - declared
     assert not unknown, f"{script_path} plots undeclared scenario(s) {sorted(unknown)}; config declares {sorted(declared)}."
+
+
+def test_submit_all_counterfactuals_references_existing_run_scripts() -> None:
+    """The batch submitter must only chain SLURM scripts that actually exist."""
+    submitter = COUNTERFACTUAL_RUN_FILES_DIR / "submit_all_counterfactuals.sh"
+    experiment_block = re.search(r"^EXPERIMENTS=\((.*?)^\)", submitter.read_text(), re.DOTALL | re.MULTILINE)
+    assert experiment_block is not None, f"{submitter} defines no EXPERIMENTS array."
+
+    entries = re.findall(r'"([^"]+)"', experiment_block.group(1))
+    assert entries, f"{submitter} defines an empty EXPERIMENTS array."
+    for entry in entries:
+        name, eval_script, plot_script = entry.split(":")
+        assert name
+        for script in (eval_script, plot_script):
+            assert (COUNTERFACTUAL_RUN_FILES_DIR / script).is_file(), f"{submitter} references missing script {script}."

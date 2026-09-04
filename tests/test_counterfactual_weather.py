@@ -468,3 +468,90 @@ def test_materialize_weather_scenario_requires_explicit_mode(tmp_path: Path) -> 
             recipient_hex_ids=["16"],
             prediction_dir=tmp_path / "predictions",
         )
+
+
+@pytest.mark.parametrize("bad_value", [np.nan, np.inf])
+def test_apply_windy_mean_zone_dependent_transplant_rejects_non_finite_donor_wind_speeds(bad_value: float) -> None:
+    """A NaN/inf WindSpeed makes np.percentile return NaN, which would silently drop every donor row."""
+    raw, processed = _zone_dependent_weather_frames()
+    raw.loc[1, "WindSpeed"] = bad_value
+
+    with pytest.raises(ValueError, match=r"WindSpeed has 1 missing/non-finite value\(s\) in the donor pool"):
+        cw.apply_windy_mean_zone_dependent_transplant(
+            raw,
+            processed,
+            recipient_hex_ids=["16"],
+            donor_hex_ids=["16"],
+            wind_speed_percentile=90.0,
+            scenario_name="scenario",
+        )
+
+
+@pytest.mark.parametrize("bad_std", [0.0, -1.0, float("nan")])
+def test_load_wind_component_norm_params_rejects_unusable_std(tmp_path: Path, bad_std: float) -> None:
+    """A zero/negative/non-finite std must fail loudly instead of being coerced to 1.0."""
+    path = tmp_path / "weather_norm_params.json"
+    payload = {
+        "min_max": {"cols": [], "min": [], "max": []},
+        "z_score": {"cols": ["wind_x", "wind_y"], "mean": [1.0, -1.0], "std": [bad_std, 0.5]},
+    }
+    path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="non-finite or non-positive z-score std"):
+        cw._load_wind_component_norm_params(path)
+
+
+def test_load_wind_component_norm_params_returns_valid_params(tmp_path: Path) -> None:
+    path = tmp_path / "weather_norm_params.json"
+    _write_norm_params(path)
+
+    assert cw._load_wind_component_norm_params(path) == (1.0, 2.0, -1.0, 0.5)
+
+
+@pytest.mark.parametrize("bad_value", [True, False, "north", None, float("nan"), float("inf")])
+def test_apply_weather_edit_rejects_non_numeric_direction_degrees(tmp_path: Path, bad_value: object) -> None:
+    """`direction_degrees: true` must not be silently accepted as 1.0 degrees."""
+    raw, processed = _zone_dependent_weather_frames()
+    norm_params_path = tmp_path / "weather_norm_params.json"
+    _write_norm_params(norm_params_path)
+
+    with pytest.raises(ValueError, match="must define a (numeric|finite) 'direction_degrees'"):
+        cw.apply_weather_edit(
+            raw,
+            processed,
+            mode=cw.WIND_DIRECTION_ZONE_DEPENDENT_TRANSPLANT_MODE,
+            scenario_name="scenario",
+            recipient_hex_ids=["16"],
+            params={
+                "donor_hex_ids": ["16"],
+                "direction_degrees": bad_value,
+                "wind_speed_percentile": 90.0,
+            },
+            norm_params_path=norm_params_path,
+        )
+
+
+def test_apply_weather_edit_accepts_numeric_string_direction_degrees(tmp_path: Path) -> None:
+    """YAML-quoted numbers still parse, so the stricter check does not break valid configs."""
+    raw, processed = _zone_dependent_weather_frames()
+    norm_params_path = tmp_path / "weather_norm_params.json"
+    _write_norm_params(norm_params_path)
+
+    _, reports = cw.apply_weather_edit(
+        raw,
+        processed,
+        mode=cw.WIND_DIRECTION_ZONE_DEPENDENT_TRANSPLANT_MODE,
+        scenario_name="scenario",
+        recipient_hex_ids=["16"],
+        params={
+            "donor_hex_ids": ["16"],
+            "direction_degrees": "45",
+            "wind_speed_percentile": "90",
+        },
+        norm_params_path=norm_params_path,
+    )
+
+    assert reports
+    for report in reports:
+        assert report.direction_degrees == pytest.approx(45.0)
+        assert report.wind_speed_percentile == pytest.approx(90.0)
