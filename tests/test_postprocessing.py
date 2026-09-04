@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pandas as pd
 import pytest
+import rasterio
 import torch
 
 from src.config import (
@@ -486,6 +487,75 @@ def test_validate_patch_metadata_mask_scope_rejects_unmarked_buffer_data():
     assert post_utils.validate_patch_metadata_mask_scope(pd.DataFrame({"mask_scope": ["buffer"]}), "buffer_only") == "buffer_only"
 
 
+def test_resolve_patch_metadata_mask_scope_preserves_legacy_actual_data():
+    assert post_utils.resolve_patch_metadata_mask_scope(pd.DataFrame({"hex_id": [1]}), None) == "actual"
+    assert post_utils.resolve_patch_metadata_mask_scope(pd.DataFrame({"mask_scope": ["actual"]}), None) == "actual"
+
+
+def test_resolve_patch_metadata_mask_scope_identifies_unmasked_data():
+    assert post_utils.resolve_patch_metadata_mask_scope(pd.DataFrame({"mask_scope": [None]}), None) is None
+
+    with pytest.raises(ValueError, match="mixes masked and unmasked"):
+        post_utils.resolve_patch_metadata_mask_scope(pd.DataFrame({"mask_scope": ["actual", None]}), None)
+
+
+def test_get_predicted_hexel_requires_crop_window_only_for_unmasked_data(tmp_path, monkeypatch):
+    patch = np.ones((2, 2, 1), dtype=np.float32)
+    np.save(tmp_path / "patch.npy", patch)
+    metadata = pd.DataFrame(
+        [
+            {
+                "filename": "patch.npy",
+                "season": "all",
+                "cause": "all",
+                "hex_id": 1,
+                "window_id": 1,
+                "row": 0,
+                "col": 0,
+            }
+        ]
+    )
+    predictions = np.ones((1, 2, 2), dtype=np.float32)
+
+    monkeypatch.setattr(
+        post_utils,
+        "load_spatial_raster",
+        lambda *args, **kwargs: (
+            np.ones((2, 2), dtype=np.float32),
+            {"transform": rasterio.transform.from_origin(0, 2, 1, 1), "crs": "EPSG:3978"},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="requires crop-window metadata"):
+        post_utils.get_predicted_hexel(
+            base_dir=str(tmp_path),
+            raw_data_dir=str(tmp_path),
+            test_df=metadata,
+            predictions=predictions,
+            min_target_val=None,
+            max_target_val=None,
+            hex_id="01",
+            out_norm="none",
+            target_channel_index=0,
+            mask_scope=None,
+        )
+
+    monkeypatch.setattr(post_utils, "load_crop_window", MagicMock(side_effect=AssertionError("masked data must not load crop metadata")))
+    reconstructed, _ = post_utils.get_predicted_hexel(
+        base_dir=str(tmp_path),
+        raw_data_dir=str(tmp_path),
+        test_df=metadata,
+        predictions=predictions,
+        min_target_val=None,
+        max_target_val=None,
+        hex_id="01",
+        out_norm="none",
+        target_channel_index=0,
+        mask_scope="actual",
+    )
+    np.testing.assert_array_equal(reconstructed, predictions[0])
+
+
 def test_evaluate_and_visualize_hexels_uses_buffer_scope_paths_and_outputs(tmp_path, monkeypatch):
     with (tmp_path / "feature_channel_map_1.json").open("w") as f:
         json.dump({"ignition_grid": [0], "bp_out_grid": [3]}, f)
@@ -544,7 +614,7 @@ def test_evaluate_and_visualize_hexels_uses_buffer_scope_paths_and_outputs(tmp_p
     monkeypatch.setattr(post_utils, "plot_hexbin_distribution", lambda **kwargs: None)
     monkeypatch.setattr(post_utils, "plot_histogram_distribution", lambda **kwargs: None)
 
-    metrics = post_utils.evaluate_and_visualize_hexels(
+    post_utils.evaluate_and_visualize_hexels(
         test_predictions=np.ones((1, 1, 2, 2), dtype=np.float32),
         config=config,
         out_norm="none",

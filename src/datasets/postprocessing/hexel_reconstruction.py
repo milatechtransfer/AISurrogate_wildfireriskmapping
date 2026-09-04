@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from rasterio.profiles import Profile
 
-from data_preparation.paths import Paths, normalize_mask_scope
+from data_preparation.paths import Paths
 from src.config import Config
 from src.datasets.postprocessing import utils as post_utils
 from src.datasets.targets import TargetSpec
@@ -71,15 +71,13 @@ def reconstruct_denormalized_hexels(
     if isinstance(test_predictions, str):
         raise TypeError(f"Expected ndarray, but got string: {test_predictions}")
 
-    _raw_scope = mask_scope or config.data_prep.mask_scope
-    scope = normalize_mask_scope(_raw_scope) if _raw_scope is not None else None
     settings_list = post_utils.get_target_postprocessing_settings(config=config, out_norm=out_norm)
     if test_metadata is None:
-        test_df = load_filtered_test_metadata(config=config, mask_scope=scope, split_csv=split_csv)
+        test_df = load_filtered_test_metadata(config=config, mask_scope=None, split_csv=split_csv)
     else:
         test_df = test_metadata.reset_index(drop=True).copy()
-        if scope is not None:
-            post_utils.validate_patch_metadata_mask_scope(test_df, scope)
+    configured_scope = mask_scope if mask_scope is not None else config.data_prep.mask_scope
+    scope = post_utils.resolve_patch_metadata_mask_scope(test_df, configured_scope)
     prediction_mask_channel_indices = post_utils.get_prediction_mask_channel_indices(
         data_dir=config.data.root_dir,
         modelling_approach=config.modelling_approach,

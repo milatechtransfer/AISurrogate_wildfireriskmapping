@@ -36,15 +36,12 @@ def generate_feature_channel_map(feature_list: list[np.ndarray], feature_channel
 
 
 def crop_window_path(feature_channel_map_path: str) -> str:
-    """Path to the per-hex crop-window registry saved alongside the feature channel map.
+    """Path to the per-hex unmasked crop-window registry.
 
-    Data prep crops every feature grid to the shared valid-data bounding box
-    (see ``stack_sample`` below) before splitting it into patches, so patch
-    ``row``/``col`` coordinates are relative to that cropped array, not the full
-    reprojected reference grid. Reconstruction at evaluation time must apply the
-    exact same crop before stitching patches back together, otherwise every
-    patch is pasted at an offset position. This registry records, per hex (and
-    mask scope), the crop window used so reconstruction can reproduce it exactly.
+    Unmasked data is cropped to the shared valid-data bounding box before patch
+    generation, so reconstruction must apply the same crop before stitching.
+    Masked data already uses the mask-clipped reference frame and does not need
+    this additional metadata.
     """
     return os.path.join(os.path.dirname(feature_channel_map_path), "crop_windows.json")
 
@@ -170,23 +167,20 @@ def load_spatial_features_per_hexel(
         stacked = stacked_ma.filled(NODATA).astype(np.float32)
         stacked[input_mask, :] = NODATA
 
-        # Crop the shared empty nodata border, once, using the union of the
-        # boundary-defining masks (fuel/elevation/ignition/firezones), so every
-        # feature layer is trimmed identically regardless of its own nodata quirks.
-        # Persist this crop window so reconstruction at evaluation time can apply
-        # the exact same crop before stitching patches (whose row/col metadata is
-        # relative to this cropped array, not the full reference grid).
-        crop_window = get_data_window(np.ma.masked_array(np.zeros(input_mask.shape, dtype=np.uint8), mask=input_mask))
-        row_start, row_end = int(crop_window.row_off), int(crop_window.row_off) + int(crop_window.height)
-        col_start, col_end = int(crop_window.col_off), int(crop_window.col_off) + int(crop_window.width)
-        save_crop_window(
-            feature_channel_map_path,
-            hex_id=hex_id,
-            mask_scope=scope,
-            window=(row_start, col_start, row_end - row_start, col_end - col_start),
-        )
-        stacked = stacked[row_start:row_end, col_start:col_end, :]
-        input_mask = input_mask[row_start:row_end, col_start:col_end]
+        if scope is None:
+            # Without a polygon mask, trim the shared empty nodata border once
+            # for all layers and persist the resulting coordinate frame.
+            crop_window = get_data_window(np.ma.masked_array(np.zeros(input_mask.shape, dtype=np.uint8), mask=input_mask))
+            row_start, row_end = int(crop_window.row_off), int(crop_window.row_off) + int(crop_window.height)
+            col_start, col_end = int(crop_window.col_off), int(crop_window.col_off) + int(crop_window.width)
+            save_crop_window(
+                feature_channel_map_path,
+                hex_id=hex_id,
+                mask_scope=None,
+                window=(row_start, col_start, row_end - row_start, col_end - col_start),
+            )
+            stacked = stacked[row_start:row_end, col_start:col_end, :]
+            input_mask = input_mask[row_start:row_end, col_start:col_end]
 
         # Check 5: warn if the vast majority of pixels are masked (misaligned or empty data).
         masked_frac = input_mask.mean()

@@ -74,22 +74,49 @@ def _accepted_prepared_mask_scopes(mask_scope: MaskScope) -> set[MaskScope]:
     return {mask_scope}
 
 
+def infer_patch_metadata_mask_scope(metadata: pd.DataFrame) -> MaskScope | None:
+    """Infer the prepared coordinate frame when no mask scope is configured."""
+    if "mask_scope" not in metadata.columns:
+        return "actual"
+
+    raw_values = metadata["mask_scope"]
+    missing = raw_values.isna() | raw_values.astype(str).str.strip().str.lower().isin({"", "none", "nan"})
+    observed = {normalize_mask_scope(str(value)) for value in raw_values[~missing].unique()}
+
+    if missing.any() and observed:
+        raise ValueError("Patch metadata mixes masked and unmasked samples; prepare them in separate dataset directories.")
+    if len(observed) > 1:
+        raise ValueError(f"Patch metadata contains multiple mask scopes: {sorted(observed)}.")
+    if not observed:
+        return None
+    return next(iter(observed))
+
+
 def validate_patch_metadata_mask_scope(metadata: pd.DataFrame, mask_scope: str) -> MaskScope:
     scope = normalize_mask_scope(mask_scope)
-    if scope == "actual":
-        return scope
     if "mask_scope" not in metadata.columns:
+        if scope == "actual":
+            return scope
         raise ValueError(
             f"mask_scope={scope!r} requires patch metadata with a matching 'mask_scope' column. "
             "Existing actual-only patch data cannot be safely reinterpreted as buffer data; "
             "prepare or infer on buffer-scope patches first."
         )
 
-    observed = {normalize_mask_scope(str(value)) for value in metadata["mask_scope"].dropna().unique()}
+    raw_values = metadata["mask_scope"]
+    missing = raw_values.isna() | raw_values.astype(str).str.strip().str.lower().isin({"", "none", "nan"})
+    observed = {normalize_mask_scope(str(value)) for value in raw_values[~missing].unique()}
     accepted = _accepted_prepared_mask_scopes(scope)
-    if not observed or not observed.issubset(accepted):
+    if missing.any() or not observed or not observed.issubset(accepted):
         raise ValueError(f"mask_scope={scope!r} requires patch metadata mask_scope in {sorted(accepted)}, got {sorted(observed)}.")
     return scope
+
+
+def resolve_patch_metadata_mask_scope(metadata: pd.DataFrame, mask_scope: str | None) -> MaskScope | None:
+    """Resolve an explicit scope or infer it from persisted patch metadata."""
+    if mask_scope is None:
+        return infer_patch_metadata_mask_scope(metadata)
+    return validate_patch_metadata_mask_scope(metadata, mask_scope)
 
 
 def _actual_area_mask(mask_path: Path, profile: dict[str, Any], shape: tuple[int, int]) -> np.ndarray | None:
@@ -310,14 +337,15 @@ def get_predicted_hexel(
         mask_path=all_paths.mask_grid(hex_id=hex_id, mask_scope=scope) if scope is not None else None,
     )
 
-    # Data prep crops every feature grid to the shared valid-data bounding box
-    # before splitting it into patches (see data_preparation.hexel_loader), so the
-    # patch `row`/`col` metadata in test_df is relative to that cropped array, not
-    # this freshly-loaded, uncropped reference grid. Apply the exact same crop
-    # here so patches are pasted at the correct position during stitching.
-    feature_channel_map_path = os.path.join(base_dir, f"feature_channel_map_{modelling_approach}.json")
-    crop_window = load_crop_window(feature_channel_map_path, hex_id=hex_id, mask_scope=scope)
-    if crop_window is not None:
+    if scope is None:
+        # Unmasked data prep crops the shared nodata border, so its persisted
+        # coordinate frame is required to place patches correctly.
+        feature_channel_map_path = os.path.join(base_dir, f"feature_channel_map_{modelling_approach}.json")
+        crop_window = load_crop_window(feature_channel_map_path, hex_id=hex_id, mask_scope=None)
+        if crop_window is None:
+            raise ValueError(
+                f"Unmasked patch data for hex {hex_id} requires crop-window metadata at {os.path.join(base_dir, 'crop_windows.json')}."
+            )
         row_off, col_off, height, width = crop_window
         gt_elevation_grid = gt_elevation_grid[row_off : row_off + height, col_off : col_off + width]
         gt_elevation_grid_profile = gt_elevation_grid_profile.copy()
@@ -710,14 +738,17 @@ def evaluate_and_visualize_hexels(
     if given, isolates that split's artifacts under a dedicated subdirectory
     (e.g. "val") so they don't collide with the default test-split outputs.
     """
+    from src.datasets.postprocessing.hexel_reconstruction import load_filtered_test_metadata, reconstruct_denormalized_hexels
+
     prediction_support_label = "input support" if config.evaluation.prediction_support_policy == "input" else "target support"
-    _raw_scope = mask_scope or config.data_prep.mask_scope
-    scope = normalize_mask_scope(_raw_scope) if _raw_scope is not None else None
+    metadata = (
+        test_metadata if test_metadata is not None else load_filtered_test_metadata(config=config, mask_scope=None, split_csv=split_csv)
+    )
+    configured_scope = mask_scope if mask_scope is not None else config.data_prep.mask_scope
+    scope = resolve_patch_metadata_mask_scope(metadata, configured_scope)
     show_prediction_support_outline = config.evaluation.prediction_support_policy == "input" and scope in (None, "actual")
     base_save_dir = os.path.join(config.save_dir, save_dir_suffix) if save_dir_suffix else config.save_dir
     artifacts_save_dir = get_mask_scope_save_dir(base_save_dir, scope)
-
-    from src.datasets.postprocessing.hexel_reconstruction import reconstruct_denormalized_hexels
 
     all_hexel_metrics: list[tuple[str, str | None, str | None, dict[str, float]]] = []
     current_hex_id: str | None = None
@@ -733,7 +764,7 @@ def evaluate_and_visualize_hexels(
         stitch_mode=stitch_mode,
         mask_scope=scope,
         split_csv=split_csv,
-        test_metadata=test_metadata,
+        test_metadata=metadata,
     ):
         if stitched_hexel.hex_id != current_hex_id:
             if current_hex_id is not None and save_artifacts:
