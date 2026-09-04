@@ -21,12 +21,12 @@ scenarios:
     kind: "baseline"
     description: "Unmodified q10/q50/q90 fire-size inputs."
 
-  - name: "spread_days_q50_plus_0p4_q90_plus_5_beta2"
+  - name: "spread_days_q50_plus_0p7_q90_plus_5_beta2"
     kind: "fire_size"
-    description: "Keep ignition-derived seasonal likelihoods fixed, form each fire zone's exact spread-event-day mixture, add 0.4 days to mixture q50 and 5 days to mixture q90, and scale the corresponding fire-size quantiles with exponent beta=2. q10 remains unchanged. Beta=2 is an explicit radial-growth sensitivity assumption, not a fitted coefficient."
+    description: "Keep ignition-derived seasonal likelihoods fixed, form each fire zone's exact spread-event-day mixture, add 0.7 days to mixture q50 and 5 days to mixture q90, and scale the corresponding fire-size quantiles with exponent beta=2. q10 remains unchanged. Beta=2 is an explicit radial-growth sensitivity assumption, not a fitted coefficient."
     params:
       mode: "spread_day_quantile_scaling"
-      spread_day_delta_q50_days: 0.4
+      spread_day_delta_q50_days: 0.7
       spread_day_delta_q90_days: 5.0
       size_scaling_exponent: 2.0
       pmf_total_tolerance_percent: 1.0

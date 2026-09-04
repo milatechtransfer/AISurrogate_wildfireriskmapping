@@ -66,7 +66,7 @@ Evaluation writes:
 experiments/counterfactual_fire_size_spread_days_multi_output_hex16/
   predictions/
     baseline/{bp,fi,ros}/
-    spread_days_q50_plus_0p4_q90_plus_5_beta2/{bp,fi,ros}/
+    spread_days_q50_plus_0p7_q90_plus_5_beta2/{bp,fi,ros}/
   figures/
   scenario_prediction_index.csv
   counterfactual_metrics.csv
@@ -101,11 +101,11 @@ scenarios:
     kind: "baseline"
     description: "Unmodified q10/q50/q90 fire-size inputs."
 
-  - name: "spread_days_q50_plus_0p4_q90_plus_5_beta2"
+  - name: "spread_days_q50_plus_0p7_q90_plus_5_beta2"
     kind: "fire_size"
     params:
       mode: "spread_day_quantile_scaling"
-      spread_day_delta_q50_days: 0.4
+      spread_day_delta_q50_days: 0.7
       spread_day_delta_q90_days: 5.0
       size_scaling_exponent: 2.0
       pmf_total_tolerance_percent: 1.0
@@ -135,7 +135,7 @@ Generate one response-map set:
 ```bash
 python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
   --config configs/counterfactual/counterfactual_fire_size_spread_days_multi_output.yaml \
-  --scenario spread_days_q50_plus_0p4_q90_plus_5_beta2 \
+  --scenario spread_days_q50_plus_0p7_q90_plus_5_beta2 \
   --endpoint fi \
   --hex_id 16
 ```

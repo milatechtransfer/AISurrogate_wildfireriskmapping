@@ -15,7 +15,7 @@ mkdir -p logs
 source .venv/bin/activate
 
 config="configs/counterfactual/counterfactual_fire_size_spread_days_multi_output.yaml"
-scenario="spread_days_q50_plus_0p4_q90_plus_5_beta2"
+scenario="spread_days_q50_plus_0p7_q90_plus_5_beta2"
 hex_id="16"
 endpoints=("bp" "fi" "ros")
 
