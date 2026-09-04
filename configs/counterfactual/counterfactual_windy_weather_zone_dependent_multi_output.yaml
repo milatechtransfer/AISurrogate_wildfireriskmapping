@@ -1,5 +1,5 @@
 raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
-save_dir: "experiments/counterfactual_windy_weather_zone_dependent_multi_output_hex16"
+save_dir: "experiments/counterfactual_windy_weather_zone_dependent_multi_output_hex16_q3_256"
 hex_ids: ["16"]
 nonfuel_ids: [100, 101, 102, 105, 106, 110]
 
