@@ -127,6 +127,7 @@ def get_target_transform_params(config: Config, target_name: str):
             root_dir=config.data.raw_data_dir,
             output_type=target_spec.output_type,
             allowed_hex_ids=train_hex_ids,
+            scenario_name=config.data_prep.scenario_name,
         )
         target_max, target_min = apply_bp_nodata_zero_range(
             target_name=target_spec.name,
@@ -141,6 +142,7 @@ def get_target_transform_params(config: Config, target_name: str):
                 output_type=target_spec.output_type,
                 allowed_hex_ids=train_hex_ids,
                 raw_data_dir=config.data.raw_data_dir,
+                scenario_name=config.data_prep.scenario_name,
                 norm_stats_filename=config.data.norm_stats_filename,
             )
         if target_log_mean is None or target_log_std is None:
