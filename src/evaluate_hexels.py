@@ -150,7 +150,8 @@ def main(
     deterministic = getattr(config, "deterministic", True)
     seed_everything(seed=seed, deterministic=deterministic)
 
-    config.logger.enabled = config.evaluation.report_to_comet
+    if config.evaluation.report_to_comet is not None:
+        config.logger.enabled = config.evaluation.report_to_comet
 
     print("\n[Evaluation] Loading test set...")
     # NOTE: If we need the stats on a particular hexel then modify the test_indices.csv in the config file with

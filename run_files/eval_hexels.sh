@@ -1,80 +1,54 @@
 #!/bin/bash
-#SBATCH --job-name=unet_eval
+##SBATCH --mail-type=all
+##SBATCH --mail-user=name@mila.quebec
+#SBATCH --job-name=eval_model
 #SBATCH --output=logs/job_%x_%j.out
 #SBATCH --error=logs/job_%x_%j.err
 #SBATCH --partition=long
 #SBATCH --ntasks=1
-#SBATCH --time=3:00:00
+#SBATCH --time=01:00:00
 #SBATCH --mem=16Gb
-#SBATCH --cpus-per-task=3
-#SBATCH --gres=gpu:a100:1
+#SBATCH --cpus-per-task=4
+#SBATCH --gres=gpu:1
 
 set -euo pipefail
 
-# Usage: sbatch run_files/eval_hexels.sh configs/<your_config>.yaml
+# Capture the first argument, default to the common pipeline config.
 CONFIG_FILE=${1:-configs/bp_common_input_pipeline.yaml}
+# Example: EVAL_ARGS="--no_log_test_predicted_hexels"
 EVAL_ARGS=${EVAL_ARGS:-}
 
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
 source .venv/bin/activate
-
-RUN_CONFIG_FILE="$CONFIG_FILE"
-
-if [[ -n "${SLURM_TMPDIR:-}" ]]; then
-    echo "Using SLURM_TMPDIR for staged dataset: ${SLURM_TMPDIR}"
-
-    ORIGINAL_DATA_ROOT_DIR=$(python - "$CONFIG_FILE" <<'PY'
+# Flush stdout/stderr immediately so log lines aren't lost if the job is
+# preempted before Python's internal buffers would otherwise flush.
+export PYTHONUNBUFFERED=1
+LOGGER_ENABLED=$(python - "$CONFIG_FILE" <<'PY'
 import sys
 from pathlib import Path
+
 import yaml
-config_path = Path(sys.argv[1])
-with config_path.open() as handle:
+
+with Path(sys.argv[1]).open() as handle:
     config = yaml.safe_load(handle)
-print(Path(config["data"]["root_dir"]).resolve())
+
+report_to_comet = config.get("evaluation", {}).get("report_to_comet")
+logger_enabled = config.get("logger", {}).get("enabled", True)
+effective_enabled = logger_enabled if report_to_comet is None else report_to_comet
+print(str(effective_enabled).lower())
 PY
 )
 
-    STAGE_PARENT="${SLURM_TMPDIR}/nrcan_wildfireriskmapping_data"
-    STAGED_DATA_ROOT_DIR="${STAGE_PARENT}/$(basename "$ORIGINAL_DATA_ROOT_DIR")_${SLURM_JOB_ID:-$$}"
-    mkdir -p "$STAGE_PARENT"
-    trap 'rm -rf "$STAGED_DATA_ROOT_DIR"' EXIT
-
-    echo "Staging data.root_dir:"
-    echo "  from: ${ORIGINAL_DATA_ROOT_DIR}"
-    echo "  to:   ${STAGED_DATA_ROOT_DIR}"
-    df -h "$SLURM_TMPDIR" || true
-
-    if command -v rsync >/dev/null 2>&1; then
-        rsync -a "${ORIGINAL_DATA_ROOT_DIR}/" "${STAGED_DATA_ROOT_DIR}/"
-    else
-        mkdir -p "$STAGED_DATA_ROOT_DIR"
-        cp -a "${ORIGINAL_DATA_ROOT_DIR}/." "$STAGED_DATA_ROOT_DIR/"
-    fi
-
-    echo "Staged dataset size:"
-    du -sh "$STAGED_DATA_ROOT_DIR" || true
-
-    RUN_CONFIG_FILE="${SLURM_TMPDIR}/$(basename "${CONFIG_FILE%.yaml}")_slurm_tmpdir.yaml"
-    python - "$CONFIG_FILE" "$RUN_CONFIG_FILE" "$STAGED_DATA_ROOT_DIR" <<'PY'
-import sys
-from pathlib import Path
-import yaml
-source_config = Path(sys.argv[1])
-run_config = Path(sys.argv[2])
-staged_root = Path(sys.argv[3])
-with source_config.open() as handle:
-    config = yaml.safe_load(handle)
-config["data"]["root_dir"] = str(staged_root)
-with run_config.open("w") as handle:
-    yaml.safe_dump(config, handle, sort_keys=False)
-print(f"Wrote staged config: {run_config}")
-print(f"Using persistent raw_data_dir for evaluation: {config['data']['raw_data_dir']}")
-PY
-else
-    echo "SLURM_TMPDIR is not set; using config data.root_dir directly."
+if [[ "$LOGGER_ENABLED" == "true" && -z "${COMET_API_KEY:-}" ]]; then
+    echo "ERROR: COMET_API_KEY must be exported when logger.enabled=true." >&2
+    exit 1
 fi
 
-echo "Running hexel evaluation with config: $RUN_CONFIG_FILE"
+echo "Using data.root_dir directly from config: $CONFIG_FILE"
+
+echo "Running hexel evaluation with config: $CONFIG_FILE"
 read -r -a EVAL_ARG_ARRAY <<< "$EVAL_ARGS"
-python -m src.evaluate_hexels --config="$RUN_CONFIG_FILE" "${EVAL_ARG_ARRAY[@]}"
+python -m src.evaluate_hexels \
+    --config="$CONFIG_FILE" \
+    "${EVAL_ARG_ARRAY[@]}"
