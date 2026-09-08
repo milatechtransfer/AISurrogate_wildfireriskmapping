@@ -556,7 +556,7 @@ def write_dataset_norm_stats(
     output_path: str | Path,
     types: Collection[str],
     allowed_hex_ids: Collection[int],
-    scenario_name: str = None,
+    scenario_name: str | None = None,
 ) -> dict[str, dict[str, float]]:
     """Compute train-only normalization stats for each requested type and persist to JSON.
 
