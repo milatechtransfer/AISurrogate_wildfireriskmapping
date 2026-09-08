@@ -25,7 +25,13 @@ curve_specs_path <- if (length(args) >= 2) {
   # Fallback for interactive use (source()); won't be reached when called via Rscript
   # from generate_fuel_vectors_national.py which always passes the path explicitly.
   script_dir <- tryCatch(dirname(sys.frame(1)$ofile), error = function(e) getwd())
-  file.path(script_dir, "Fuel_Types.csv")
+  file.path(script_dir, "Fuel_Types_national.csv")
+}
+
+output_csv_filename <- if (length(args) >= 3) {
+  args[3]
+} else {
+  "fbp_curves_national_fuel.csv"
 }
 
 out_dir <- normalizePath(
@@ -435,7 +441,7 @@ print(p)
 # ------------------------------------------------------------
 
 png_path <- file.path(out_dir, "fbp_rosi_curves_national_fuel.png")
-csv_path <- file.path(out_dir, "fbp_curves_national_fuel.csv")
+csv_path <- file.path(out_dir, output_csv_filename)
 
 ggsave(
   filename = png_path,

@@ -12,8 +12,10 @@ sbatch run_files/generate_grid_data.sh
 
 Instead, you can run the following on an interactive node:
 ```bash
-python -m data_preparation.process_hexels_into_grids --root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"  --save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4" --modelling_approach=1 --win_h=256 --win_w=256 --overlap_ratio=0.2 --ignition_weighting="distribution" --fuel_grid_representation="raw"
+python -m data_preparation.process_hexels_into_grids --root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"  --save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4" --modelling_approach=1 --win_h=256 --win_w=256 --overlap_ratio=0.2 --ignition_weighting="distribution" --fuel_grid_representation="raw" --mask_scope="actual"
 ```
+
+`--mask_scope="actual"` should be used when masks are available.
 
 `--ignition_weighting` controls the ignition channels: `distribution` (default) produces zone-area-weighted 2-channel ignition (human + lightning), while `max` produces the original single-channel max-aggregation.
 
@@ -58,9 +60,9 @@ Notes: If you used modelling approach 2, set `--save_dir` to `data_samples_appro
 Step 4 (necessary if fuel_grid_representation is '`raw`): Generate iROS values from the FBP package
 
 Or do it locally and copy to the cluster (easier R support and we don't need access to all data to generate it)
-`python -m data_preparation.tabular.fuel_features.generate_fuel_vectors_national --output-dir /network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4 --fuel_types data_preparation/tabular/fuel_features/Fuel_Types.csv`, you can modify `Fuel_Types.csv` to include more fuel types.
+`python -m data_preparation.tabular.fuel_features.generate_fuel_vectors_national --output-dir /network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4 --fuel_types data_preparation/tabular/fuel_features/Fuel_Types_national.csv`
 
-This saves csv file in the root_dir called `fbp_curves_national_fuel.csv`.
+This saves csv file in the output-dir called `fbp_curves_national_fuel.csv` by default. Pass `--output-filename` to save it under a different filename; this must match `grid.params.fuel_curves_filename` in the model config if it differs from the default.
 
 Step 5 (for training data only, to be used by eval-only data): Precompute input and target normalization stats
 
@@ -69,8 +71,8 @@ The `log_standard` target normalization needs train-only log1p mean/std constant
 ```bash
 python -m data_preparation.compute_dataset_normalization_stats \
 	--raw_data_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA" \
-	--root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4" \
-	--save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4" \
+	--root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v5" \
+	--save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v5" \
 	--train_split="train_indices.csv" \
 	--types elevation fuel_curve_iROS fuel_curve_HFI fire_intensity fire_ros fire_burn_probability
 ```

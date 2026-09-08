@@ -11,12 +11,13 @@ from data_preparation.utils import find_hex_ids
 FUEL_CURVE_ENCODINGS: frozenset[str] = frozenset({"iROS", "HFI"})
 
 # Single CSV produced by compute_vector_values_national.R containing all fuel curve columns.
-_FUEL_CURVES_CSV = "fbp_curves_national_fuel.csv"
+# Configurable via GridParams/DataConfig.fuel_curves_filename; this is only the fallback default.
+DEFAULT_FUEL_CURVES_CSV = "fbp_curves_national_fuel.csv"
 
-# Maps feature_name -> (csv_filename, value_column_name)
-_FEATURE_CSV: dict[str, tuple[str, str]] = {
-    "iROS": (_FUEL_CURVES_CSV, "ROS"),
-    "HFI": (_FUEL_CURVES_CSV, "HFI"),
+# Maps feature_name -> value_column_name (all features are read from the same CSV file).
+_FEATURE_COLUMN: dict[str, str] = {
+    "iROS": "ROS",
+    "HFI": "HFI",
 }
 
 
@@ -382,6 +383,7 @@ def build_fuel_curve_lookup(
     season_col: str = "SeasonState",
     isi_col: str = "ISI",
     feature_name: str = "iROS",
+    fuel_curves_filename: str = DEFAULT_FUEL_CURVES_CSV,
 ) -> dict[tuple[int, str | None], np.ndarray]:
     """
     Construct the complete fuel curve lookup table once at runtime.
@@ -422,17 +424,21 @@ def build_fuel_curve_lookup(
         Root directory of hexel data.
 
     feature_name
-        Curve feature to load.  Must be a key in ``_FEATURE_CSV``
+        Curve feature to load.  Must be a key in ``_FEATURE_COLUMN``
         (e.g. ``"iROS"`` or ``"HFI"``).
-    """
-    if feature_name not in _FEATURE_CSV:
-        raise ValueError(f"Unknown feature_name={feature_name!r}. Supported values: {sorted(_FEATURE_CSV)}")
 
-    csv_filename, feature_col = _FEATURE_CSV[feature_name]
+    fuel_curves_filename
+        Filename (relative to root_dir) of the fuel curve CSV produced by
+        compute_vector_values_national.R. Defaults to ``DEFAULT_FUEL_CURVES_CSV``.
+    """
+    if feature_name not in _FEATURE_COLUMN:
+        raise ValueError(f"Unknown feature_name={feature_name!r}. Supported values: {sorted(_FEATURE_COLUMN)}")
+
+    feature_col = _FEATURE_COLUMN[feature_name]
 
     # Read and prepare all curves only once.
     curves_by_code = read_curves(
-        ros_csv_path=Path(root_dir) / csv_filename,
+        ros_csv_path=Path(root_dir) / fuel_curves_filename,
         code_col=code_col,
         season_col=season_col,
         isi_col=isi_col,
@@ -518,6 +524,7 @@ def compute_fuel_curve_norm_stats(
     raw_data_dir: str | Path,
     feature_name: str,
     allowed_hex_ids: set[int] | None = None,
+    fuel_curves_filename: str = DEFAULT_FUEL_CURVES_CSV,
 ) -> tuple[float, float]:
     """Compute log1p mean and std of fuel curve vectors for offline caching.
 
@@ -534,6 +541,9 @@ def compute_fuel_curve_norm_stats(
     allowed_hex_ids
         If provided, only hex-specific vectors from these hexels contribute to
         the stats (hex-independent vectors always contribute).
+    fuel_curves_filename
+        Filename (relative to root_dir) of the fuel curve CSV. Defaults to
+        ``DEFAULT_FUEL_CURVES_CSV``.
 
     Returns
     -------
@@ -544,6 +554,7 @@ def compute_fuel_curve_norm_stats(
         root_dir=root_dir,
         raw_data_dir=raw_data_dir,
         feature_name=feature_name,
+        fuel_curves_filename=fuel_curves_filename,
     )
 
     if allowed_hex_ids is not None:

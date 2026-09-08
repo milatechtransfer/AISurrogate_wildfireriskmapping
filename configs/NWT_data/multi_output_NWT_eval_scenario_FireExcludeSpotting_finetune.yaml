@@ -84,6 +84,7 @@ data:
             out_norm: "log_standard"
           - name: "ros"
             out_norm: "log_standard"
+        fuel_curves_filename: "fbp_curves_national_and_NWT_fuel.csv"
         fuel_feats_encoding: "iROS"
         normalize_fuel_feats_ordinal: false
         transforms_list: []

@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.datasets.fuel_utils import _FUEL_CURVES_CSV, build_fuel_curve_lookup
+from src.datasets.fuel_utils import DEFAULT_FUEL_CURVES_CSV, build_fuel_curve_lookup
 
 
 @pytest.mark.parametrize(
@@ -27,7 +27,7 @@ def test_build_fuel_curve_lookup_reads_combined_curve_file(
             "ROS": [1.0, 2.0],
             "HFI": [10.0, 20.0],
         }
-    ).to_csv(tmp_path / _FUEL_CURVES_CSV, index=False)
+    ).to_csv(tmp_path / DEFAULT_FUEL_CURVES_CSV, index=False)
     monkeypatch.setattr("src.datasets.fuel_utils.find_hex_ids", lambda _root: [])
 
     lookup = build_fuel_curve_lookup(

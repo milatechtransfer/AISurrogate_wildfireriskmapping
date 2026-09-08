@@ -557,6 +557,7 @@ def write_dataset_norm_stats(
     types: Collection[str],
     allowed_hex_ids: Collection[int],
     scenario_name: str | None = None,
+    fuel_curves_filename: str | None = None,
 ) -> dict[str, dict[str, float]]:
     """Compute train-only normalization stats for each requested type and persist to JSON.
 
@@ -567,6 +568,9 @@ def write_dataset_norm_stats(
     - ``fire_intensity``, ``fire_ros``: log1p mean/std (for log-standard norm).
     - ``fuel_curve_iROS``, ``fuel_curve_HFI``: log1p mean/std of fuel curve vectors.
       Requires ``root_dir`` (prepared patch dataset with fuel curve CSV and ignition tables).
+
+    ``fuel_curves_filename`` overrides the fuel curve CSV filename (relative to ``root_dir``);
+    defaults to ``src.datasets.fuel_utils.DEFAULT_FUEL_CURVES_CSV`` when not given.
 
     All stats are derived solely from ``allowed_hex_ids`` (the training split) so held-out
     hexes never leak into the normalization constants used by training, evaluation, and
@@ -611,13 +615,14 @@ def write_dataset_norm_stats(
                 if root_dir is None:
                     logger.warning("Skipping %r: --root_dir is required for fuel curve stats.", type_name)
                     continue
-                from src.datasets.fuel_utils import compute_fuel_curve_norm_stats
+                from src.datasets.fuel_utils import DEFAULT_FUEL_CURVES_CSV, compute_fuel_curve_norm_stats
 
                 mean, std = compute_fuel_curve_norm_stats(
                     root_dir=root_dir,
                     raw_data_dir=raw_data_dir,
                     feature_name=feature_name,
                     allowed_hex_ids=set(allowed_hex_ids) if allowed_hex_ids is not None else None,
+                    fuel_curves_filename=fuel_curves_filename or DEFAULT_FUEL_CURVES_CSV,
                 )
                 entry = {"log_mean": mean, "log_std": std}
 

@@ -70,6 +70,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="include scenario name for output data if given",
     )
+    parser.add_argument(
+        "--fuel_curves_filename",
+        type=str,
+        default=None,
+        help="Filename (relative to root_dir) of the fuel curve CSV, used for fuel_curve_* types. "
+        "Defaults to src.datasets.fuel_utils.DEFAULT_FUEL_CURVES_CSV.",
+    )
     return parser.parse_args()
 
 
@@ -90,6 +97,7 @@ def main() -> None:
         types=args.types,
         allowed_hex_ids=train_hex_ids,
         scenario_name=args.scenario_name,
+        fuel_curves_filename=args.fuel_curves_filename,
     )
     logger.info("Wrote train-only target norm stats to %s: %s", output_path, stats)
 

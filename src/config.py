@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from data_preparation.spatial.utils import NORM_STATS_JSON
+from src.datasets.fuel_utils import DEFAULT_FUEL_CURVES_CSV
 from src.datasets.postprocessing.hazard import (
     DEFAULT_FI_CAP,
     DEFAULT_HAZARD_BIN_THRESHOLDS,
@@ -151,6 +152,10 @@ class GridParams(BaseModel):
     target_log_std: float | None = None
     fuel_feats_encoding: str = "one_hot"
     normalize_fuel_feats_ordinal: bool = True
+    # Filename (relative to root_dir) of the fuel curve CSV produced by
+    # compute_vector_values_national.R, used when fuel_feats_encoding is a
+    # curve-based encoding (e.g. "iROS", "HFI").
+    fuel_curves_filename: str = DEFAULT_FUEL_CURVES_CSV
     transforms_list: list[str] = Field(default_factory=list)
     augmentation_prob: float = 0.0
     terrain_derivatives: list[str] = Field(default_factory=list)

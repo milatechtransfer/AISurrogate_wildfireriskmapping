@@ -10,13 +10,15 @@ def run_r_script(
     r_script_path: str | Path,
     output_dir: str | Path,
     fuel_types_path: str | Path | None = None,
+    output_filename: str = "fbp_curves_national_fuel.csv",
 ) -> None:
     """
     Run the R script and pass the output directory as its first argument,
-    and optionally the curve specs CSV as the second argument.
+    the curve specs CSV as the second argument, and the output CSV filename
+    as the third argument.
 
     Equivalent command:
-        Rscript compute_vector_values_national.R <output_dir> [<fuel_types_path>]
+        Rscript compute_vector_values_national.R <output_dir> <fuel_types_path> <output_filename>
     """
     r_script_path = Path(r_script_path).resolve()
     output_dir = Path(output_dir).resolve()
@@ -28,6 +30,11 @@ def run_r_script(
         fuel_types_path = Path(fuel_types_path).resolve()
         if not fuel_types_path.is_file():
             raise FileNotFoundError(f"Curve specs CSV not found: {fuel_types_path}")
+    elif output_filename != "fbp_curves_national_fuel.csv":
+        # The R script reads positional args in order (out_dir, fuel_types_path,
+        # output_filename), so a custom filename can't be passed without also
+        # passing fuel_types_path explicitly.
+        raise ValueError("fuel_types_path must be provided when overriding output_filename.")
 
     rscript_executable = shutil.which("Rscript")
 
@@ -43,6 +50,7 @@ def run_r_script(
     ]
     if fuel_types_path is not None:
         command.append(str(fuel_types_path))
+        command.append(output_filename)
 
     print("Running command:")
     print(" ".join(command))
@@ -81,7 +89,14 @@ def main() -> None:
         "--fuel_types",
         type=Path,
         default=None,
-        help=("Path to the fuel types CSV. " "Defaults to Fuel_Types.csv in the same directory as the R script."),
+        help=("Path to the fuel types CSV. " "Defaults to Fuel_Types_national.csv in the same directory as the R script."),
+    )
+
+    parser.add_argument(
+        "--output-filename",
+        type=str,
+        default="fbp_curves_national_fuel.csv",
+        help="Filename for the output fuel curve CSV (saved under --output-dir).",
     )
 
     args = parser.parse_args()
@@ -89,7 +104,8 @@ def main() -> None:
     run_r_script(
         r_script_path=args.r_script,
         output_dir=args.output_dir,
-        fuel_types_path=args.fuel_types if args.fuel_types is not None else args.r_script.parent / "Fuel_Types.csv",
+        fuel_types_path=args.fuel_types if args.fuel_types is not None else args.r_script.parent / "Fuel_Types_national.csv",
+        output_filename=args.output_filename,
     )
 
 

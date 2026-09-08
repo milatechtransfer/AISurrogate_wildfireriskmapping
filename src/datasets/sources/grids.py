@@ -103,6 +103,7 @@ class GridSource(DataSource):
         self.target_log_stats = {target.name: (target.log_mean, target.log_std) for target in target_configs}
         self.fuel_feats_encoding = params.fuel_feats_encoding
         self.normalize_fuel_feats_ordinal = params.normalize_fuel_feats_ordinal
+        self.fuel_curves_filename = params.fuel_curves_filename
         self.terrain_derivatives = params.terrain_derivatives
         self.terrain_cell_size_m = params.terrain_cell_size_m
         self.bp_nodata_as_zero = params.bp_nodata_as_zero
@@ -262,6 +263,7 @@ class GridSource(DataSource):
                 root_dir=self.root_dir,
                 raw_data_dir=self.raw_data_dir,
                 feature_name=self.fuel_feats_encoding,
+                fuel_curves_filename=self.fuel_curves_filename,
             )
             self.fuel_curve_len = len(next(iter(self.fuel_curve_lookup.values())))
             self._compute_fuel_curve_normalization_stats()
