@@ -82,6 +82,16 @@ On the cluster, use the SLURM wrapper:
 sbatch run_files/eval_hazard.sh configs/hazard_eval_spatial_weather.yaml
 ```
 
+For the three seeded 256x256 q10/q50/q90 fire-size checkpoints, run:
+
+```bash
+sbatch run_files/eval_hazard_multi_run.sh configs/hazard_eval_spatial_weather_firesize_q3.yaml
+```
+
+The array tasks use seeds `42`, `1337`, and `2024`, normalize each run by its
+maximum predicted raw hazard on the actual support, and write results under
+`experiments/hazard_eval_multi_output_spatial_weather_firesize_q3/seed_<seed>/`.
+
 Extra CLI arguments can be passed through `EVAL_ARGS`. For example, to run a buffer-only evaluation from a different data root and keep outputs separate:
 
 ```bash

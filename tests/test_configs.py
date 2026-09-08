@@ -25,6 +25,7 @@ ROS_CONFIG = Path("configs/ablations/ros_spatial_weather.yaml")
 MULTI_OUTPUT_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
 MULTI_OUTPUT_FIRE_SIZE_Q3_CONFIG = Path("configs/multi_output_spatial_weather_firesize_q3.yaml")
 HAZARD_EVAL_CONFIG = Path("configs/hazard_eval_spatial_weather.yaml")
+HAZARD_Q3_EVAL_CONFIG = Path("configs/hazard_eval_spatial_weather_firesize_q3.yaml")
 HAZARD_MODEL_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
 COMMON_INPUT_PIPELINE_CONFIGS = [BP_CONFIG, FI_CONFIG, ROS_CONFIG]
 
@@ -290,6 +291,16 @@ def test_hazard_eval_config_parses_and_references_model_config():
     assert config.test_split == "test_indices.csv"
     assert config.mask_scope == "actual"
     assert config.stitch_mode == "mean"
+
+
+def test_hazard_q3_multiseed_config_uses_prediction_max_on_actual_support():
+    config = _load_hazard_eval_config(HAZARD_Q3_EVAL_CONFIG)
+
+    assert config.model.config_path == "configs/multi_output_spatial_weather_firesize_q3.yaml"
+    assert config.model.checkpoint_dir is not None
+    assert config.model.checkpoint_dir.endswith("unet_256_firesize_q3")
+    assert config.mask_scope == "actual"
+    assert config.scale_denominator_source == "prediction"
 
 
 def test_hazard_eval_config_defaults():
