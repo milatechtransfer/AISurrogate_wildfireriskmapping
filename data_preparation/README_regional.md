@@ -11,7 +11,7 @@ You can run the following on an interactive node:
 python -m data_preparation.process_hexels_into_grids --root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data"  --save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_baseline_FireSpotting" --modelling_approach=1 --win_h=256 --win_w=256 --overlap_ratio=0.2 --ignition_weighting="distribution" --fuel_grid_representation="raw" --scenario_name="FireSpotting"
 ```
 
-`--mask_scope="actual"` is not be used for non-national data as masks are not available.
+`--mask_scope="actual"` should not be used for non-national data as masks are not available.
 
 `--ignition_weighting` controls the ignition channels: `distribution` (default) produces zone-area-weighted 2-channel ignition (human + lightning), while `max` produces the original single-channel max-aggregation.
 
