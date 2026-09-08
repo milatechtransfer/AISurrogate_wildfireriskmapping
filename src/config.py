@@ -382,6 +382,7 @@ class HazardModelEntry(BaseModel):
     """A single trained multi-output model contributing BP/FI predictions to hazard evaluation."""
 
     config_path: str
+    checkpoint_dir: str | None = None
     checkpoint_filename: str = "best.pth"
     save_predictions: bool = False
 

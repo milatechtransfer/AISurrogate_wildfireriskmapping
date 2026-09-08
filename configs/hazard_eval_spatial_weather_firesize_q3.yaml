@@ -1,0 +1,27 @@
+# Hazard evaluation for the three seeded 256x256 q10/q50/q90 fire-size models.
+# Use with run_files/eval_hazard_multi_run.sh so each array task selects one
+# checkpoint and writes to a separate seed_<seed> output directory.
+save_dir: "experiments/hazard_eval_multi_output_spatial_weather_firesize_q3"
+
+root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4"
+raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+test_split: "test_indices.csv"
+valid_mask_threshold: 0.01
+mask_scope: "actual"
+stitch_mode: "mean"
+
+model:
+  config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
+  checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+  checkpoint_filename: "best.pth"
+  save_predictions: false
+
+fi_cap: 10000.0
+scale_to: 100.0
+bin_thresholds: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0]
+scale_denominator: null
+scale_denominator_source: "prediction"
+reference_denominator_path: null
+self_normalized_prediction: false
+
+save_hazard_map: true
