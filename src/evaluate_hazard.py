@@ -170,7 +170,12 @@ def apply_hazard_run_id_overrides(
     model_config: Config,
     run_id: int,
 ) -> tuple[HazardEvalConfig, int]:
-    """Select a seeded checkpoint and isolate that seed's hazard artifacts."""
+    """Select seeded checkpoint/output paths.
+
+    Mutates ``model_config`` in place to set its seed and seed-specific
+    checkpoint directory. Returns a copied hazard config with a seed-specific
+    artifact directory, along with the selected seed.
+    """
     run_seed = apply_run_id_overrides(model_config, run_id)
     seeded_hazard_config = hazard_config.model_copy(update={"save_dir": str(Path(hazard_config.save_dir) / f"seed_{run_seed}")})
     return seeded_hazard_config, run_seed
