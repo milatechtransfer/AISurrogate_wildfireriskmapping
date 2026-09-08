@@ -15,6 +15,7 @@ import json
 import os
 import time
 from collections.abc import Collection, Iterable, Sequence
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -24,7 +25,7 @@ import yaml
 from data_preparation.paths import Paths
 from data_preparation.spatial.utils import load_raster, read_split_hex_ids
 from data_preparation.utils import find_hex_ids
-from src.config import Config, HazardEvalConfig, HazardModelEntry
+from src.config import Config, HazardEvalConfig, HazardModelEntry, apply_run_id_overrides
 from src.datasets.dataset import get_test_dataloader
 from src.datasets.postprocessing.hazard import compute_raw_hazard, max_finite_hazard
 from src.datasets.postprocessing.hazard_metrics import flatten_hazard_class_metrics
@@ -106,6 +107,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override hazard_config.stitch_mode for this run.",
     )
+    parser.add_argument(
+        "--run_id",
+        type=int,
+        default=None,
+        help="Run index used to select the matching seed checkpoint and seed-specific output directory.",
+    )
     return parser.parse_args()
 
 
@@ -139,6 +146,8 @@ def prepare_model_config_for_hazard(
     model_config.data.raw_data_dir = hazard_config.raw_data_dir
     model_config.data.test_split = hazard_config.test_split
     model_config.data.valid_mask_threshold = hazard_config.valid_mask_threshold
+    if entry.checkpoint_dir is not None:
+        model_config.save_dir = entry.checkpoint_dir
     model_config.evaluation.checkpoint_filename = entry.checkpoint_filename
     model_config.logger.enabled = False
 
@@ -154,6 +163,17 @@ def prepare_model_config_for_hazard(
             f"but the configured targets are {sorted(actual_targets)} (missing {sorted(missing_targets)})."
         )
     return model_config
+
+
+def apply_hazard_run_id_overrides(
+    hazard_config: HazardEvalConfig,
+    model_config: Config,
+    run_id: int,
+) -> tuple[HazardEvalConfig, int]:
+    """Select a seeded checkpoint and isolate that seed's hazard artifacts."""
+    run_seed = apply_run_id_overrides(model_config, run_id)
+    seeded_hazard_config = hazard_config.model_copy(update={"save_dir": str(Path(hazard_config.save_dir) / f"seed_{run_seed}")})
+    return seeded_hazard_config, run_seed
 
 
 def run_test_inference(model_config: Config, seed: int) -> tuple[np.ndarray, str]:
@@ -451,9 +471,13 @@ def main() -> None:
     if overrides:
         hazard_config = hazard_config.model_copy(update=overrides)
 
-    os.makedirs(hazard_config.save_dir, exist_ok=True)
-
     model_config = prepare_model_config_for_hazard(load_config(hazard_config.model.config_path), hazard_config, hazard_config.model)
+
+    if args.run_id is not None:
+        hazard_config, run_seed = apply_hazard_run_id_overrides(hazard_config, model_config, args.run_id)
+        print(f"[run_id={args.run_id}] Using seed={run_seed}, checkpoint_dir={model_config.save_dir}, save_dir={hazard_config.save_dir}")
+
+    os.makedirs(hazard_config.save_dir, exist_ok=True)
 
     seed = getattr(model_config, "seed", 42)
     deterministic = getattr(model_config, "deterministic", True)

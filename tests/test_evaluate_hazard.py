@@ -5,14 +5,16 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 from rasterio.crs import CRS
 from rasterio.transform import from_origin
 
-from src.config import Config, HazardEvalConfig, HazardModelEntry
+from src.config import SEEDS, Config, HazardEvalConfig, HazardModelEntry
 from src.datasets.postprocessing.hexel_reconstruction import StitchedHexel
 from src.datasets.targets import get_target_spec
 from src.evaluate_hazard import (
     _write_hazard_metric_summaries_from_records,
+    apply_hazard_run_id_overrides,
     load_hazard_config,
     parse_args,
     prepare_model_config_for_hazard,
@@ -104,6 +106,7 @@ class TestCliOverrides:
         assert args.root_dir is None
         assert args.stitch_mode is None
         assert args.self_normalized_prediction is False
+        assert args.run_id is None
 
     def test_no_overrides_returns_same_config(self, monkeypatch):
         args = self._parse(monkeypatch, ["--config", str(HAZARD_EVAL_CONFIG)])
@@ -201,6 +204,34 @@ class TestPrepareModelConfigForHazard:
         hazard_config = _hazard_config()
         with pytest.raises(ValueError, match="multi-output model predicting"):
             prepare_model_config_for_hazard(model_config, hazard_config, hazard_config.model)
+
+    def test_uses_explicit_checkpoint_directory(self):
+        model_config = self._multi_output_config()
+        hazard_config = _hazard_config(
+            model=HazardModelEntry(
+                config_path=str(MULTI_OUTPUT_CONFIG),
+                checkpoint_dir="/checkpoints/q3",
+            )
+        )
+
+        prepared = prepare_model_config_for_hazard(model_config, hazard_config, hazard_config.model)
+
+        assert prepared.save_dir == "/checkpoints/q3"
+
+
+def test_apply_hazard_run_id_overrides_selects_seeded_paths():
+    with MULTI_OUTPUT_CONFIG.open() as handle:
+        model_config = Config(**yaml.safe_load(handle))
+    model_config.save_dir = "/checkpoints/q3"
+    hazard_config = _hazard_config(save_dir="experiments/hazard_q3")
+
+    updated, run_seed = apply_hazard_run_id_overrides(hazard_config, model_config, run_id=1)
+
+    assert run_seed == SEEDS[1]
+    assert model_config.seed == SEEDS[1]
+    assert model_config.save_dir == f"/checkpoints/q3/seed_{SEEDS[1]}"
+    assert updated.save_dir == f"experiments/hazard_q3/seed_{SEEDS[1]}"
+    assert hazard_config.save_dir == "experiments/hazard_q3"
 
 
 class TestReadReferenceDenominator:
