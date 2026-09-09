@@ -50,7 +50,7 @@ training:
 evaluation:
   best_ckpt_metrics: ["bp/ccc", "fi/ccc", "ros/ccc"]
   best_ckpt_metrics_mode: ["max", "max", "max"]
-  checkpoint_filename: "best.pth" # change the checkpoint name whether it is base or finetuned
+  checkpoint_filename: "best_base.pth" # change the checkpoint name whether it is base or finetuned
   bp_nodata_as_zero: true
   prediction_support_policy: "input"
   hazard_fi_cap: 10000.0
@@ -58,7 +58,7 @@ evaluation:
   report_to_comet: true
 
 data:
-  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_FireExcludeSpotting_v2"
+  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_FireExcludeSpotting"
   raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data"
 
   train_split: ""
@@ -117,18 +117,25 @@ data:
         shuffle_seed: 42
         transforms_list: []
         augmentation_prob: 0.0
+    # - name: "spatialized_fire_size"
+    #   params:
+    #     csv_name: "ObservedFiresizedistribution_FortSimpson_processed.csv"
+    #     feature_names_list: ["NORM_LOG_SIZE_HA"]
+    #     fire_weather_zone_id_col: "GRIDCODE"
+    #     quantiles: [0.1, 0.5, 0.9]
+    #     missing_value_strategy: "global_mean"
 
 logger:
   enabled: true
   project_name: "nrcan-05-wildfires-nwt-data"
   workspace: "mila-amlrt"
-  experiment_name: "multi_task_NWT_data_scenario_baseline_FireExcludeSpotting_v2_data_national_stats"
+  experiment_name: "multi_task_NWT_data_scenario_FireExcludeSpotting"
   tags:
     - "full_data"
     - "modelling_approach=1"
     - "targets=bp_fi_ros"
     - "output_head=bp_behavior"
-    - "data_samples_v4"
+    - "NWT_data_FireExcludeSpotting_scenario"
     - "ignition=aggregated_human_lightning"
     - "raw_fuel_iROS"
     - "best_ckpt=bp_ccc_fi_ccc_ros_ccc"
