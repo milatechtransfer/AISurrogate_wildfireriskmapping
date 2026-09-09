@@ -3,7 +3,7 @@ directly run the R script: source("compute_vector_values_national.R"), the outpu
 or BETTER run it from python using the script: `generate_fuel_vectors_national.py`
 `python -m data_preparation.tabular.fuel_features.generate_fuel_vectors_national --output-dir /network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v3`
 
-The curves are generated for the fuel inside `Fuel_Types.csv`
+The curves are generated for the fuel inside `fuel_types_national.csv`
 
 [NOT USED FOR NOW] For FBP Raster function, run the python script:
 `python -m data_preparation/feature_processing/fuel_features/generate`

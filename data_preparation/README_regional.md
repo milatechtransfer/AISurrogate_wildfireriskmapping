@@ -8,21 +8,19 @@ Step 1: Process hexel data into multiple square patches, which will be our data 
 
 You can run the following on an interactive node:
 ```bash
-python -m data_preparation.process_hexels_into_grids --root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data"  --save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_baseline_FireSpotting" --modelling_approach=1 --win_h=256 --win_w=256 --overlap_ratio=0.2 --ignition_weighting="distribution" --fuel_grid_representation="raw" --scenario_name="FireSpotting"
+python -m data_preparation.process_hexels_into_grids --root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data"  --save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_FireExcludeSpotting" --modelling_approach=1 --win_h=256 --win_w=256 --overlap_ratio=0.2 --ignition_weighting="distribution" --fuel_grid_representation="raw" --scenario_name="FireExcludeSpotting"
 ```
-
-`--mask_scope="actual"` should not be used for non-national data as masks are not available.
 
 `--ignition_weighting` controls the ignition channels: `distribution` (default) produces zone-area-weighted 2-channel ignition (human + lightning), while `max` produces the original single-channel max-aggregation.
 
 `--fuel_grid_representation` controls the fuel grid representation: `raw` (default) produces raw class values, while `group` groups similar classes together using `FUEL_GROUP_MAP` and saves the grid as 0-N values.
 
-`--scenario_name="FireSpotting"` is used in case of regional/non-national data with multiple scenarios, this matters for fuel rasters as well as output rasters.
+`--scenario_name="FireExcludeSpotting"` is used in case of regional/non-national data with multiple scenarios, this matters for fuel rasters as well as output rasters.
 
 Step 2: Create training, validation and test splits.
 
 ```bash
-python -m data_preparation.split_data --data_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_baseline_FireSpotting" --test_only
+python -m data_preparation.split_data --data_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_FireExcludeSpotting" --test_only
 ```
 
 Step 3: Create tabular files (weather + fire-size)
@@ -38,7 +36,7 @@ First copy `fire_size_norm_params.json` and `weather_norm_params.json` from save
 ```bash
 python -m data_preparation.process_tabular_data \
 	--root_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data" \
-	--save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_baseline_FireSpotting" \
+	--save_dir="/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_FireExcludeSpotting" \
 	--weather_output_file="weather_table_processed.csv" \
 	--fire_size_input_file="ObservedFiresizedistribution_FortSimpson.csv" \
 	--fire_size_output_file="ObservedFiresizedistribution_FortSimpson_processed.csv" \
@@ -47,13 +45,11 @@ python -m data_preparation.process_tabular_data \
     --weather_norm_params_file="weather_norm_params.json"
 ```
 
-Notes: If you used modelling approach 2, set `--save_dir` to `data_samples_approach_2`. The `process_tabular_data` script will look for the fire-size file in `--root_dir` first, then in `--save_dir`; ensure `df_fire_fru.csv` is present in one of those places.
-
 Step 4 (necessary if fuel_grid_representation is '`raw`): Generate iROS values from the FBP package
 
-To include new fuel classes other than the ones in `Fuel_Types_national.csv`, copy the file, and include the new classes. Save as a new file. For NWT data, it is already saved under: `Fuel_Types_national_and_NWT.csv`
+To include new fuel classes other than the ones in `fuel_types_national.csv`, copy the file, and include the new classes. Save as a new file. For NWT data, it is already saved under: `fuel_types_national_and_NWT.csv`
 Do it locally and copy to the cluster (easier R support and we don't need access to all data to generate it)
-`python -m data_preparation.tabular.fuel_features.generate_fuel_vectors_national --output-dir /network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_baseline_FireSpotting --fuel_types data_preparation/tabular/fuel_features/Fuel_Types_national_and_NWT.csv --output-filename=fbp_curves_national_and_NWT_fuel.csv` .
+`python -m data_preparation.tabular.fuel_features.generate_fuel_vectors_national --output-dir /network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_FireExcludeSpotting --fuel_types data_preparation/tabular/fuel_features/fuel_types_national_and_NWT.csv --output-filename=fbp_curves_national_and_NWT_fuel.csv` .
 
 Step 5:
 

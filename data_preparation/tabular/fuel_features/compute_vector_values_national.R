@@ -25,7 +25,7 @@ curve_specs_path <- if (length(args) >= 2) {
   # Fallback for interactive use (source()); won't be reached when called via Rscript
   # from generate_fuel_vectors_national.py which always passes the path explicitly.
   script_dir <- tryCatch(dirname(sys.frame(1)$ofile), error = function(e) getwd())
-  file.path(script_dir, "Fuel_Types_national.csv")
+  file.path(script_dir, "fuel_types_national.csv")
 }
 
 output_csv_filename <- if (length(args) >= 3) {
@@ -33,6 +33,15 @@ output_csv_filename <- if (length(args) >= 3) {
 } else {
   "fbp_curves_national_fuel.csv"
 }
+
+# Derive the PNG plot filenames from the CSV output filename so that when a
+# custom --output-filename is passed, the plots follow the same naming
+# (e.g. "fbp_curves_national_and_NWT_fuel.csv" ->
+# "fbp_rosi_curves_national_and_NWT_fuel.png" / "fbp_hfi_curves_national_and_NWT_fuel.png").
+csv_stem <- tools::file_path_sans_ext(output_csv_filename)
+csv_suffix <- sub("^fbp_curves_", "", csv_stem)
+rosi_png_filename <- paste0("fbp_rosi_curves_", csv_suffix, ".png")
+hfi_png_filename <- paste0("fbp_hfi_curves_", csv_suffix, ".png")
 
 out_dir <- normalizePath(
   out_dir,
@@ -440,7 +449,7 @@ print(p)
 # Save outputs
 # ------------------------------------------------------------
 
-png_path <- file.path(out_dir, "fbp_rosi_curves_national_fuel.png")
+png_path <- file.path(out_dir, rosi_png_filename)
 csv_path <- file.path(out_dir, output_csv_filename)
 
 ggsave(
@@ -564,7 +573,7 @@ print(p_hfi)
 # Save HFI outputs
 # ------------------------------------------------------------
 
-hfi_png_path <- file.path(out_dir, "fbp_hfi_curves_national_fuel.png")
+hfi_png_path <- file.path(out_dir, hfi_png_filename)
 
 ggsave(
   filename = hfi_png_path,

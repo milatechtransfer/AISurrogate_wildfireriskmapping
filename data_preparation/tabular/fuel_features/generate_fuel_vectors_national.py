@@ -89,7 +89,7 @@ def main() -> None:
         "--fuel_types",
         type=Path,
         default=None,
-        help=("Path to the fuel types CSV. " "Defaults to Fuel_Types_national.csv in the same directory as the R script."),
+        help=("Path to the fuel types CSV. " "Defaults to fuel_types_national.csv in the same directory as the R script."),
     )
 
     parser.add_argument(
@@ -104,7 +104,7 @@ def main() -> None:
     run_r_script(
         r_script_path=args.r_script,
         output_dir=args.output_dir,
-        fuel_types_path=args.fuel_types if args.fuel_types is not None else args.r_script.parent / "Fuel_Types_national.csv",
+        fuel_types_path=args.fuel_types if args.fuel_types is not None else args.r_script.parent / "fuel_types_national.csv",
         output_filename=args.output_filename,
     )
 
