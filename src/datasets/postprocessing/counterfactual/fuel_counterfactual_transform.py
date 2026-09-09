@@ -36,9 +36,13 @@ def fuel_intervention_raster_path(
 
 def _write_fuel_raster(data: np.ndarray, profile: dict, path: Path) -> None:
     write_profile = profile.copy()
-    write_profile.update(dtype="float32", count=1, compress="lzw", nodata=float(FUEL_NODATA))
-    values = np.asarray(data, dtype=np.float32)
-    write_values = np.where(np.isfinite(values), values, float(FUEL_NODATA)).astype(np.float32)
+    write_profile.update(dtype="int16", count=1, compress="lzw", nodata=FUEL_NODATA)
+    values = np.asarray(data, dtype=np.float64)
+    finite = np.isfinite(values)
+    if finite.any() and not np.equal(values[finite], np.rint(values[finite])).all():
+        raise ValueError("Fuel rasters must contain integer-valued categorical fuel IDs.")
+    write_values = np.full(values.shape, FUEL_NODATA, dtype=np.int16)
+    write_values[finite] = np.rint(values[finite]).astype(np.int16)
     path.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(path, "w", **write_profile) as dst:
         dst.write(write_values, 1)

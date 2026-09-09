@@ -60,6 +60,19 @@ def test_load_final_fire_perimeters_can_keep_every_daily_step(tmp_path: Path) ->
     assert len(load_final_fire_perimeters(path, final_perimeter_only=False)) == 3
 
 
+def test_load_final_fire_perimeters_accepts_already_final_layer_without_burn_day(tmp_path: Path) -> None:
+    records = [
+        {"Iteration": 1, "FireID": 1, "geometry": _square(1.0, 96.0, 2.0)},
+        {"Iteration": 1, "FireID": 2, "geometry": _square(6.0, 92.0, 2.0)},
+    ]
+    path = _write_perimeters(tmp_path / "final.gpkg", records)
+
+    final = load_final_fire_perimeters(path, final_perimeter_only=False)
+
+    assert len(final) == 2
+    assert list(zip(final["Iteration"], final["FireID"], strict=True)) == [(1, 1), (1, 2)]
+
+
 def test_build_fire_polygon_mask_rasterizes_expected_pixels(tmp_path: Path) -> None:
     path = _write_perimeters(tmp_path / "perims.gpkg", _simple_records())
 

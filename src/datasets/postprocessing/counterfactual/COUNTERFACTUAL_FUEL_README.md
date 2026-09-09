@@ -143,6 +143,9 @@ to get wrong when working with them directly:
 - **They are written in the simulation's own projection**, not the model grid's. They are
   reprojected onto the reference raster's CRS automatically; a file whose perimeters do
   not intersect the hexel raises rather than silently producing an empty mask.
+- **Already-final perimeter layers are supported.** For a layer such as
+  `final_burn_perimeters` with one row per fire and no `BurnDay` column, set
+  `final_perimeter_only: false`; no additional daily-perimeter reduction is needed.
 
 `select` is optional. `iteration` and `fire_ids` stay stable if the perimeter file is
 regenerated; `top_k_by_area` re-resolves against whatever is in the file. Pooling all
@@ -155,6 +158,10 @@ per selected fire (`iteration`, `fire_id`, `final_area_ha`, `buffered_area_ha`,
 re-deriving them. Comparing `final_area_ha` against `mask_pixels` × the pixel area is a
 cheap confirmation that the reprojection landed correctly, and `fully_within_grid`
 flags fires clipped by the hexel boundary.
+
+The persisted `hexel_<ID>_scenario_fuel.tif` uses the source grid, categorical
+`int16` fuel IDs, and nodata `-32768`, so it can be supplied directly as the
+BurnP3+ FBP landscape raster for a matched validation run.
 
 The shipped example is `configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml`,
 which converts every burnable pixel inside the pooled perimeters to fuel 13 (the D-1/D-2

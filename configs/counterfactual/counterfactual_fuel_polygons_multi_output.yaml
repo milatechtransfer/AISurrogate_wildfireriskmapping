@@ -32,9 +32,8 @@ scenarios:
       # source_fuel_ids omitted => every burnable pixel inside the mask is converted.
       replacement_fuel_id: 13
       fire_polygons:
-        path: "/network/projects/amlrt_internships/nrcan_05_wildfires/bp3+_rerun/hex16_baseline.ssim.data/Scenario-2/burnP3Plus_OutputFirePerimeter/burn-perimeters.gpkg"
-        layer: "daily_burn_perimeters"
-        # Perimeters are daily and cumulative, so a fire's final footprint is its
-        # last BurnDay. Reprojection onto the model grid is automatic.
-        final_perimeter_only: true
+        path: "/network/projects/amlrt_internships/nrcan_05_wildfires/bp3+_500iter/burn-perimeters.gpkg"
+        layer: "final_burn_perimeters"
+        # This layer was already reduced to one final footprint per fire.
+        final_perimeter_only: false
         buffer_m: 0

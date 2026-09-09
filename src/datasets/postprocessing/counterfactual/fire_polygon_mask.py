@@ -69,7 +69,9 @@ def load_final_fire_perimeters(
     """Read fire perimeters, reducing each fire to its final (max `BurnDay`) footprint.
 
     BurnP3+ perimeters are cumulative, so the last day already contains every
-    earlier day; taking the max is a reduction, not an approximation.
+    earlier day; taking the max is a reduction, not an approximation. Set
+    ``final_perimeter_only=False`` when reading an already-reduced layer such as
+    ``final_burn_perimeters``, which need not contain a burn-day column.
     """
     path = Path(path)
     if not path.exists():
@@ -80,7 +82,10 @@ def load_final_fire_perimeters(
         raise ValueError(f"{path} layer {layer!r} contains no features.")
     if frame.crs is None:
         raise ValueError(f"{path} layer {layer!r} has no CRS; cannot reproject onto the model grid.")
-    _require_columns(frame, [iteration_col, fire_id_col, burn_day_col], source=path)
+    required_columns = [iteration_col, fire_id_col]
+    if final_perimeter_only:
+        required_columns.append(burn_day_col)
+    _require_columns(frame, required_columns, source=path)
 
     if final_perimeter_only:
         final_index = frame.groupby([iteration_col, fire_id_col])[burn_day_col].idxmax()
