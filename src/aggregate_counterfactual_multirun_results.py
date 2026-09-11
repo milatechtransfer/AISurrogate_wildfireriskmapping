@@ -41,6 +41,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 ENDPOINTS = ("bp", "fi", "ros")
 RASTER_NODATA = -9999.0
+EXTENT_ABSOLUTE_TOLERANCE_M = 1e-6
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,13 @@ def ensemble_mean_std(arrays: list[np.ma.MaskedArray]) -> tuple[np.ma.MaskedArra
         )
     )
     return np.ma.masked_invalid(means), np.ma.masked_invalid(stds)
+
+
+def extents_match(
+    first: tuple[float, float, float, float],
+    second: tuple[float, float, float, float],
+) -> bool:
+    return bool(np.allclose(first, second, rtol=0.0, atol=EXTENT_ABSOLUTE_TOLERANCE_M))
 
 
 def summarize_response_rows(rows: pd.DataFrame) -> pd.DataFrame:
@@ -290,7 +298,7 @@ def aggregate_counterfactual_runs(
                     endpoint=endpoint,
                     hex_id=hex_id,
                 )
-                if reference_extent is not None and extent != reference_extent:
+                if reference_extent is not None and not extents_match(extent, reference_extent):
                     raise ValueError(f"Seed {run.seed} {endpoint.upper()} extent differs for hex_id={hex_id}.")
                 reference_extent = extent
                 reference_profile = profile
@@ -304,7 +312,7 @@ def aggregate_counterfactual_runs(
             _write_raster(raster_dir / f"{scenario}_{endpoint}_delta_mean.tif", mean_delta, reference_profile)
             _write_raster(raster_dir / f"{scenario}_{endpoint}_delta_std.tif", std_delta, reference_profile)
 
-            if hex_id in plot_extents and plot_extents[hex_id] != reference_extent:
+            if hex_id in plot_extents and not extents_match(plot_extents[hex_id], reference_extent):
                 raise ValueError(f"{endpoint.upper()} prediction extent differs from the other endpoints for hex_id={hex_id}.")
             plot_means[(hex_id, endpoint)] = mean_delta
             plot_stds[(hex_id, endpoint)] = std_delta

@@ -12,6 +12,7 @@ from rasterio.transform import from_origin
 from src.aggregate_counterfactual_multirun_results import (
     aggregate_counterfactual_runs,
     ensemble_mean_std,
+    extents_match,
     summarize_response_rows,
 )
 
@@ -35,6 +36,14 @@ def test_ensemble_mean_std_masks_std_with_only_one_seed_value() -> None:
 
     np.testing.assert_allclose(mean.filled(np.nan), np.array([[1.0, 2.0]]))
     assert std.mask.tolist() == [[True, True]]
+
+
+def test_extents_match_ignores_submicron_raster_metadata_drift() -> None:
+    first = (1545886.05749042, 1231516.6157504604, 1985792.2120705012, 1619527.6694258542)
+    second = (1545886.0574904198, 1231516.6157504607, 1985792.2120705007, 1619527.6694258542)
+
+    assert extents_match(first, second)
+    assert not extents_match(first, (first[0], first[1], first[2] + 0.01, first[3]))
 
 
 def test_summarize_response_rows_reports_across_seed_std() -> None:
