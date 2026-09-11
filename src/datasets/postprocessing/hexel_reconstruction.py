@@ -58,7 +58,7 @@ def reconstruct_denormalized_hexels(
     config: Config,
     out_norm: str,
     stitch_mode: str = "mean",
-    mask_scope: str | None = "actual",
+    mask_scope: str | None = None,
     split_csv: str | None = None,
     test_metadata: pd.DataFrame | None = None,
 ) -> Iterator[StitchedHexel]:
