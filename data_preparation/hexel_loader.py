@@ -35,7 +35,7 @@ def generate_feature_channel_map(feature_list: list[np.ndarray], feature_channel
         json.dump(feature_channel_map, f, indent=4)
 
 
-def crop_window_path(feature_channel_map_path: str) -> str:
+def crop_window_path(feature_channel_map_path: str, hex_id: str) -> str:
     """Path to the per-hex unmasked crop-window registry.
 
     Unmasked data is cropped to the shared valid-data bounding box before patch
@@ -43,33 +43,30 @@ def crop_window_path(feature_channel_map_path: str) -> str:
     Masked data already uses the mask-clipped reference frame and does not need
     this additional metadata.
     """
-    return os.path.join(os.path.dirname(feature_channel_map_path), "crop_windows.json")
+    return os.path.join(os.path.dirname(feature_channel_map_path), f"crop_windows_hex_{hex_id}.json")
 
 
 def save_crop_window(feature_channel_map_path: str, hex_id: str, mask_scope: str | None, window: tuple[int, int, int, int]):
-    """Persist the (row_off, col_off, height, width) crop window used for one hex/scope."""
-    path = crop_window_path(feature_channel_map_path)
-    registry: dict[str, dict[str, list[int]]] = {}
-    if os.path.exists(path):
-        with open(path) as f:
-            registry = json.load(f)
-    scope_key = mask_scope or "none"
-    registry.setdefault(str(hex_id), {})[scope_key] = list(window)
+    """Persist the (row_off, col_off, height, width) crop window used for one hex.
+
+    Only unmasked data (mask_scope=None) needs this metadata; see crop_window_path.
+    """
+    assert mask_scope is None, "Crop windows are only persisted for unmasked data (mask_scope=None)."
+    path = crop_window_path(feature_channel_map_path, hex_id)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
-        json.dump(registry, f, indent=4)
+        json.dump(list(window), f, indent=4)
 
 
 def load_crop_window(feature_channel_map_path: str, hex_id: str, mask_scope: str | None) -> tuple[int, int, int, int] | None:
-    """Load the persisted (row_off, col_off, height, width) crop window for one hex/scope, if present."""
-    path = crop_window_path(feature_channel_map_path)
+    """Load the persisted (row_off, col_off, height, width) crop window for one hex, if present."""
+    assert mask_scope is None, "Crop windows are only persisted for unmasked data (mask_scope=None)."
+    path = crop_window_path(feature_channel_map_path, hex_id)
     if not os.path.exists(path):
         return None
     with open(path) as f:
-        registry = json.load(f)
-    scope_key = mask_scope or "none"
-    window = registry.get(str(hex_id), {}).get(scope_key)
-    return tuple(window) if window is not None else None  # type: ignore[return-value]
+        window = json.load(f)
+    return tuple(window)
 
 
 def load_spatial_features_per_hexel(
@@ -171,6 +168,11 @@ def load_spatial_features_per_hexel(
             # Without a polygon mask, trim the shared empty nodata border once
             # for all layers and persist the resulting coordinate frame.
             crop_window = get_data_window(np.ma.masked_array(np.zeros(input_mask.shape, dtype=np.uint8), mask=input_mask))
+            if crop_window.height == 0 or crop_window.width == 0:
+                raise ValueError(
+                    f"No valid (unmasked) input pixels for hex {hex_id}: get_data_window() returned an "
+                    f"empty window {crop_window}. Check grid alignment or nodata coverage before proceeding."
+                )
             row_start, row_end = int(crop_window.row_off), int(crop_window.row_off) + int(crop_window.height)
             col_start, col_end = int(crop_window.col_off), int(crop_window.col_off) + int(crop_window.width)
             save_crop_window(

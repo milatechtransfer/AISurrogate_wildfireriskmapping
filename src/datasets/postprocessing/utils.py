@@ -344,7 +344,8 @@ def get_predicted_hexel(
         crop_window = load_crop_window(feature_channel_map_path, hex_id=hex_id, mask_scope=None)
         if crop_window is None:
             raise ValueError(
-                f"Unmasked patch data for hex {hex_id} requires crop-window metadata at {os.path.join(base_dir, 'crop_windows.json')}."
+                f"Unmasked patch data for hex {hex_id} requires crop-window metadata at "
+                f"{os.path.join(base_dir, f'crop_windows_hex_{hex_id}.json')}."
             )
         row_off, col_off, height, width = crop_window
         gt_elevation_grid = gt_elevation_grid[row_off : row_off + height, col_off : col_off + width]
