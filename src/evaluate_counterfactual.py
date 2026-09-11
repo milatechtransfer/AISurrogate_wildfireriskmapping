@@ -11,6 +11,7 @@ from typing import Any
 
 import pandas as pd
 
+from src.config import SEEDS
 from src.datasets.fuel_utils import normalize_hex_id
 from src.datasets.postprocessing.counterfactual.counterfactual_base import (
     EndpointConfig,
@@ -107,9 +108,7 @@ def _spatialized_fire_size_params(base_config):
         raise ValueError(f"Expected exactly one {SPATIALIZED_FIRE_SIZE_SOURCE_NAME!r} input source; found {len(matches)}.")
     params = matches[0]
     if len(params.feature_names_list) != 1 or params.quantiles is None:
-        raise ValueError(
-            f"{SPATIALIZED_FIRE_SIZE_SOURCE_NAME!r} must configure one feature with quantiles " "for a fire-size counterfactual."
-        )
+        raise ValueError(f"{SPATIALIZED_FIRE_SIZE_SOURCE_NAME!r} must configure one feature with quantiles for a fire-size counterfactual.")
     return params
 
 
@@ -178,12 +177,28 @@ def _write_optional_frame(frame: pd.DataFrame | None, path: Path) -> None:
     frame.to_csv(path, index=False)
 
 
+def _seed_for_run_id(run_id: int | None) -> int | None:
+    if run_id is None:
+        return None
+    if not 0 <= run_id < len(SEEDS):
+        raise ValueError(f"run_id must be between 0 and {len(SEEDS) - 1}, but received {run_id}")
+    return SEEDS[run_id]
+
+
+def _add_run_metadata(frame: pd.DataFrame, *, run_id: int | None, seed: int) -> pd.DataFrame:
+    result = frame.copy()
+    result.insert(0, "seed", seed)
+    result.insert(0, "run_id", run_id if run_id is not None else "")
+    return result
+
+
 def run_counterfactual_evaluation(
     config_path: Path,
     *,
     endpoint_names: set[str] | None = None,
     scenario_names: set[str] | None = None,
     overwrite: bool = False,
+    run_id: int | None = None,
     project_root: Path | None = None,
 ) -> pd.DataFrame:
     """Evaluate each selected endpoint under each selected scenario for the configured hexels.
@@ -208,6 +223,9 @@ def run_counterfactual_evaluation(
     project_root = (project_root or Path.cwd()).resolve()
     config = load_counterfactual_config(config_path)
     save_dir, raw_data_dir = resolve_counterfactual_paths(config, project_root=project_root)
+    run_seed = _seed_for_run_id(run_id)
+    if run_seed is not None:
+        save_dir = save_dir / f"seed_{run_seed}"
     hex_ids = set(config.hex_ids)
     endpoints = _select_endpoints(config.endpoints, endpoint_names)
     scenarios = _select_scenarios(config.scenarios, scenario_names)
@@ -232,6 +250,10 @@ def run_counterfactual_evaluation(
         endpoint_config_path = resolve_project_path(endpoint.config_path, project_root)
         base_config = load_config(str(endpoint_config_path))
         source_save_dir = resolve_project_path(endpoint.checkpoint_dir or base_config.save_dir, project_root)
+        if run_seed is not None:
+            source_save_dir = source_save_dir / f"seed_{run_seed}"
+            base_config.seed = run_seed
+        seed = int(getattr(base_config, "seed", 42))
         data_root = resolve_project_path(endpoint.baseline_data_root or base_config.data.root_dir, project_root)
         metadata = pd.read_csv(data_root / base_config.data.test_split)
         if "valid_ratio" in metadata.columns:
@@ -246,31 +268,40 @@ def run_counterfactual_evaluation(
             if cached is not None:
                 index_rows.append(
                     {
+                        "run_id": run_id if run_id is not None else "",
+                        "seed": seed,
                         "scenario": scenario.name,
                         "endpoint": endpoint.name,
                         "prediction_dir": str(cached["prediction_dir"].resolve()),
                     }
                 )
                 metric_rows.extend(
-                    {"scenario": scenario.name, "endpoint": endpoint.name, "metric": metric, "value": value}
+                    {
+                        "run_id": run_id if run_id is not None else "",
+                        "seed": seed,
+                        "scenario": scenario.name,
+                        "endpoint": endpoint.name,
+                        "metric": metric,
+                        "value": value,
+                    }
                     for metric, value in cached["metrics"].items()
                 )
                 if cached["fuel_summary"] is not None:
                     summary = cached["fuel_summary"].copy()
                     summary["endpoint"] = endpoint.name
-                    summary_frames.append(summary)
+                    summary_frames.append(_add_run_metadata(summary, run_id=run_id, seed=seed))
                 if cached["fuel_components"] is not None:
                     components = cached["fuel_components"].copy()
                     components["endpoint"] = endpoint.name
-                    component_frames.append(components)
+                    component_frames.append(_add_run_metadata(components, run_id=run_id, seed=seed))
                 if cached["weather_summary"] is not None:
                     summary = cached["weather_summary"].copy()
                     summary["endpoint"] = endpoint.name
-                    weather_summary_frames.append(summary)
+                    weather_summary_frames.append(_add_run_metadata(summary, run_id=run_id, seed=seed))
                 if cached["fire_size_summary"] is not None:
                     summary = cached["fire_size_summary"].copy()
                     summary["endpoint"] = endpoint.name
-                    fire_size_summary_frames.append(summary)
+                    fire_size_summary_frames.append(_add_run_metadata(summary, run_id=run_id, seed=seed))
                 continue
 
             prediction_dir = save_dir / "predictions" / scenario.name / endpoint.name
@@ -307,12 +338,12 @@ def run_counterfactual_evaluation(
                 fuel_summary = patch_transform.summary.copy()
                 summary = fuel_summary.copy()
                 summary.insert(0, "endpoint", endpoint.name)
-                summary_frames.append(summary)
+                summary_frames.append(_add_run_metadata(summary, run_id=run_id, seed=seed))
                 if not patch_transform.components.empty:
                     fuel_components = patch_transform.components.copy()
                     components = fuel_components.copy()
                     components.insert(0, "endpoint", endpoint.name)
-                    component_frames.append(components)
+                    component_frames.append(_add_run_metadata(components, run_id=run_id, seed=seed))
             elif scenario.kind == "weather":
                 baseline_weather_csv = data_root / _spatialized_weather_csv_name(base_config)
                 weather_result = materialize_weather_scenario(
@@ -330,7 +361,7 @@ def run_counterfactual_evaluation(
                 weather_summary = weather_result.summary.copy()
                 summary = weather_summary.copy()
                 summary.insert(0, "endpoint", endpoint.name)
-                weather_summary_frames.append(summary)
+                weather_summary_frames.append(_add_run_metadata(summary, run_id=run_id, seed=seed))
             elif scenario.kind == "fire_size":
                 fire_size_params = _spatialized_fire_size_params(base_config)
                 baseline_fire_size_csv = data_root / str(fire_size_params.csv_name)
@@ -348,7 +379,7 @@ def run_counterfactual_evaluation(
                 fire_size_summary = fire_size_result.summary.copy()
                 summary = fire_size_summary.copy()
                 summary.insert(0, "endpoint", endpoint.name)
-                fire_size_summary_frames.append(summary)
+                fire_size_summary_frames.append(_add_run_metadata(summary, run_id=run_id, seed=seed))
 
             metrics = evaluate_hexels(
                 args=_evaluation_args(),
@@ -358,6 +389,8 @@ def run_counterfactual_evaluation(
             )
             metric_rows.extend(
                 {
+                    "run_id": run_id if run_id is not None else "",
+                    "seed": seed,
                     "scenario": scenario.name,
                     "endpoint": endpoint.name,
                     "metric": metric,
@@ -367,6 +400,8 @@ def run_counterfactual_evaluation(
             )
             index_rows.append(
                 {
+                    "run_id": run_id if run_id is not None else "",
+                    "seed": seed,
                     "scenario": scenario.name,
                     "endpoint": endpoint.name,
                     "prediction_dir": str(prediction_dir.resolve()),
@@ -414,6 +449,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--endpoint", action="append", dest="endpoints")
     parser.add_argument("--scenario", action="append", dest="scenarios")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--run_id",
+        type=int,
+        default=None,
+        help="Run index selecting the matching seed checkpoint and seed-specific output directory.",
+    )
     return parser.parse_args()
 
 
@@ -424,6 +465,7 @@ def main() -> None:
         endpoint_names=_parse_name_set(args.endpoints),
         scenario_names=_parse_name_set(args.scenarios),
         overwrite=args.overwrite,
+        run_id=args.run_id,
     )
     print(f"Completed {len(index)} counterfactual evaluations.")
 

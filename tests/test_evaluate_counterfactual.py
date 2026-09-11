@@ -471,3 +471,70 @@ def test_run_counterfactual_evaluation_reads_checkpoint_from_endpoint_checkpoint
 
     copied = save_dir / "predictions" / "baseline" / "bp" / "best.pt"
     assert copied.read_bytes() == b"shared-checkpoint"
+
+
+def test_run_counterfactual_evaluation_uses_seeded_checkpoint_and_output_dirs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path
+    data_root = project_root / "data"
+    training_dir = project_root / "trained"
+    shared_checkpoint_dir = project_root / "shared_checkpoints"
+    seeded_checkpoint_dir = shared_checkpoint_dir / "seed_1337"
+    save_dir = project_root / "counterfactual"
+    data_root.mkdir()
+    training_dir.mkdir()
+    seeded_checkpoint_dir.mkdir(parents=True)
+    (seeded_checkpoint_dir / "best.pt").write_bytes(b"seeded-checkpoint")
+    pd.DataFrame([{"hex_id": "16", "filename": "patch.npy", "valid_ratio": 1.0}]).to_csv(data_root / "test.csv", index=False)
+    config_path = project_root / "counterfactual.yaml"
+    with config_path.open("w") as handle:
+        yaml.safe_dump(
+            {
+                "raw_data_dir": "raw",
+                "save_dir": "counterfactual",
+                "hex_ids": ["16"],
+                "endpoints": {"bp": {"config_path": "bp.yaml", "checkpoint_dir": str(shared_checkpoint_dir)}},
+                "scenarios": [{"name": "baseline", "kind": "baseline"}],
+            },
+            handle,
+        )
+
+    run_config = _EndpointRunConfig(save_dir=str(training_dir), data=_DataConfig(root_dir=str(data_root), input_sources=[]))
+    evaluation_calls: list[dict] = []
+
+    def _fake_evaluate_hexels(**kwargs):
+        evaluation_calls.append(kwargs)
+        return {"mae": 1.5}
+
+    monkeypatch.setattr("src.evaluate_counterfactual.load_config", lambda _: run_config)
+    monkeypatch.setattr("src.evaluate_counterfactual.evaluate_hexels", _fake_evaluate_hexels)
+
+    index = run_counterfactual_evaluation(config_path, overwrite=False, run_id=1, project_root=project_root)
+
+    seeded_save_dir = save_dir / "seed_1337"
+    copied = seeded_save_dir / "predictions" / "baseline" / "bp" / "best.pt"
+    assert copied.read_bytes() == b"seeded-checkpoint"
+    assert evaluation_calls[0]["config"].seed == 1337
+    assert index[["run_id", "seed"]].to_dict("records") == [{"run_id": 1, "seed": 1337}]
+    metrics = pd.read_csv(seeded_save_dir / "counterfactual_metrics.csv")
+    assert metrics[["run_id", "seed"]].to_dict("records") == [{"run_id": 1, "seed": 1337}]
+
+
+def test_run_counterfactual_evaluation_rejects_unknown_run_id(tmp_path: Path) -> None:
+    config_path = tmp_path / "counterfactual.yaml"
+    with config_path.open("w") as handle:
+        yaml.safe_dump(
+            {
+                "raw_data_dir": "raw",
+                "save_dir": "counterfactual",
+                "hex_ids": ["16"],
+                "endpoints": {"bp": {"config_path": "bp.yaml"}},
+                "scenarios": [{"name": "baseline", "kind": "baseline"}],
+            },
+            handle,
+        )
+
+    with pytest.raises(ValueError, match="run_id must be between 0 and 2"):
+        run_counterfactual_evaluation(config_path, run_id=3, project_root=tmp_path)
