@@ -1,9 +1,76 @@
 import numpy as np
 import pytest
 
-from src.config import ModelConfig
+from src.config import (
+    Config,
+    DataConfig,
+    DataSourceConfig,
+    EvaluationConfig,
+    GridParams,
+    LoggerConfig,
+    ModelConfig,
+    OptimizerConfig,
+    TargetConfig,
+    TargetLossConfig,
+    TrainingConfig,
+)
 from src.mean_baseline import MeanBaselineRegressor
-from src.train_tabular_baseline import build_baseline_model, denormalize_target, evaluate_region_level
+from src.train_tabular_baseline import build_baseline_model, denormalize_target, evaluate_region_level, get_target_transform_params
+
+
+# ---------- get_target_transform_params ----------
+def test_get_target_transform_params_uses_per_target_config_for_multi_output(tmp_path, monkeypatch):
+    """A multi-output GridParams.targets entry must win over the legacy global
+    out_norm/target_log_mean/target_log_std fields for the requested target."""
+    (tmp_path / "train_indices.csv").write_text("hex_id\n1\n")
+
+    monkeypatch.setattr(
+        "src.train_tabular_baseline.get_output_log_stats_cached",
+        lambda *args, **kwargs: (2.0, 0.5),
+    )
+
+    config = Config(
+        save_dir=str(tmp_path / "out"),
+        modelling_approach="1",
+        model=ModelConfig(num_classes=2, input_branches=["spatial"], hidden_features=[8, 16]),
+        optimizer=OptimizerConfig(
+            name="Adam",
+            lr=0.001,
+            target_losses={
+                "bp": TargetLossConfig(loss="mse", task_weight=0.5),
+                "fi": TargetLossConfig(loss="mse", task_weight=0.5),
+            },
+        ),
+        training=TrainingConfig(max_epochs=1, log_every_n_epoch=1),
+        evaluation=EvaluationConfig(best_ckpt_metrics=["loss"], best_ckpt_metrics_mode=["min"]),
+        logger=LoggerConfig(enabled=False, project_name="test", workspace="test", experiment_name="test"),
+        data=DataConfig(
+            root_dir=str(tmp_path),
+            raw_data_dir=str(tmp_path),
+            train_split="train_indices.csv",
+            val_split="val_indices.csv",
+            test_split="test_indices.csv",
+            input_sources=[
+                DataSourceConfig(
+                    name="grid",
+                    params=GridParams(
+                        feature_names_list=["ignition_grid"],
+                        targets=[
+                            TargetConfig(name="bp", out_norm="min_max"),
+                            TargetConfig(name="fi", out_norm="log_standard"),
+                        ],
+                    ),
+                )
+            ],
+        ),
+        metrics=["mae"],
+    )
+
+    out_norm, _, _, target_log_mean, target_log_std = get_target_transform_params(config, "fi")
+
+    assert out_norm == "log_standard"
+    assert target_log_mean == 2.0
+    assert target_log_std == 0.5
 
 
 # ---------- MeanBaselineRegressor ----------

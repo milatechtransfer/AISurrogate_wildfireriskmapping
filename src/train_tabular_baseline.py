@@ -36,7 +36,7 @@ from tqdm import tqdm
 from xgboost import XGBRegressor
 
 from data_preparation.paths import Paths
-from data_preparation.spatial.utils import get_output_log_stats_cached, get_range_output, read_split_hex_ids
+from data_preparation.spatial.utils import get_output_log_stats_cached, get_range_output_cached, read_split_hex_ids
 from src.config import Config, apply_run_id_overrides
 from src.datasets.dataset import get_test_dataloader, get_train_val_dataloader
 from src.datasets.postprocessing.stitch_hexel import stitch_windows
@@ -115,19 +115,22 @@ def get_target_transform_params(config: Config, target_name: str):
     """
     target_spec = get_target_specs(target_name)[0]
     grid_params = get_grid_source_params(config)
-    out_norm = grid_params.out_norm
+    target_config = grid_params.target_config(target_name)
+    out_norm = target_config.out_norm
     train_hex_ids = read_split_hex_ids(os.path.join(config.data.root_dir, config.data.train_split))
 
     target_min, target_max = 0.0, 1.0
-    target_log_mean = getattr(grid_params, "target_log_mean", None)
-    target_log_std = getattr(grid_params, "target_log_std", None)
+    target_log_mean = target_config.log_mean
+    target_log_std = target_config.log_std
 
     if out_norm == "min_max":
-        target_max, target_min = get_range_output(
-            root_dir=config.data.raw_data_dir,
+        target_max, target_min = get_range_output_cached(
+            root_dir=config.data.root_dir,
             output_type=target_spec.output_type,
             allowed_hex_ids=train_hex_ids,
+            raw_data_dir=config.data.raw_data_dir,
             scenario_name=config.data_prep.scenario_name,
+            norm_stats_filename=config.data.norm_stats_filename,
         )
         target_max, target_min = apply_bp_nodata_zero_range(
             target_name=target_spec.name,
@@ -438,7 +441,7 @@ def evaluate_region_level(
         paths = Paths(hex_id=hid, root_dir=config.data.raw_data_dir)
 
         gt_grid_raw, profile = load_spatial_raster(
-            path=getattr(paths, target_spec.path_method)(),
+            path=getattr(paths, target_spec.path_method)(scenario_name=config.data_prep.scenario_name),
             mask_path=paths.mask_grid(hex_id=hid, mask_scope="actual"),
         )
         pred_grid = stitch_windows(data["preds"], data["locations"], data["masks"], gt_grid_raw.shape, mode="mean")
@@ -451,6 +454,7 @@ def evaluate_region_level(
             mask_scope="actual",
             hex_id=hid,
             bp_nodata_as_zero=config.evaluation.bp_nodata_as_zero,
+            scenario_name=config.data_prep.scenario_name,
         )
 
         per_hexel_metrics[hid] = calculate_hexel_metrics_pytorch(
