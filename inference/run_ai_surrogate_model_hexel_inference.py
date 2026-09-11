@@ -71,6 +71,7 @@ def prepare_hexel_data(
     mask_scope: str = "actual",
     weather_norm_params_path: Path | None = None,
     fire_size_norm_params_path: Path | None = None,
+    scenario_name: str | None = None,
 ) -> Path:
     """
     Prepare data patches for a single hexel.
@@ -93,6 +94,8 @@ def prepare_hexel_data(
         fire_size_norm_params_path: Path to a JSON file with fire size normalization parameters.
             Same semantics as ``weather_norm_params_path``. Defaults to
             ``fire_size_norm_params.json`` inside the processed data directory.
+        scenario_name: Scenario suffix (e.g. NWT-specific) selecting which fuel/target rasters to
+            load. ``None`` (default) loads the national rasters.
 
     Returns:
         Path to the output directory containing patches and metadata CSV.
@@ -135,6 +138,7 @@ def prepare_hexel_data(
         feature_channel_map_path=str(feature_channel_map_path),
         modelling_approach=modelling_approach,
         mask_scope=scope,
+        scenario_name=scenario_name,
     )
 
     if stacked_feats is None or mask is None:
@@ -188,6 +192,7 @@ def create_dataset(processed_data_dir: Path, hex_id: str, config_dict: dict) -> 
                 root_dir=config_dict.get("root_dir", processed_data_dir),
                 raw_data_dir=config_dict.get("raw_data_dir"),
                 train_split_csv_name=config_dict.get("train_split"),
+                norm_stats_filename=config_dict.get("norm_stats_filename", NORM_STATS_JSON),
             )
         sources[source_name] = source_class(**source_kwargs)
 
@@ -246,6 +251,7 @@ def resolve_target_normalization(
     target_params: dict[str, Any],
     *,
     bp_nodata_as_zero: bool,
+    scenario_name: str | None = None,
 ) -> TargetNormalization:
     root_dir = str(data_config["root_dir"])
     raw_data_dir = str(data_config.get("raw_data_dir") or root_dir)
@@ -268,6 +274,7 @@ def resolve_target_normalization(
             output_type=target.output_type,
             allowed_hex_ids=train_hex_ids,
             raw_data_dir=raw_data_dir,
+            scenario_name=scenario_name,
             norm_stats_filename=norm_stats_filename,
         )
         max_value, min_value = apply_bp_nodata_zero_range(
@@ -282,6 +289,7 @@ def resolve_target_normalization(
             output_type=target.output_type,
             allowed_hex_ids=train_hex_ids,
             raw_data_dir=raw_data_dir,
+            scenario_name=scenario_name,
             norm_stats_filename=norm_stats_filename,
         )
     return TargetNormalization(
@@ -352,6 +360,7 @@ def run_single_hexel_pipeline(
             mask_scope=data_scope,
             weather_norm_params_path=weather_norm_params_path,
             fire_size_norm_params_path=fire_size_norm_params_path,
+            scenario_name=data_prep_config.get("scenario_name"),
         )
     else:
         suffix = "" if data_scope == "actual" else f"_{data_scope}"
@@ -424,6 +433,7 @@ def run_single_hexel_pipeline(
             target,
             target_params,
             bp_nodata_as_zero=bp_nodata_as_zero,
+            scenario_name=data_prep_config.get("scenario_name"),
         )
 
         target_channel_index = get_target_channel_index(
@@ -454,7 +464,7 @@ def run_single_hexel_pipeline(
             mask_scope=scope,
             hex_id=hex_id,
             bp_nodata_as_zero=bp_nodata_as_zero,
-            scenario_name=data_config.get("scenario_name"),
+            scenario_name=data_prep_config.get("scenario_name"),
         )
         artifact_target_name = target.name if multi_target else None
         save_predicted_hexels(
