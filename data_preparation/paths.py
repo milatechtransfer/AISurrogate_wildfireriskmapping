@@ -57,7 +57,9 @@ class Paths:
     def firezones_grid(self, hex_id: int | str) -> Path:
         return self.spatial_dir / f"hex{hex_id}_firezones.tif"
 
-    def fuel_grid(self, hex_id: int | str) -> Path:
+    def fuel_grid(self, hex_id: int | str, scenario_name: str | None = None) -> Path:
+        if scenario_name is not None:
+            return self.spatial_dir / f"hex{hex_id}_fbp_{scenario_name}.tif"
         return self.spatial_dir / f"hex{hex_id}_fbp.tif"
 
     def elevation_grid(self, hex_id: int | str) -> Path:
@@ -80,11 +82,20 @@ class Paths:
     def firezones_table(self, hex_id: int | str) -> Path:
         return self.tabular_dir / f"hex{hex_id}_FireZones.csv"
 
-    def output_burn_prob(self) -> Path:
+    def output_burn_prob(self, scenario_name: str | None = None) -> Path:
+        if scenario_name is not None:
+            return self.base_dir / "results" / scenario_name / f"burnP3Plus_OutputBurnProbability_{scenario_name}_All.tif"
+        # national study data
         return self.base_dir / "results" / "burnP3Plus_OutputBurnProbability" / "burnProbability-sn2.tif"
 
-    def output_fire_intensity(self) -> Path:
+    def output_fire_intensity(self, scenario_name: str | None = None) -> Path:
+        if scenario_name is not None:
+            return self.base_dir / "results" / scenario_name / f"burnP3Plus_OutputFireIntensitySummaryMap_{scenario_name}_Average.tif"
+        # national study data
         return self.base_dir / "results" / "burnP3Plus_OutputFireIntensitySummaryMap" / "fbpSummary-FireIntensity-Average.tif"
 
-    def output_ros(self) -> Path:
+    def output_ros(self, scenario_name: str | None = None) -> Path:
+        if scenario_name is not None:
+            return self.base_dir / "results" / scenario_name / f"burnP3Plus_OutputRateOfSpreadSummaryMap_{scenario_name}_Average.tif"
+        # national study data
         return self.base_dir / "results" / "burnP3Plus_OutputRateOfSpreadSummaryMap" / "fbpSummary-RateOfSpread-Average.tif"

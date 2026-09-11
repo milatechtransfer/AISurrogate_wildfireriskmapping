@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from data_preparation.spatial.utils import NORM_STATS_JSON
+from src.datasets.fuel_utils import DEFAULT_FUEL_CURVES_CSV
 from src.datasets.postprocessing.hazard import (
     DEFAULT_FI_CAP,
     DEFAULT_HAZARD_BIN_THRESHOLDS,
@@ -92,6 +94,14 @@ class SchedulerConfig(BaseModel):
 class TrainingConfig(BaseModel):
     max_epochs: int = 50
     log_every_n_epoch: int = 1
+    # Path to a checkpoint (e.g. a previous run's best.pth) to warm-start model weights.
+    # The same directory shouldn't have a last.pth, otherwise, it will resume from there (needed for job rqueue)
+    warm_start_checkpoint: str | None = None
+    # Names of top-level model submodules (e.g. "encoder", "bottleneck") to freeze:
+    # their parameters are excluded from the optimizer and kept in eval() mode
+    # (so BatchNorm running stats/dropout don't drift) for the whole run. Useful when
+    # fine-tuning only the decoder/output heads on a small dataset.
+    freeze_modules: list[str] = []
 
 
 class EvaluationConfig(BaseModel):
@@ -102,6 +112,15 @@ class EvaluationConfig(BaseModel):
     bp_nodata_as_zero: bool = True
     prediction_support_policy: str = "input"
     hazard_fi_cap: float | None = Field(default=DEFAULT_FI_CAP, gt=0.0)
+    # Optional: When True, additionally break down hexel-level metrics by firezone ID
+    # (read from data_preparation.paths.Paths.firezones_grid), restricted to
+    # `firezone_metric_names`, and report them as e.g. "all/firezone3_bp_ccc".
+    report_firezone_metrics: bool = False
+    firezone_metric_names: list[str] = ["ccc", "spearman", "auc_iou_top10"]
+    # Optional: whether src.evaluate_hexels should log metrics/params to Comet.
+    # None (default) inherits logger.enabled as-is. Set explicitly to True/False to
+    # diverge eval's Comet behavior from training's for the same config file.
+    report_to_comet: bool | None = None
 
 
 class TargetConfig(BaseModel):
@@ -133,6 +152,10 @@ class GridParams(BaseModel):
     target_log_std: float | None = None
     fuel_feats_encoding: str = "one_hot"
     normalize_fuel_feats_ordinal: bool = True
+    # Filename (relative to root_dir) of the fuel curve CSV produced by
+    # compute_vector_values_national.R, used when fuel_feats_encoding is a
+    # curve-based encoding (e.g. "iROS", "HFI").
+    fuel_curves_filename: str = DEFAULT_FUEL_CURVES_CSV
     transforms_list: list[str] = Field(default_factory=list)
     augmentation_prob: float = 0.0
     terrain_derivatives: list[str] = Field(default_factory=list)
@@ -210,6 +233,9 @@ class TabularParams(BaseModel):
     # rows belonging to its own hexel — never pooled across hexels that share a fire-weather zone but
     # live in different train/val/test splits. Requires ``patch_info["hex_id"]`` to be present.
     hex_id_col: str | None = None
+    # Optional remap applied to zone ids read from the patch's zone channel before LUT lookup, e.g.
+    # {45: 26} to treat fru45 pixels as fru26. Empty dict (default) means no remapping is performed.
+    zone_id_remap: dict[int, int] = Field(default_factory=dict)
 
 
 class SpatializedTabularParams(TabularParams):
@@ -283,6 +309,9 @@ class DataConfig(BaseModel):
     filename_col: str = "filename"
     valid_mask_threshold: float = 0.01
     include_patch_metadata: bool = False
+    # Filename (relative to root_dir) of the cached normalization-stats JSON produced by
+    # data_preparation.compute_dataset_normalization_stats / write_dataset_norm_stats.
+    norm_stats_filename: str = NORM_STATS_JSON
 
     input_sources: list[DataSourceConfig]
 
@@ -292,6 +321,17 @@ class DataPrepConfig(BaseModel):
     win_h: int = 256
     win_w: int = 256
     overlap_ratio: float = 0.2
+    ignition_weighting: str = "distribution"  # ("max", "distribution")
+    fuel_representation: str = "raw"  # ("raw", "group")
+    scenario_name: str | None = None
+    mask_scope: str | None = None
+
+    @field_validator("mask_scope", mode="before")
+    @classmethod
+    def normalize_mask_scope(cls, v: object) -> object:
+        if isinstance(v, str) and v.lower() == "none":
+            return None
+        return v
 
 
 class Config(BaseModel):
@@ -396,7 +436,7 @@ class HazardEvalConfig(BaseModel):
     raw_data_dir: str
     test_split: str = "test_indices.csv"
     valid_mask_threshold: float = 0.01
-    mask_scope: Literal["actual", "buffer", "buffer_only"] = "actual"
+    mask_scope: str | None = None
     stitch_mode: Literal["mean", "max"] = "mean"
 
     model: HazardModelEntry
@@ -410,6 +450,13 @@ class HazardEvalConfig(BaseModel):
     self_normalized_prediction: bool = False
 
     save_hazard_map: bool = True
+
+    @field_validator("mask_scope", mode="before")
+    @classmethod
+    def _normalize_mask_scope(cls, v: object) -> object:
+        if isinstance(v, str) and v.lower() == "none":
+            return None
+        return v
 
     @field_validator("bin_thresholds")
     @classmethod

@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from rasterio.profiles import Profile
 
-from data_preparation.paths import Paths, normalize_mask_scope
+from data_preparation.paths import Paths
 from src.config import Config
 from src.datasets.postprocessing import utils as post_utils
 from src.datasets.targets import TargetSpec
@@ -33,7 +33,7 @@ class StitchedHexel:
     buffer_support_mask: np.ndarray | None = None
 
 
-def load_filtered_test_metadata(config: Config, mask_scope: str, split_csv: str | None = None) -> pd.DataFrame:
+def load_filtered_test_metadata(config: Config, mask_scope: str | None, split_csv: str | None = None) -> pd.DataFrame:
     """Load and filter split patch metadata used to stitch hexels.
 
     ``split_csv`` defaults to ``config.data.test_split`` but can be set to
@@ -47,7 +47,8 @@ def load_filtered_test_metadata(config: Config, mask_scope: str, split_csv: str 
         raise ValueError(f"Split metadata file does not exist: {csv_name}")  # noqa: B904
 
     test_df = test_df[test_df["valid_ratio"] > config.data.valid_mask_threshold].reset_index(drop=True)  # type: ignore
-    post_utils.validate_patch_metadata_mask_scope(test_df, mask_scope)
+    if mask_scope is not None:
+        post_utils.validate_patch_metadata_mask_scope(test_df, mask_scope)
     return test_df
 
 
@@ -57,7 +58,7 @@ def reconstruct_denormalized_hexels(
     config: Config,
     out_norm: str,
     stitch_mode: str = "mean",
-    mask_scope: str = "actual",
+    mask_scope: str | None = None,
     split_csv: str | None = None,
     test_metadata: pd.DataFrame | None = None,
 ) -> Iterator[StitchedHexel]:
@@ -70,13 +71,13 @@ def reconstruct_denormalized_hexels(
     if isinstance(test_predictions, str):
         raise TypeError(f"Expected ndarray, but got string: {test_predictions}")
 
-    scope = normalize_mask_scope(mask_scope)
     settings_list = post_utils.get_target_postprocessing_settings(config=config, out_norm=out_norm)
     if test_metadata is None:
-        test_df = load_filtered_test_metadata(config=config, mask_scope=scope, split_csv=split_csv)
+        test_df = load_filtered_test_metadata(config=config, mask_scope=None, split_csv=split_csv)
     else:
         test_df = test_metadata.reset_index(drop=True).copy()
-        post_utils.validate_patch_metadata_mask_scope(test_df, scope)
+    configured_scope = mask_scope if mask_scope is not None else config.data_prep.mask_scope
+    scope = post_utils.resolve_patch_metadata_mask_scope(test_df, configured_scope)
     prediction_mask_channel_indices = post_utils.get_prediction_mask_channel_indices(
         data_dir=config.data.root_dir,
         modelling_approach=config.modelling_approach,
@@ -92,7 +93,8 @@ def reconstruct_denormalized_hexels(
 
         for target_index, settings in enumerate(settings_list):
             print(
-                f"[Postprocess] Reconstructing {settings.target.name.upper()} hex {hex_id} from {len(one_hexel_df)} {scope} patches...",
+                f"[Postprocess] Reconstructing {settings.target.name.upper()} hex {hex_id} "
+                f"from {len(one_hexel_df)} {scope or 'unmasked'} patches...",
                 flush=True,
             )
             target_predictions = post_utils.select_prediction_target_channel(
@@ -126,17 +128,18 @@ def reconstruct_denormalized_hexels(
                 mask_scope=scope,
                 hex_id=hex_id,
                 bp_nodata_as_zero=config.evaluation.bp_nodata_as_zero,
+                scenario_name=config.data_prep.scenario_name,
             )
             actual_support_mask = None
             buffer_support_mask = None
-            if scope != "actual" and profile.get("crs") is not None and profile.get("transform") is not None:
-                buffer_support_mask = post_utils._actual_area_mask(
-                    mask_path=paths.mask_grid(hex_id=hex_id, mask_scope=scope),
+            if scope is not None and profile.get("crs") is not None and profile.get("transform") is not None:
+                actual_support_mask = post_utils._actual_area_mask(
+                    mask_path=paths.mask_grid_actual(hex_id=hex_id),
                     profile=profile,
                     shape=pred_grid.shape,
                 )
-                actual_support_mask = post_utils._actual_area_mask(
-                    mask_path=paths.mask_grid_actual(hex_id=hex_id),
+                buffer_support_mask = post_utils._actual_area_mask(
+                    mask_path=paths.mask_grid(hex_id=hex_id, mask_scope=scope),
                     profile=profile,
                     shape=pred_grid.shape,
                 )

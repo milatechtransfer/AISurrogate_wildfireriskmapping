@@ -19,9 +19,9 @@ from src.config import (
 from src.datasets.postprocessing.hazard import DEFAULT_FI_CAP, DEFAULT_SCALE_TO
 from src.utils import AVAILABLE_METRICS, build_single_loss
 
-BP_CONFIG = Path("configs/bp_spatial_weather.yaml")
-FI_CONFIG = Path("configs/fi_spatial_weather.yaml")
-ROS_CONFIG = Path("configs/ros_spatial_weather.yaml")
+BP_CONFIG = Path("configs/ablations/bp_spatial_weather.yaml")
+FI_CONFIG = Path("configs/ablations/fi_spatial_weather.yaml")
+ROS_CONFIG = Path("configs/ablations/ros_spatial_weather.yaml")
 MULTI_OUTPUT_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
 MULTI_OUTPUT_FIRE_SIZE_Q3_CONFIG = Path("configs/multi_output_spatial_weather_firesize_q3.yaml")
 HAZARD_EVAL_CONFIG = Path("configs/hazard_eval_spatial_weather.yaml")

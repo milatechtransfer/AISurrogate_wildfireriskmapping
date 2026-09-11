@@ -11,12 +11,11 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
-
-logger = logging.getLogger(__name__)
 import torch
 from rasterio.features import geometry_mask
 from rasterio.profiles import Profile
 
+from data_preparation.hexel_loader import load_crop_window
 from data_preparation.paths import MaskScope, Paths, normalize_mask_scope
 from data_preparation.spatial.utils import (
     denormalize_burn_count,
@@ -38,6 +37,8 @@ from src.datasets.targets import TargetSpec, get_target_specs
 from src.datasets.utils import apply_bp_nodata_zero_range, denormalize_output_target
 from src.logger import CometLogger
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class TargetPostprocessingSettings:
@@ -50,7 +51,9 @@ class TargetPostprocessingSettings:
     target_log_std: float | None
 
 
-def get_mask_scope_save_dir(save_dir: str, mask_scope: str) -> str:
+def get_mask_scope_save_dir(save_dir: str, mask_scope: str | None) -> str:
+    if mask_scope is None:
+        return save_dir
     scope = normalize_mask_scope(mask_scope)
     if scope == "actual":
         return save_dir
@@ -71,29 +74,59 @@ def _accepted_prepared_mask_scopes(mask_scope: MaskScope) -> set[MaskScope]:
     return {mask_scope}
 
 
+def infer_patch_metadata_mask_scope(metadata: pd.DataFrame) -> MaskScope | None:
+    """Infer the prepared coordinate frame when no mask scope is configured."""
+    if "mask_scope" not in metadata.columns:
+        return "actual"
+
+    raw_values = metadata["mask_scope"]
+    missing = raw_values.isna() | raw_values.astype(str).str.strip().str.lower().isin({"", "none", "nan"})
+    observed = {normalize_mask_scope(str(value)) for value in raw_values[~missing].unique()}
+
+    if missing.any() and observed:
+        raise ValueError("Patch metadata mixes masked and unmasked samples; prepare them in separate dataset directories.")
+    if len(observed) > 1:
+        raise ValueError(f"Patch metadata contains multiple mask scopes: {sorted(observed)}.")
+    if not observed:
+        return None
+    return next(iter(observed))
+
+
 def validate_patch_metadata_mask_scope(metadata: pd.DataFrame, mask_scope: str) -> MaskScope:
     scope = normalize_mask_scope(mask_scope)
-    if scope == "actual":
-        return scope
     if "mask_scope" not in metadata.columns:
+        if scope == "actual":
+            return scope
         raise ValueError(
             f"mask_scope={scope!r} requires patch metadata with a matching 'mask_scope' column. "
             "Existing actual-only patch data cannot be safely reinterpreted as buffer data; "
             "prepare or infer on buffer-scope patches first."
         )
 
-    observed = {normalize_mask_scope(str(value)) for value in metadata["mask_scope"].dropna().unique()}
+    raw_values = metadata["mask_scope"]
+    missing = raw_values.isna() | raw_values.astype(str).str.strip().str.lower().isin({"", "none", "nan"})
+    observed = {normalize_mask_scope(str(value)) for value in raw_values[~missing].unique()}
     accepted = _accepted_prepared_mask_scopes(scope)
-    if not observed or not observed.issubset(accepted):
+    if missing.any() or not observed or not observed.issubset(accepted):
         raise ValueError(f"mask_scope={scope!r} requires patch metadata mask_scope in {sorted(accepted)}, got {sorted(observed)}.")
     return scope
 
 
-def _actual_area_mask(mask_path: Path, profile: dict[str, Any], shape: tuple[int, int]) -> np.ndarray:
+def resolve_patch_metadata_mask_scope(metadata: pd.DataFrame, mask_scope: str | None) -> MaskScope | None:
+    """Resolve an explicit scope or infer it from persisted patch metadata."""
+    if mask_scope is None:
+        return infer_patch_metadata_mask_scope(metadata)
+    return validate_patch_metadata_mask_scope(metadata, mask_scope)
+
+
+def _actual_area_mask(mask_path: Path, profile: dict[str, Any], shape: tuple[int, int]) -> np.ndarray | None:
     crs = profile.get("crs")
     transform = profile.get("transform")
     if crs is None or transform is None:
         raise ValueError("buffer_only masking requires a geospatial profile with 'crs' and 'transform'.")
+
+    if not Path(mask_path).exists():
+        return None
 
     actual_gdf = gpd.read_file(mask_path)
     if actual_gdf.empty:
@@ -123,6 +156,8 @@ def apply_mask_scope_to_grids(
         )
 
     actual_mask = _actual_area_mask(mask_path=mask_path, profile=profile, shape=gt_arr.shape)
+    if actual_mask is None:
+        raise ValueError(f"mask_scope='buffer_only' requires an actual mask file at {mask_path}, but the file was not found.")
     gt_arr = np.where(actual_mask, np.nan, gt_arr)
     pred_arr = np.where(actual_mask, np.nan, pred_arr)
     if not np.any(np.isfinite(gt_arr) & np.isfinite(pred_arr)):
@@ -174,25 +209,29 @@ def load_target_grid_for_mask_scope(
     target: TargetSpec,
     pred_grid: np.ndarray,
     profile: dict[str, Any],
-    mask_scope: str,
+    mask_scope: str | None,
     hex_id: str,
     bp_nodata_as_zero: bool = True,
+    scenario_name: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    scope = normalize_mask_scope(mask_scope)
-    target_path = getattr(paths, target.path_method)()
+    scope = normalize_mask_scope(mask_scope) if mask_scope is not None else None
+    target_path = getattr(paths, target.path_method)(scenario_name=scenario_name)
     loaded_target_grid, _ = load_spatial_raster(
         path=target_path,
-        mask_path=paths.mask_grid(hex_id=hex_id, mask_scope=scope),
+        mask_path=paths.mask_grid(hex_id=hex_id, mask_scope=scope) if scope is not None else None,
         reference_profile=profile,
     )
-    target_grid, pred_grid = apply_mask_scope_to_grids(
-        gt_grid=as_float_array_with_nan(loaded_target_grid),
-        pred_grid=pred_grid,
-        profile=profile,
-        mask_path=paths.mask_grid_actual(hex_id=hex_id),
-        mask_scope=scope,
-        hex_id=hex_id,
-    )
+    if scope is not None:
+        target_grid, pred_grid = apply_mask_scope_to_grids(
+            gt_grid=as_float_array_with_nan(loaded_target_grid),
+            pred_grid=pred_grid,
+            profile=profile,
+            mask_path=paths.mask_grid_actual(hex_id=hex_id),
+            mask_scope=scope,
+            hex_id=hex_id,
+        )
+    else:
+        target_grid = as_float_array_with_nan(loaded_target_grid)
     if bp_nodata_as_zero:
         return fill_bp_target_nodata_as_zero(gt_grid=target_grid, pred_grid=pred_grid, target=target)
     return target_grid, pred_grid
@@ -279,7 +318,7 @@ def get_predicted_hexel(
     stitch_mode: str = "mean",
     target_channel_index: int = 0,
     prediction_mask_channel_indices: list[int] | None = None,
-    mask_scope: str = "actual",
+    mask_scope: str | None = None,
 ) -> tuple[np.ndarray, Profile]:
     """
     Returns the reconstructed hexel
@@ -287,12 +326,35 @@ def get_predicted_hexel(
     start_idx = 0
 
     all_paths = Paths(hex_id=hex_id, root_dir=raw_data_dir)
-    scope = normalize_mask_scope(mask_scope)
+    scope = normalize_mask_scope(mask_scope) if mask_scope is not None else None
 
+    # Elevation establishes the reference grid for stitching predictions and
+    # reprojecting the ground-truth target below. Keep the default reproject_flag
+    # (True) so this matches the CRS/resolution ("ESRI:102002") the training data
+    # was prepared on.
     gt_elevation_grid, gt_elevation_grid_profile = load_spatial_raster(
         path=all_paths.elevation_grid(hex_id=hex_id),
-        mask_path=all_paths.mask_grid(hex_id=hex_id, mask_scope=scope),
+        mask_path=all_paths.mask_grid(hex_id=hex_id, mask_scope=scope) if scope is not None else None,
     )
+
+    if scope is None:
+        # Unmasked data prep crops the shared nodata border, so its persisted
+        # coordinate frame is required to place patches correctly.
+        feature_channel_map_path = os.path.join(base_dir, f"feature_channel_map_{modelling_approach}.json")
+        crop_window = load_crop_window(feature_channel_map_path, hex_id=hex_id, mask_scope=None)
+        if crop_window is None:
+            raise ValueError(
+                f"Unmasked patch data for hex {hex_id} requires crop-window metadata at "
+                f"{os.path.join(base_dir, f'crop_windows_hex_{hex_id}.json')}."
+            )
+        row_off, col_off, height, width = crop_window
+        gt_elevation_grid = gt_elevation_grid[row_off : row_off + height, col_off : col_off + width]
+        gt_elevation_grid_profile = gt_elevation_grid_profile.copy()
+        cropped_transform = rasterio.windows.transform(
+            rasterio.windows.Window(col_off=col_off, row_off=row_off, width=width, height=height),
+            gt_elevation_grid_profile["transform"],
+        )
+        gt_elevation_grid_profile.update(height=height, width=width, transform=cropped_transform)
 
     if out_norm in {"min_max", "log"}:
         predictions = np.clip(predictions, 0, 1)
@@ -324,6 +386,8 @@ def get_predicted_hexel(
         )
         gt_elevation_grid_profile.update(dtype="float32", compress="lzw", nodata=-9999)  # type: ignore
     else:
+        if min_target_val is None or max_target_val is None:
+            raise ValueError("min_target_val and max_target_val are required for modelling_approach != '1'.")
         unique_season_cause = list(set(zip(test_df["season"], test_df["cause"], strict=False)))
         season_cause_hexels = []
         for season, cause in unique_season_cause:
@@ -383,8 +447,8 @@ def get_config_grid_params(config: Config) -> GridParams | None:
 
 def denormalize_model_target(
     data: np.ndarray,
-    min_val: float,
-    max_val: float,
+    min_val: float | None,
+    max_val: float | None,
     out_norm: str,
     target_log_mean: float | None = None,
     target_log_std: float | None = None,
@@ -396,7 +460,13 @@ def denormalize_model_target(
             raise ValueError(f"target_log_std must be positive for out_norm='log_standard', got {target_log_std}.")
         return np.clip(np.expm1(data.astype("float32") * target_log_std + target_log_mean), 0.0, None).astype("float32")
 
-    return denormalize_output_target(data=data, target_min=min_val, target_max=max_val, out_norm=out_norm)
+    if out_norm == "min_max":
+        if min_val is None or max_val is None:
+            raise ValueError("min_val and max_val are required for out_norm='min_max'.")
+        return denormalize_output_target(data=data, target_min=min_val, target_max=max_val, out_norm=out_norm)
+    return denormalize_output_target(
+        data=data, target_min=min_val if min_val is not None else 0.0, target_max=max_val if max_val is not None else 0.0, out_norm=out_norm
+    )
 
 
 def get_target_channel_index(data_dir: str, modelling_approach: str, target: TargetSpec) -> int:
@@ -463,7 +533,14 @@ def get_target_postprocessing_settings(config: Config, out_norm: str) -> list[Ta
     raw_data_dir = config.data.raw_data_dir
     train_hex_ids: set[int] | None = None
     if data_dir and config.data.train_split:
-        train_hex_ids = read_split_hex_ids(os.path.join(data_dir, config.data.train_split))
+        split_path = os.path.join(data_dir, config.data.train_split)
+        if os.path.isfile(split_path):
+            train_hex_ids = read_split_hex_ids(split_path)
+        else:
+            logger.warning(
+                "Train split file %r not found — denormalization will use all hexels.",
+                split_path,
+            )
 
     grid_params = get_config_grid_params(config)
     settings = []
@@ -479,6 +556,8 @@ def get_target_postprocessing_settings(config: Config, out_norm: str) -> list[Ta
                 output_type=target.output_type,
                 allowed_hex_ids=train_hex_ids,
                 raw_data_dir=raw_data_dir,
+                scenario_name=config.data_prep.scenario_name,
+                norm_stats_filename=config.data.norm_stats_filename,
             )
             max_target_val, min_target_val = apply_bp_nodata_zero_range(
                 target_name=target.name,
@@ -489,7 +568,12 @@ def get_target_postprocessing_settings(config: Config, out_norm: str) -> list[Ta
         target_log_mean, target_log_std = get_target_log_stats(grid_params=grid_params, target=target)
         if target_out_norm == "log_standard" and (target_log_mean is None or target_log_std is None):
             target_log_mean, target_log_std = get_output_log_stats_cached(
-                str(data_dir), target.output_type, allowed_hex_ids=train_hex_ids, raw_data_dir=raw_data_dir
+                str(data_dir),
+                target.output_type,
+                allowed_hex_ids=train_hex_ids,
+                raw_data_dir=raw_data_dir,
+                scenario_name=config.data_prep.scenario_name,
+                norm_stats_filename=config.data.norm_stats_filename,
             )
         settings.append(
             TargetPostprocessingSettings(
@@ -586,6 +670,49 @@ def get_hexel_binary_maps(pred_grid: np.ndarray, gt_grid: np.ndarray, percentile
     return pred_bin, gt_bin
 
 
+def load_firezone_ids(paths: Paths, hex_id: str, profile: dict[str, Any]) -> np.ndarray | None:
+    """Load the per-pixel firezone ID raster for one hexel, aligned to ``profile``.
+
+    Returns a float array (NaN where nodata/outside any firezone) matching the
+    reconstructed target/prediction grid shape, or ``None`` if no firezone
+    raster is available for this hexel.
+    """
+    firezone_path = paths.firezones_grid(hex_id=hex_id)
+    if not Path(firezone_path).exists():
+        return None
+    firezone_grid, _ = load_spatial_raster(path=firezone_path, reference_profile=profile)
+    return as_float_array_with_nan(firezone_grid)
+
+
+def calculate_firezone_hexel_metrics(
+    gt_grid: np.ndarray,
+    pred_grid: np.ndarray,
+    firezone_ids: np.ndarray,
+    device: str | torch.device,
+    metric_functions: dict[str, Callable],
+) -> dict[str, dict[str, float]]:
+    """Compute ``metric_functions`` separately for each firezone ID present in ``firezone_ids``.
+
+    Returns a mapping of ``{"firezone{id}": {metric_name: value}}`` restricted
+    to pixels belonging to that firezone (other pixels are masked out as NaN,
+    same as any other invalid pixel).
+    """
+    firezone_ids = as_float_array_with_nan(firezone_ids)
+    if firezone_ids.shape != np.asarray(gt_grid).shape:
+        raise ValueError(f"firezone_ids shape {firezone_ids.shape} does not match gt_grid shape {np.asarray(gt_grid).shape}.")
+
+    results: dict[str, dict[str, float]] = {}
+    unique_ids = np.unique(firezone_ids[np.isfinite(firezone_ids)])
+    for fz_id in unique_ids:
+        fz_mask = firezone_ids == fz_id
+        fz_gt = np.where(fz_mask, gt_grid, np.nan)
+        fz_pred = np.where(fz_mask, pred_grid, np.nan)
+        results[f"firezone{int(fz_id)}"] = calculate_hexel_metrics_pytorch(
+            gt_grid=fz_gt, pred_grid=fz_pred, device=device, metric_functions=metric_functions
+        )
+    return results
+
+
 def evaluate_and_visualize_hexels(
     test_predictions: np.ndarray,
     config: Config,
@@ -597,7 +724,7 @@ def evaluate_and_visualize_hexels(
     save_artifacts: bool = True,
     save_plots: bool = True,
     robust_plot_percentile: float | None = None,
-    mask_scope: str = "actual",
+    mask_scope: str | None = None,
     split_csv: str | None = None,
     save_dir_suffix: str | None = None,
     test_metadata: pd.DataFrame | None = None,
@@ -612,17 +739,24 @@ def evaluate_and_visualize_hexels(
     if given, isolates that split's artifacts under a dedicated subdirectory
     (e.g. "val") so they don't collide with the default test-split outputs.
     """
+    from src.datasets.postprocessing.hexel_reconstruction import load_filtered_test_metadata, reconstruct_denormalized_hexels
+
     prediction_support_label = "input support" if config.evaluation.prediction_support_policy == "input" else "target support"
-    scope = normalize_mask_scope(mask_scope)
-    show_prediction_support_outline = config.evaluation.prediction_support_policy == "input" and scope == "actual"
+    metadata = (
+        test_metadata if test_metadata is not None else load_filtered_test_metadata(config=config, mask_scope=None, split_csv=split_csv)
+    )
+    configured_scope = mask_scope if mask_scope is not None else config.data_prep.mask_scope
+    scope = resolve_patch_metadata_mask_scope(metadata, configured_scope)
+    show_prediction_support_outline = config.evaluation.prediction_support_policy == "input" and scope in (None, "actual")
     base_save_dir = os.path.join(config.save_dir, save_dir_suffix) if save_dir_suffix else config.save_dir
     artifacts_save_dir = get_mask_scope_save_dir(base_save_dir, scope)
-
-    from src.datasets.postprocessing.hexel_reconstruction import reconstruct_denormalized_hexels
 
     all_hexel_metrics: list[tuple[str, str | None, str | None, dict[str, float]]] = []
     current_hex_id: str | None = None
     multi_target = len(get_config_target_specs(config)) > 1
+    report_firezone_metrics = config.evaluation.report_firezone_metrics
+    firezone_metric_names = set(config.evaluation.firezone_metric_names)
+    firezone_ids_by_hex: dict[str, np.ndarray | None] = {}
 
     for stitched_hexel in reconstruct_denormalized_hexels(
         test_predictions=test_predictions,
@@ -631,7 +765,7 @@ def evaluate_and_visualize_hexels(
         stitch_mode=stitch_mode,
         mask_scope=scope,
         split_csv=split_csv,
-        test_metadata=test_metadata,
+        test_metadata=metadata,
     ):
         if stitched_hexel.hex_id != current_hex_id:
             if current_hex_id is not None and save_artifacts:
@@ -745,6 +879,30 @@ def evaluate_and_visualize_hexels(
                 )
                 all_hexel_metrics.append((stitched_hexel.hex_id, metric_target_name, "actual", actual_metrics))
                 all_hexel_metrics.append((stitched_hexel.hex_id, metric_target_name, "buffer_only", buffer_only_metrics))
+
+            if report_firezone_metrics:
+                firezone_metric_functions = {name: fn for name, fn in metric_functions.items() if name in firezone_metric_names}
+                if firezone_metric_functions:
+                    if stitched_hexel.hex_id not in firezone_ids_by_hex:
+                        firezone_paths = Paths(hex_id=stitched_hexel.hex_id, root_dir=config.data.raw_data_dir)
+                        firezone_ids_by_hex[stitched_hexel.hex_id] = load_firezone_ids(
+                            paths=firezone_paths,
+                            hex_id=stitched_hexel.hex_id,
+                            profile=stitched_hexel.profile,
+                        )
+                    firezone_ids = firezone_ids_by_hex[stitched_hexel.hex_id]
+                    if firezone_ids is not None:
+                        firezone_metrics = calculate_firezone_hexel_metrics(
+                            gt_grid=grid_gt,
+                            pred_grid=reconstructed_hexel_denorm,
+                            firezone_ids=firezone_ids,
+                            device=device,
+                            metric_functions=firezone_metric_functions,
+                        )
+                        for firezone_scope, fz_metrics in firezone_metrics.items():
+                            all_hexel_metrics.append((stitched_hexel.hex_id, metric_target_name, firezone_scope, fz_metrics))
+                    else:
+                        logger.warning(f"No firezone raster found for hex {stitched_hexel.hex_id!r}; skipping firezone metrics.")
 
             percentiles_to_plot = [
                 fn.keywords["percentile"]

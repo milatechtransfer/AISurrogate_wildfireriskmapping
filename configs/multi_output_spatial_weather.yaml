@@ -54,6 +54,7 @@ evaluation:
   bp_nodata_as_zero: true
   prediction_support_policy: "input"
   hazard_fi_cap: 10000.0
+  report_to_comet: true   # set to False when running evaluation only and don't want comet logging
 
 data:
   root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4"
@@ -163,3 +164,4 @@ data_prep:
   overlap_ratio: 0.2
   ignition_weighting: "distribution"
   fuel_representation: "raw"
+  mask_scope: "actual"

@@ -69,6 +69,7 @@ class SpatializedTabularSource(DataSource):
         self.shuffle_lut = params.shuffle_lut
         self.shuffle_seed = params.shuffle_seed
         self.hex_id_col = params.hex_id_col
+        self.zone_id_remap = {int(k): int(v) for k, v in params.zone_id_remap.items()}
         self.quantiles = params.quantiles
 
         with open(os.path.join(self.root_dir, f"feature_channel_map_{self.modelling_approach}.json")) as f:
@@ -251,6 +252,11 @@ class SpatializedTabularSource(DataSource):
     def get_sample(self, patch_info: dict):
         data = patch_info["data"] if "data" in patch_info else np.load(patch_info["file_path"], mmap_mode="r")
         zone_grid = np.asarray(data[:, :, self.zone_channel])
+        if self.zone_id_remap:
+            original_zone_grid = zone_grid
+            zone_grid = np.copy(zone_grid)
+            for old_id, new_id in self.zone_id_remap.items():
+                zone_grid[original_zone_grid == old_id] = new_id
         height, width = zone_grid.shape
 
         hex_id = _NO_HEX_ID

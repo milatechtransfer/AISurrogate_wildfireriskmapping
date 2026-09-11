@@ -11,7 +11,8 @@ def load_fuel_grid(
     hex_id: str,
     fuel_representation: str = "raw",
     reference_profile: dict[str, Any] | None = None,
-    mask_scope: str = "actual",
+    mask_scope: str | None = None,
+    scenario_name: str | None = None,
 ) -> np.ma.MaskedArray:
     """
     Load an FBP fuel raster and group fuel types if selected
@@ -19,9 +20,10 @@ def load_fuel_grid(
     rerank_fuels: boolean flag to choose if we can rerank fuel IDs for ordinal encoding. Fuels are ranked from lowest to highest based on their Rate of Spread.
     """
     all_paths = Paths(hex_id=hex_id, root_dir=root_dir)
+    mask_path = all_paths.mask_grid(hex_id=hex_id, mask_scope=mask_scope) if mask_scope is not None else None
     fuel_grid, _ = load_spatial_raster(
-        all_paths.fuel_grid(hex_id=hex_id),
-        mask_path=all_paths.mask_grid(hex_id=hex_id, mask_scope=mask_scope),
+        all_paths.fuel_grid(hex_id=hex_id, scenario_name=scenario_name),
+        mask_path=mask_path,
         reference_profile=reference_profile,
     )
 

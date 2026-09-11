@@ -132,19 +132,19 @@ def get_fuel_curve_normalization_stats(dataset) -> tuple[torch.Tensor | None, to
 def fill_nan_channel_mean_numpy(arr: np.ndarray) -> np.ndarray:
     """
     Fills NaNs in a (H, W, C) array with the mean of the corresponding channel.
+    If a channel is entirely NaN (e.g. a fully-masked patch), falls back to 0.0.
     Modifies the array in-place.
     """
-    # 1. Calculate the mean of each channel, ignoring NaNs
-    # axis=(0, 1) aggregates over Height and Width, leaving (C,)
+    # 1. Calculate the mean of each channel, ignoring NaNs; entirely-NaN channels → nan
     channel_means = np.nanmean(arr, axis=(0, 1))
 
-    # 2. Find the indices where values are NaN
-    # This returns a boolean mask of shape (H, W, C)
+    # 2. Fall back to 0.0 for channels that are entirely NaN (no valid pixels at all)
+    channel_means = np.where(np.isnan(channel_means), 0.0, channel_means)
+
+    # 3. Find the indices where values are NaN
     nan_mask = np.isnan(arr)
 
-    # 3. Replace NaNs
-    # We grab the specific channel index (2) from the nan locations
-    # and map them to the calculated means.
+    # 4. Replace NaNs with the channel mean (or 0.0 for fully-masked channels)
     arr[nan_mask] = np.take(channel_means, np.where(nan_mask)[2])
 
     return arr

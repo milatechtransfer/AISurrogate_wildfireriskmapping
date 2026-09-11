@@ -12,7 +12,7 @@ from torch.optim.lr_scheduler import LRScheduler, ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from data_preparation.spatial.utils import NORM_STATS_JSON, get_output_log_stats_cached, get_range_output_cached, read_split_hex_ids
+from data_preparation.spatial.utils import get_output_log_stats_cached, get_range_output_cached, read_split_hex_ids
 from src.config import Config, GridParams
 from src.datasets.fuel_utils import FUEL_CURVE_ENCODINGS
 from src.datasets.targets import activate_target_predictions, get_target_specs
@@ -121,6 +121,8 @@ class Trainer:
         )
 
         self.model.to(self.device)
+        self._maybe_warm_start()
+        self._frozen_modules: list[torch.nn.Module] = self._freeze_modules()
 
         # Get and log number of model params.
         total_params, trainable_params = get_nbr_model_parameters(self.model)
@@ -137,8 +139,12 @@ class Trainer:
             "lr": self.config.optimizer.lr,
         }
 
+        trainable_parameters = [p for p in self.model.parameters() if p.requires_grad]
+        if not trainable_parameters:
+            raise ValueError("No trainable parameters left after applying training.freeze_modules.")
+
         OptimizerClass = getattr(optim, opt_name)
-        self.optimizer = OptimizerClass(self.model.parameters(), **opt_params)
+        self.optimizer = OptimizerClass(trainable_parameters, **opt_params)
 
         self.global_step = 0
 
@@ -169,8 +175,8 @@ class Trainer:
             fuel_curve_mean, fuel_curve_std = get_fuel_curve_normalization_stats(self.train_dataset)
             return {"fuel_curve_mean": fuel_curve_mean, "fuel_curve_std": fuel_curve_std}
 
-        # Eval-only mode: try dataset_norm_stats.json.
-        cache_path = os.path.join(self.config.data.root_dir, NORM_STATS_JSON)
+        # Eval-only mode: try the configured norm-stats cache file.
+        cache_path = os.path.join(self.config.data.root_dir, self.config.data.norm_stats_filename)
         cache_key = f"fuel_curve_{grid_params.fuel_feats_encoding}"
         if os.path.isfile(cache_path):
             with open(cache_path) as f:
@@ -293,6 +299,8 @@ class Trainer:
                         output_type=target.output_type,
                         allowed_hex_ids=train_hex_ids,
                         raw_data_dir=self.config.data.raw_data_dir,
+                        scenario_name=self.config.data_prep.scenario_name,
+                        norm_stats_filename=self.config.data.norm_stats_filename,
                     )
                     target_max, target_min = apply_bp_nodata_zero_range(
                         target_name=target.name,
@@ -307,6 +315,8 @@ class Trainer:
                         output_type=target.output_type,
                         allowed_hex_ids=train_hex_ids,
                         raw_data_dir=self.config.data.raw_data_dir,
+                        scenario_name=self.config.data_prep.scenario_name,
+                        norm_stats_filename=self.config.data.norm_stats_filename,
                     )
                 if target_log_mean is None or target_log_std is None:
                     raise ValueError(f"target_log_mean/std are required for target={target.name!r} with out_norm='log_standard'.")
@@ -467,6 +477,11 @@ class Trainer:
         self, loader: DataLoader, lr_scheduler: LRScheduler | ReduceLROnPlateau | None = None, lr_scheduler_type: str | None = None
     ) -> dict[str, float]:
         self.model.train()
+        # model.train() recursively re-enables training mode on every submodule, so
+        # frozen submodules (config.training.freeze_modules) must be put back into
+        # eval() mode to keep their BatchNorm running stats/dropout from drifting.
+        for module in self._frozen_modules:
+            module.eval()
         running_loss = 0.0
         running_batch_count = 0
         running_metrics = {name: 0.0 for name in self._metric_result_keys()}
@@ -623,6 +638,108 @@ class Trainer:
     def test(self, loader: DataLoader, return_predictions: bool = False) -> dict[str, float] | tuple[dict[str, float], np.ndarray]:
         return self.validate(loader, return_predictions=return_predictions)
 
+    def _model_state_compatible(self, saved_state: dict) -> bool:
+        """Whether ``saved_state`` (a ``model_state`` dict from a checkpoint) can be loaded as-is
+        into the current model, i.e. it has exactly the same parameter/buffer names and shapes."""
+        current_state = self.model.state_dict()
+        return saved_state.keys() == current_state.keys() and all(
+            saved_state[key].shape == current_state[key].shape for key in current_state
+        )
+
+    def _last_checkpoint_is_resumable(self) -> bool:
+        """
+        Whether ``save_dir/last.pth`` exists and its ``model_state`` is compatible with the
+        current model architecture, i.e. ``_maybe_resume`` would actually be able to resume
+        from it (rather than silently falling back to epoch 1 with randomly-initialized
+        weights). This is checked from ``_maybe_warm_start`` so an incompatible ``last.pth``
+        (e.g. left over from a run with a different model architecture) doesn't block the
+        configured ``warm_start_checkpoint`` fallback.
+        """
+        if not self.save_dir:
+            return False
+        last_path = os.path.join(self.save_dir, "last.pth")
+        if not os.path.exists(last_path):
+            return False
+        try:
+            checkpoint = torch.load(last_path, map_location=self.device, weights_only=False)
+        except Exception as exc:  # noqa: BLE001 - best-effort compatibility probe
+            print(f"[WarmStart] Could not read {last_path} to check resume compatibility: {exc}")
+            return False
+        return self._model_state_compatible(checkpoint.get("model_state", {}))
+
+    def _maybe_warm_start(self) -> None:
+        """
+        Warm-start model weights from ``config.training.warm_start_checkpoint`` (e.g. a
+        previous run's best.pth) when starting a *new* run, such as fine-tuning on a
+        different dataset/config.
+
+        Unlike ``_maybe_resume``, only ``model_state`` is loaded: the optimizer, LR
+        scheduler, epoch counter, global step, RNG state, and best-checkpoint metric
+        baseline are all left fresh, since those are tied to the original run's
+        dataset/hyperparameters and should not be carried over blindly into a
+        differently-configured fine-tuning run.
+
+        Skipped if this run's own ``save_dir`` already has a ``last.pth`` that is actually
+        resumable (i.e. its ``model_state`` matches the current model architecture), so an
+        in-progress fine-tune is never reset back to the warm-start checkpoint. If
+        ``last.pth`` exists but is *not* resumable (e.g. it was left over from a run with a
+        different model architecture), it is ignored here and the configured
+        ``warm_start_checkpoint`` is used instead; ``_maybe_resume`` will independently detect
+        the same incompatibility later and start the optimizer/epoch counter fresh, so
+        training warm-starts from ``warm_start_checkpoint`` rather than from random
+        initialization.
+        """
+        warm_start_path = self.config.training.warm_start_checkpoint
+        if not warm_start_path:
+            return
+        last_path = os.path.join(self.save_dir, "last.pth") if self.save_dir else None
+        if last_path and os.path.exists(last_path):
+            if self._last_checkpoint_is_resumable():
+                print(f"[WarmStart] {last_path} exists and is resumable; resuming that run instead of warm-starting.")
+                return
+            print(f"[WarmStart] {last_path} exists but is not compatible with the current model architecture; ignoring it.")
+        if not os.path.exists(warm_start_path):
+            raise FileNotFoundError(f"warm_start_checkpoint not found: {warm_start_path}")
+
+        # weights_only=False: these checkpoints are produced by this same Trainer and
+        # include optimizer/scheduler/RNG state (numpy arrays, etc.) that torch's
+        # default `weights_only=True` restricted unpickler will not load.
+        checkpoint = torch.load(warm_start_path, map_location=self.device, weights_only=False)
+        saved_state = checkpoint.get("model_state", {})
+        if not self._model_state_compatible(saved_state):
+            raise ValueError(f"warm_start_checkpoint {warm_start_path} is not compatible with the current model architecture.")
+
+        self.model.load_state_dict(saved_state)
+        print(
+            f"[WarmStart] Loaded model weights from {warm_start_path} "
+            f"(epoch={checkpoint.get('epoch', 'N/A')}, metrics={checkpoint.get('metric_value', 'N/A')}). "
+            "Optimizer/scheduler/epoch/best-metric state start fresh for this run."
+        )
+
+    def _freeze_modules(self) -> list[torch.nn.Module]:
+        """
+        Freeze the top-level model submodules named in ``config.training.freeze_modules``
+        (e.g. ``["encoder", "bottleneck"]``): their parameters are excluded from the
+        optimizer (``requires_grad=False``) and the submodules are kept in ``eval()``
+        mode for the whole run so BatchNorm running stats and dropout don't keep
+        drifting on a small fine-tuning dataset. Returns the frozen submodules so
+        ``train_epoch`` can re-apply ``eval()`` after each ``model.train()`` call.
+        """
+        frozen_modules: list[torch.nn.Module] = []
+        for name in self.config.training.freeze_modules:
+            module = getattr(self.model, name, None)
+            if not isinstance(module, torch.nn.Module):
+                raise ValueError(
+                    f"Cannot freeze {name!r}: not a submodule of the model. "
+                    f"Available submodules: {[n for n, m in self.model.named_children() if isinstance(m, torch.nn.Module)]}."
+                )
+            for param in module.parameters():
+                param.requires_grad = False
+            module.eval()
+            frozen_modules.append(module)
+            print(f"[Freeze] {name!r} frozen ({sum(p.numel() for p in module.parameters()):,} params); kept in eval() mode.")
+        return frozen_modules
+
     def _maybe_resume(self, lr_scheduler: LRScheduler | ReduceLROnPlateau | None = None) -> int:
         """
         Resume training from ``last.pth`` when it exists so a preempted/requeued SLURM job
@@ -640,16 +757,21 @@ class Trainer:
         # default `weights_only=True` restricted unpickler will not load.
         checkpoint = torch.load(last_path, map_location=self.device, weights_only=False)
         saved_state = checkpoint.get("model_state", {})
-        current_state = self.model.state_dict()
-        compatible = saved_state.keys() == current_state.keys() and all(
-            saved_state[key].shape == current_state[key].shape for key in current_state
-        )
-        if not compatible:
+        if not self._model_state_compatible(saved_state):
             print(f"[Resume] {last_path} does not match the current model; starting from scratch.")
             return 1
 
         self.model.load_state_dict(saved_state)
-        self.optimizer.load_state_dict(checkpoint["optimizer_state"])
+        try:
+            self.optimizer.load_state_dict(checkpoint["optimizer_state"])
+        except (ValueError, RuntimeError, KeyError) as exc:
+            # E.g. training.freeze_modules changed since this checkpoint was written, so the
+            # optimizer's parameter groups no longer match. The model weights above are still
+            # valid and already loaded, so continue with a freshly-initialized optimizer/epoch
+            # counter (like a warm start) instead of crashing or silently reverting to random
+            # model initialization.
+            print(f"[Resume] Could not load optimizer state from {last_path} ({exc}); starting a fresh optimizer/epoch count.")
+            return 1
         if lr_scheduler is not None and checkpoint.get("scheduler_state") is not None:
             lr_scheduler.load_state_dict(checkpoint["scheduler_state"])
         if checkpoint.get("best_metric_list"):

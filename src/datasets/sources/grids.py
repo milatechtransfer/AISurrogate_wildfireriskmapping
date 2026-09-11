@@ -44,6 +44,7 @@ class GridSource(DataSource):
         transform: Callable | None = None,
         raw_data_dir: str | None = None,
         train_split_csv_name: str | None = None,
+        norm_stats_filename: str = NORM_STATS_JSON,
     ):
         """
         Args:
@@ -57,6 +58,9 @@ class GridSource(DataSource):
             modelling_approach (str): The approach used for modelling
             transform (callable, optional): Optional transform to be applied on a sample.
             raw_data_dir (str, optional): Directory with raw per-hexel rasters used for normalization ranges.
+            norm_stats_filename (str): Filename (relative to root_dir) of the cached normalization-stats
+                JSON produced by data_preparation.compute_dataset_normalization_stats. Defaults to
+                "dataset_norm_stats.json".
         """
 
         self.root_dir = root_dir
@@ -65,18 +69,19 @@ class GridSource(DataSource):
         self.params = params
         self.modelling_approach = modelling_approach
         self.transform = transform
+        self.norm_stats_filename = norm_stats_filename
 
         # Normalization statistics must be derived from the training split only, so held-out
         # hexes never leak into target/elevation normalization constants. None preserves the
         # legacy full-scan behaviour (e.g. single-hex inference where no split is provided).
         self._train_hex_ids: set[int] | None = None
-        if train_split_csv_name is not None:
+        if train_split_csv_name:
             split_path = os.path.join(self.root_dir, train_split_csv_name)
             if os.path.exists(split_path):
                 self._train_hex_ids = read_split_hex_ids(split_path)
                 logger.debug("Loaded %d train hex IDs from %s.", len(self._train_hex_ids), split_path)
             else:
-                norm_stats_path = os.path.join(self.root_dir, NORM_STATS_JSON)
+                norm_stats_path = os.path.join(self.root_dir, self.norm_stats_filename)
                 if os.path.exists(norm_stats_path):
                     logger.info(
                         "Train split %r not found — normalization stats will be read from %s.",
@@ -98,6 +103,7 @@ class GridSource(DataSource):
         self.target_log_stats = {target.name: (target.log_mean, target.log_std) for target in target_configs}
         self.fuel_feats_encoding = params.fuel_feats_encoding
         self.normalize_fuel_feats_ordinal = params.normalize_fuel_feats_ordinal
+        self.fuel_curves_filename = params.fuel_curves_filename
         self.terrain_derivatives = params.terrain_derivatives
         self.terrain_cell_size_m = params.terrain_cell_size_m
         self.bp_nodata_as_zero = params.bp_nodata_as_zero
@@ -121,7 +127,11 @@ class GridSource(DataSource):
                     continue
                 try:
                     target_max, target_min = get_range_output_cached(
-                        self.root_dir, target.output_type, self._train_hex_ids, raw_data_dir=self.raw_data_dir
+                        self.root_dir,
+                        target.output_type,
+                        self._train_hex_ids,
+                        raw_data_dir=self.raw_data_dir,
+                        norm_stats_filename=self.norm_stats_filename,
                     )
                 except ValueError:
                     if self._validate_raw_ranges:
@@ -134,6 +144,13 @@ class GridSource(DataSource):
                     bp_nodata_as_zero=self.bp_nodata_as_zero,
                 )
                 self.target_ranges[target.name] = (target_max, target_min)
+                if target_max <= target_min:
+                    logger.warning(
+                        "Target %r normalization range is degenerate: max=%.4f <= min=%.4f",
+                        target.name,
+                        target_max,
+                        target_min,
+                    )
                 if self._validate_raw_ranges:
                     self._validate_range(
                         max_value=target_max,
@@ -152,6 +169,7 @@ class GridSource(DataSource):
                         target.output_type,
                         allowed_hex_ids=self._train_hex_ids,
                         raw_data_dir=self.raw_data_dir,
+                        norm_stats_filename=self.norm_stats_filename,
                     )
                     self.target_log_stats[target.name] = (mean, std)
 
@@ -213,12 +231,21 @@ class GridSource(DataSource):
         # 3. normalization for elevation grid
         try:
             self.ELEVATION_MAX, self.ELEVATION_MIN = get_range_elevation_cached(
-                self.root_dir, self._train_hex_ids, raw_data_dir=self.raw_data_dir
+                self.root_dir,
+                self._train_hex_ids,
+                raw_data_dir=self.raw_data_dir,
+                norm_stats_filename=self.norm_stats_filename,
             )
         except ValueError:
             if self._validate_raw_ranges:
                 raise
             self.ELEVATION_MAX, self.ELEVATION_MIN = 1.0, 0.0
+        if self.ELEVATION_MAX <= self.ELEVATION_MIN:
+            logger.warning(
+                "Elevation normalization range is degenerate: max=%.4f <= min=%.4f",
+                self.ELEVATION_MAX,
+                self.ELEVATION_MIN,
+            )
         if self._validate_raw_ranges:
             self._validate_range(
                 max_value=self.ELEVATION_MAX,
@@ -236,6 +263,7 @@ class GridSource(DataSource):
                 root_dir=self.root_dir,
                 raw_data_dir=self.raw_data_dir,
                 feature_name=self.fuel_feats_encoding,
+                fuel_curves_filename=self.fuel_curves_filename,
             )
             self.fuel_curve_len = len(next(iter(self.fuel_curve_lookup.values())))
             self._compute_fuel_curve_normalization_stats()
@@ -301,7 +329,7 @@ class GridSource(DataSource):
         The results are stored in ``self.fuel_curve_mean`` and ``self.fuel_curve_std`` as float32
         numpy arrays of shape ``(1,)``.
         """
-        cache_path = os.path.join(self.root_dir, NORM_STATS_JSON)
+        cache_path = os.path.join(self.root_dir, self.norm_stats_filename)
         cache_key = f"fuel_curve_{self.fuel_feats_encoding}"
         if os.path.exists(cache_path):
             with open(cache_path) as f:
@@ -455,6 +483,17 @@ class GridSource(DataSource):
 
         # 4. Mean Imputation
         input_arr = fill_nan_channel_mean_numpy(input_arr)
+        assert not np.any(np.isnan(input_arr)), (
+            f"NaN remains in input_arr after mean imputation for patch "
+            f"{patch_info.get('hex_id', '?')} — at least one channel may be entirely NaN."
+        )
+
+        # Warn if no valid pixels remain in the patch.
+        if not mask.any():
+            logger.warning(
+                "Patch %s has zero valid pixels (entirely masked) — it will contribute nothing to loss.",
+                patch_info.get("hex_id", "?"),
+            )
 
         # 6. Filter to just chosen input channel indices or if no features selected just return None
         if self.input_channel_indices is not None:

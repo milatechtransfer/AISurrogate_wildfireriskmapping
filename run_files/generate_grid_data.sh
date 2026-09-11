@@ -31,6 +31,7 @@ python -m data_preparation.process_hexels_into_grids \
     --overlap_ratio=0.2 \
     --ignition_weighting="distribution" \
     --fuel_grid_representation="raw" \
+    --mask_scope="actual" \
     --is_array_job \
     --task_id=$TASK_ID \
     --num_tasks=$NUM_TASKS

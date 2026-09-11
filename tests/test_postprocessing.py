@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pandas as pd
 import pytest
+import rasterio
 import torch
 
 from src.config import (
@@ -146,7 +147,7 @@ def test_non_bp_target_nodata_is_not_zero_filled():
 
 def test_load_target_grid_bp_nodata_zero_fill_is_configurable(monkeypatch, tmp_path):
     class FakePaths:
-        def output_burn_prob(self):
+        def output_burn_prob(self, scenario_name=None):
             return tmp_path / "bp.tif"
 
         def mask_grid(self, hex_id, mask_scope):
@@ -486,6 +487,75 @@ def test_validate_patch_metadata_mask_scope_rejects_unmarked_buffer_data():
     assert post_utils.validate_patch_metadata_mask_scope(pd.DataFrame({"mask_scope": ["buffer"]}), "buffer_only") == "buffer_only"
 
 
+def test_resolve_patch_metadata_mask_scope_preserves_legacy_actual_data():
+    assert post_utils.resolve_patch_metadata_mask_scope(pd.DataFrame({"hex_id": [1]}), None) == "actual"
+    assert post_utils.resolve_patch_metadata_mask_scope(pd.DataFrame({"mask_scope": ["actual"]}), None) == "actual"
+
+
+def test_resolve_patch_metadata_mask_scope_identifies_unmasked_data():
+    assert post_utils.resolve_patch_metadata_mask_scope(pd.DataFrame({"mask_scope": [None]}), None) is None
+
+    with pytest.raises(ValueError, match="mixes masked and unmasked"):
+        post_utils.resolve_patch_metadata_mask_scope(pd.DataFrame({"mask_scope": ["actual", None]}), None)
+
+
+def test_get_predicted_hexel_requires_crop_window_only_for_unmasked_data(tmp_path, monkeypatch):
+    patch = np.ones((2, 2, 1), dtype=np.float32)
+    np.save(tmp_path / "patch.npy", patch)
+    metadata = pd.DataFrame(
+        [
+            {
+                "filename": "patch.npy",
+                "season": "all",
+                "cause": "all",
+                "hex_id": 1,
+                "window_id": 1,
+                "row": 0,
+                "col": 0,
+            }
+        ]
+    )
+    predictions = np.ones((1, 2, 2), dtype=np.float32)
+
+    monkeypatch.setattr(
+        post_utils,
+        "load_spatial_raster",
+        lambda *args, **kwargs: (
+            np.ones((2, 2), dtype=np.float32),
+            {"transform": rasterio.transform.from_origin(0, 2, 1, 1), "crs": "EPSG:3978"},
+        ),
+    )
+
+    with pytest.raises(ValueError, match="requires crop-window metadata"):
+        post_utils.get_predicted_hexel(
+            base_dir=str(tmp_path),
+            raw_data_dir=str(tmp_path),
+            test_df=metadata,
+            predictions=predictions,
+            min_target_val=None,
+            max_target_val=None,
+            hex_id="01",
+            out_norm="none",
+            target_channel_index=0,
+            mask_scope=None,
+        )
+
+    monkeypatch.setattr(post_utils, "load_crop_window", MagicMock(side_effect=AssertionError("masked data must not load crop metadata")))
+    reconstructed, _ = post_utils.get_predicted_hexel(
+        base_dir=str(tmp_path),
+        raw_data_dir=str(tmp_path),
+        test_df=metadata,
+        predictions=predictions,
+        min_target_val=None,
+        max_target_val=None,
+        hex_id="01",
+        out_norm="none",
+        target_channel_index=0,
+        mask_scope="actual",
+    )
+    np.testing.assert_array_equal(reconstructed, predictions[0])
+
+
 def test_evaluate_and_visualize_hexels_uses_buffer_scope_paths_and_outputs(tmp_path, monkeypatch):
     with (tmp_path / "feature_channel_map_1.json").open("w") as f:
         json.dump({"ignition_grid": [0], "bp_out_grid": [3]}, f)
@@ -544,7 +614,7 @@ def test_evaluate_and_visualize_hexels_uses_buffer_scope_paths_and_outputs(tmp_p
     monkeypatch.setattr(post_utils, "plot_hexbin_distribution", lambda **kwargs: None)
     monkeypatch.setattr(post_utils, "plot_histogram_distribution", lambda **kwargs: None)
 
-    metrics = post_utils.evaluate_and_visualize_hexels(
+    post_utils.evaluate_and_visualize_hexels(
         test_predictions=np.ones((1, 1, 2, 2), dtype=np.float32),
         config=config,
         out_norm="none",
@@ -1031,6 +1101,89 @@ def test_log_standard_target_transform_requires_stats():
 
     with pytest.raises(ValueError, match="target_log_mean"):
         output_target_norm(output_arr=raw, target_max=1.0, target_min=0.0, out_norm="log_standard")
+
+
+def test_calculate_firezone_hexel_metrics_splits_by_firezone_id():
+    gt = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    pred = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    firezone_ids = np.array([[1.0, 1.0], [2.0, np.nan]], dtype=np.float32)
+
+    results = post_utils.calculate_firezone_hexel_metrics(
+        gt_grid=gt,
+        pred_grid=pred,
+        firezone_ids=firezone_ids,
+        device=torch.device("cpu"),
+        metric_functions={"mae": lambda preds, targets, masks: torch.mean(torch.abs(preds[masks] - targets[masks]))},
+    )
+
+    assert set(results.keys()) == {"firezone1", "firezone2"}
+    assert results["firezone1"]["mae"] == pytest.approx(0.0)
+    assert results["firezone2"]["mae"] == pytest.approx(0.0)
+
+
+def test_evaluate_and_visualize_hexels_reports_per_firezone_metrics(tmp_path, monkeypatch):
+    with (tmp_path / "feature_channel_map_1.json").open("w") as f:
+        json.dump({"ignition_grid": [0], "bp_out_grid": [3]}, f)
+
+    patch = np.ones((2, 2, 4), dtype=np.float32)
+    patch[:, :, 3] = 1.0
+    np.save(tmp_path / "patch.npy", patch)
+
+    pd.DataFrame([{"filename": "patch.npy", "hex_id": 1, "valid_ratio": 1.0, "season": "spring", "cause": "H", "row": 0, "col": 0}]).to_csv(
+        tmp_path / "test_indices.csv", index=False
+    )
+    shutil.copyfile(tmp_path / "test_indices.csv", tmp_path / "train_indices.csv")
+
+    (tmp_path / "hex01" / "spatial").mkdir(parents=True)
+    (tmp_path / "hex01" / "spatial" / "hex01_firezones.tif").touch()
+
+    config = Config(
+        save_dir=str(tmp_path / "out"),
+        modelling_approach="1",
+        model=ModelConfig(num_classes=1, input_branches=["spatial"], hidden_features=[8, 16]),
+        optimizer=OptimizerConfig(loss="mse", name="Adam", lr=0.001),
+        training=TrainingConfig(max_epochs=1, log_every_n_epoch=1),
+        evaluation=EvaluationConfig(
+            best_ckpt_metrics=["loss"],
+            best_ckpt_metrics_mode=["min"],
+            report_firezone_metrics=True,
+            firezone_metric_names=["mae"],
+        ),
+        data=DataConfig(
+            root_dir=str(tmp_path),
+            raw_data_dir=str(tmp_path),
+            train_split="train_indices.csv",
+            val_split="val_indices.csv",
+            test_split="test_indices.csv",
+            input_sources=[DataSourceConfig(name="grid", params=GridParams(feature_names_list=["ignition_grid"], target_name="bp"))],
+        ),
+        logger=LoggerConfig(enabled=False, project_name="test", workspace="test", experiment_name="test"),
+        metrics=["mae"],
+        data_prep=DataPrepConfig(win_h=2, win_w=2),
+    )
+
+    def fake_load_spatial_raster(*args, **kwargs):
+        path = str(kwargs.get("path") or args[0])
+        if "firezones" in path:
+            return np.array([[1.0, 1.0], [2.0, 2.0]], dtype=np.float32), {"dtype": "float32", "nodata": -9999}
+        return np.ones((2, 2), dtype=np.float32), {"dtype": "float32", "nodata": -9999}
+
+    monkeypatch.setattr(post_utils, "get_range_output_cached", lambda *args, **kwargs: (1.0, 0.0))
+    monkeypatch.setattr(post_utils, "load_spatial_raster", fake_load_spatial_raster)
+
+    metrics = post_utils.evaluate_and_visualize_hexels(
+        test_predictions=np.ones((1, 1, 2, 2), dtype=np.float32),
+        config=config,
+        out_norm="none",
+        device=torch.device("cpu"),
+        metric_functions={"mae": lambda preds, targets, masks: torch.mean(torch.abs(preds[masks] - targets[masks]))},
+        save_artifacts=False,
+    )
+
+    assert metrics["hex01/firezone1_mae"] == pytest.approx(0.0)
+    assert metrics["hex01/firezone2_mae"] == pytest.approx(0.0)
+    assert metrics["all/firezone1_mae"] == pytest.approx(0.0)
+    assert metrics["all/firezone2_mae"] == pytest.approx(0.0)
 
 
 def test_get_hexel_binary_maps_respects_masked_arrays(recwarn):

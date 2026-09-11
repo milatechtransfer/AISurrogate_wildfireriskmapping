@@ -32,7 +32,7 @@ def get_split_hexel_window(
     win_h: int = 128,
     win_w: int = 128,
     overlap_ratio: float = 0.2,
-    mask_scope: str = "actual",
+    mask_scope: str | None = None,
 ):
     """
     Split the hexel using sliding windows for inp to the model
@@ -40,7 +40,7 @@ def get_split_hexel_window(
         season_cause_stacked_feats(np.ndarray): Stacked array of all the features of the shape (num_season_cause, H, W, num_feats)
         season_cause_mask(np.ndarray): A bool array where True means to ignore the pixel (num_season_cause, H,W)
     """
-    scope = prepared_mask_scope(mask_scope)
+    scope = prepared_mask_scope(mask_scope) if mask_scope is not None else None
     print("============Splitting the hexel==================")
     num_season_cause, H, W, _ = season_cause_stacked_feats.shape
     stride_h = max(1, int(win_h * (1 - overlap_ratio)))  # n_rows = (H-win_h)//stride_h + 1
@@ -119,16 +119,17 @@ def generate_data_samples(
     is_array_job: bool = False,
     task_id: int = 0,
     num_tasks: int = 1,
-    mask_scope: str = "actual",
+    mask_scope: str | None = None,
     ignition_weighting: str = "distribution",
     fuel_representation: str = "raw",
+    scenario_name: str | None = None,
     overwrite: bool = False,
 ):
-    scope = prepared_mask_scope(mask_scope)
+    scope = prepared_mask_scope(mask_scope) if mask_scope is not None else None
     if save_dir:
         out_dir = save_dir
     else:
-        suffix = "" if scope == "actual" else f"_{scope}"
+        suffix = f"_{scope}" if scope is not None and scope != "actual" else ""
         out_dir = os.path.join(root_dir, f"data_samples_approach_{modelling_approach}{suffix}")
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(os.path.join(out_dir, "numpy_files"), exist_ok=True)
@@ -162,6 +163,7 @@ def generate_data_samples(
             mask_scope=scope,
             ignition_weighting=ignition_weighting,
             fuel_representation=fuel_representation,
+            scenario_name=scenario_name,
         )
         if (stacked_feats is None) or (mask is None):
             print(f"================Failed for hex {hex_id}===================")
@@ -193,7 +195,9 @@ def main():
     parser.add_argument("--is_array_job", action="store_true", help="Boolean to indicate if using SLURM job array")
     parser.add_argument("--task_id", type=int, default=0, help="SLURM array ID")
     parser.add_argument("--num_tasks", type=int, default=1, help="Total number of array tasks")
-    parser.add_argument("--mask_scope", choices=MASK_SCOPE_CHOICES, default="actual", help="Mask scope for generated patch rasters.")
+    parser.add_argument(
+        "--mask_scope", choices=MASK_SCOPE_CHOICES, default=None, help="Mask scope for generated patch rasters. Omit to disable masking."
+    )
     parser.add_argument(
         "--ignition_weighting",
         choices=IGNITION_WEIGHTING_CHOICES,
@@ -205,6 +209,11 @@ def main():
         choices=FUEL_GRID_CHOICES,
         default="raw",
         help="'raw' (default) for raw fuel class values (use with iROS curves) or 'group' to group similar classes for one-hot encoding.",
+    )
+    parser.add_argument(
+        "--scenario_name",
+        default=None,
+        help="'None' (default) for national data, specified only in case of NWT data",
     )
     parser.add_argument(
         "--overwrite",
@@ -226,6 +235,7 @@ def main():
         mask_scope=args.mask_scope,
         ignition_weighting=args.ignition_weighting,
         fuel_representation=args.fuel_grid_representation,
+        scenario_name=args.scenario_name,
         overwrite=args.overwrite,
     )
 

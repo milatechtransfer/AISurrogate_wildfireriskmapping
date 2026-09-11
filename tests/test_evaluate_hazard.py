@@ -24,7 +24,7 @@ from src.evaluate_hazard import (
     row_normalized_confusion_percentages,
 )
 
-BP_CONFIG = Path("configs/bp_spatial_weather.yaml")
+BP_CONFIG = Path("configs/ablations/bp_spatial_weather.yaml")
 MULTI_OUTPUT_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
 HAZARD_MODEL_CONFIG = Path("configs/multi_output_spatial_weather.yaml")
 HAZARD_EVAL_CONFIG = Path("configs/hazard_eval_spatial_weather.yaml")

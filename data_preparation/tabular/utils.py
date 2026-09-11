@@ -17,6 +17,22 @@ weather_column_names = [
     "WindDirection",
 ]
 
+# Old-style weather column names mapped to their expected canonical names.
+weather_column_aliases: dict[str, str] = {
+    "FRU": "WeatherZone",
+    "temp": "Temperature",
+    "rh": "RelativeHumidity",
+    "ws": "WindSpeed",
+    "wd": "WindDirection",
+    "prec": "Precipitation",
+    "ffmc": "FineFuelMoistureCode",
+    "dmc": "DuffMoistureCode",
+    "dc": "DroughtCode",
+    "isi": "InitialSpreadIndex",
+    "bui": "BuildupIndex",
+    "fwi": "FireWeatherIndex",
+}
+
 
 def check_column_format(df: pd.DataFrame, col_name: str) -> bool:
     # Regex Explanation:
@@ -37,6 +53,13 @@ def check_weather_list(weather_list: pd.DataFrame) -> pd.DataFrame:
     """
     Check if the weather list is of the required format (columns) and the season and WeatherZone column
     """
+    # Rename old-style column names to their expected names before validating.
+    rename_map = {
+        src: dst for src, dst in weather_column_aliases.items() if src in weather_list.columns and dst not in weather_list.columns
+    }
+    if rename_map:
+        weather_list = weather_list.rename(columns=rename_map)
+
     if not set(list(weather_column_names)).issubset(weather_list.columns):
         raise ValueError("Missing columns/ weather df not in required format")
 

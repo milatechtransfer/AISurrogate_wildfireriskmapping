@@ -1,5 +1,7 @@
-# Joint BP/FI/ROS U-Net with q10/q50/q90 fire-size channels.
-save_dir: "experiments/multi_output_spatial_weather_firesize_q3"
+# Joint BP/FI/ROS emulator on the shared spatial input pipeline.
+# The UNet backbone and decoder are shared. A BP head predicts probability
+# logits, while one two-channel behavior head predicts conditional FI and ROS.
+save_dir: "experiments/NWT_multi_output_spatial_weather_scenario_FireExcludeSpotting"
 
 modelling_approach: "1"
 
@@ -48,24 +50,26 @@ training:
 evaluation:
   best_ckpt_metrics: ["bp/ccc", "fi/ccc", "ros/ccc"]
   best_ckpt_metrics_mode: ["max", "max", "max"]
-  checkpoint_filename: "best.pth"
+  checkpoint_filename: "best_base.pth" # change the checkpoint name whether it is base or finetuned
   bp_nodata_as_zero: true
   prediction_support_policy: "input"
   hazard_fi_cap: 10000.0
-  report_to_comet: true   # set to False when running evaluation only and don't want comet logging
+  report_firezone_metrics: true
+  report_to_comet: true
 
 data:
-  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4"
-  raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_FireExcludeSpotting"
+  raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data"
 
-  train_split: "train_indices.csv"
-  val_split: "val_indices.csv"
+  train_split: ""
+  val_split: ""
   test_split: "test_indices.csv"
 
   batch_size: 64
   num_workers: 2
   valid_mask_threshold: 0.01
   include_patch_metadata: true
+  norm_stats_filename: "dataset_norm_stats_national.json"
 
   input_sources:
     - name: "grid"
@@ -78,6 +82,7 @@ data:
             out_norm: "log_standard"
           - name: "ros"
             out_norm: "log_standard"
+        fuel_curves_filename: "fbp_curves_national_and_NWT_fuel.csv"
         fuel_feats_encoding: "iROS"
         normalize_fuel_feats_ordinal: false
         transforms_list: []
@@ -87,6 +92,7 @@ data:
 
     - name: "spatialized_weather"
       params:
+        #zone_id_remap: {45: 26}
         csv_name: "weather_table_processed.csv"
         feature_names_list:
           - "Temperature"
@@ -111,39 +117,35 @@ data:
         shuffle_seed: 42
         transforms_list: []
         augmentation_prob: 0.0
-
-    - name: "spatialized_fire_size"
-      params:
-        csv_name: "df_fire_fru_processed.csv"
-        feature_names_list: ["NORM_LOG_SIZE_HA"]
-        fire_weather_zone_id_col: "GRIDCODE"
-        quantiles: [0.1, 0.5, 0.9]
-        missing_value_strategy: "global_mean"
+    # - name: "spatialized_fire_size"
+    #   params:
+    #     csv_name: "ObservedFiresizedistribution_FortSimpson_processed.csv"
+    #     feature_names_list: ["NORM_LOG_SIZE_HA"]
+    #     fire_weather_zone_id_col: "GRIDCODE"
+    #     quantiles: [0.1, 0.5, 0.9]
+    #     missing_value_strategy: "global_mean"
 
 logger:
   enabled: true
-  project_name: "nrcan05-wildfireriskmapping"
+  project_name: "nrcan-05-wildfires-nwt-data"
   workspace: "mila-amlrt"
-  experiment_name: "multi_output_spatial_weather_firesize_q3"
+  experiment_name: "multi_task_NWT_data_scenario_FireExcludeSpotting"
   tags:
     - "full_data"
     - "modelling_approach=1"
     - "targets=bp_fi_ros"
     - "output_head=bp_behavior"
-    - "data_samples_v4"
+    - "NWT_data_FireExcludeSpotting_scenario"
     - "ignition=aggregated_human_lightning"
     - "raw_fuel_iROS"
-    - "fire_size=q10_q50_q90"
     - "best_ckpt=bp_ccc_fi_ccc_ros_ccc"
     - "task_weights=0.50_0.25_0.25"
     - "bp_nodata_as_zero=true"
     - "prediction_support_policy=input"
     - "tabular_fusion=spatialized"
-    - "spatialized_sources=weather_fire_size"
+    - "spatialized_sources=weather"
     - "terrain_derivatives=slope_aspect"
     - "wind=vector_components"
-    - "input_patch=256"
-    - "effective_batch=64"
   log_every_n_step: 10
 
 metrics:
@@ -173,4 +175,5 @@ data_prep:
   overlap_ratio: 0.2
   ignition_weighting: "distribution"
   fuel_representation: "raw"
-  mask_scope: "actual"
+  scenario_name: "FireExcludeSpotting"
+  mask_scope: None

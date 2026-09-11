@@ -67,7 +67,7 @@ def test_inference_bp_normalization_uses_training_split_and_zero_minimum(tmp_pat
     (tmp_path / "train_indices.csv").write_text("hex_id\n1\n")
     captured = {}
 
-    def fake_range(root_dir, output_type, allowed_hex_ids, raw_data_dir):
+    def fake_range(root_dir, output_type, allowed_hex_ids, raw_data_dir, **_kwargs):
         captured.update(
             root_dir=root_dir,
             output_type=output_type,
@@ -137,9 +137,46 @@ def test_inference_dataset_uses_training_resources_for_grid_only(tmp_path, monke
         {
             "raw_data_dir": "/training/raw",
             "train_split_csv_name": "train_indices.csv",
+            "norm_stats_filename": "dataset_norm_stats.json",
         },
     )
     assert created_roots["spatialized_weather"] == (str(processed_dir), {})
+
+
+def test_inference_dataset_respects_configured_norm_stats_filename(tmp_path, monkeypatch):
+    processed_dir = tmp_path / "processed"
+    processed_dir.mkdir()
+    (processed_dir / "meta_hex_01.csv").write_text("filename,valid_ratio\npatch.npy,1.0\n")
+    created_roots = {}
+
+    class FakeSource:
+        def __init__(self, root_dir, params, **kwargs):
+            created_roots[params["source_name"]] = (str(root_dir), kwargs)
+
+    monkeypatch.setattr(
+        "inference.run_ai_surrogate_model_hexel_inference.get_data_source_class",
+        lambda _name: FakeSource,
+    )
+    monkeypatch.setattr(
+        "inference.run_ai_surrogate_model_hexel_inference.get_data_source_param_class",
+        lambda name: lambda **_params: {"source_name": name},
+    )
+
+    create_dataset(
+        processed_data_dir=processed_dir,
+        hex_id="01",
+        config_dict={
+            "root_dir": "/training/patches",
+            "raw_data_dir": "/training/raw",
+            "train_split": "train_indices.csv",
+            "filename_col": "filename",
+            "valid_mask_threshold": 0.01,
+            "norm_stats_filename": "custom_norm_stats.json",
+            "input_sources": [{"name": "grid", "params": {}}],
+        },
+    )
+
+    assert created_roots["grid"][1]["norm_stats_filename"] == "custom_norm_stats.json"
 
 
 class ConstantModel(torch.nn.Module):
