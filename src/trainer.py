@@ -638,6 +638,35 @@ class Trainer:
     def test(self, loader: DataLoader, return_predictions: bool = False) -> dict[str, float] | tuple[dict[str, float], np.ndarray]:
         return self.validate(loader, return_predictions=return_predictions)
 
+    def _model_state_compatible(self, saved_state: dict) -> bool:
+        """Whether ``saved_state`` (a ``model_state`` dict from a checkpoint) can be loaded as-is
+        into the current model, i.e. it has exactly the same parameter/buffer names and shapes."""
+        current_state = self.model.state_dict()
+        return saved_state.keys() == current_state.keys() and all(
+            saved_state[key].shape == current_state[key].shape for key in current_state
+        )
+
+    def _last_checkpoint_is_resumable(self) -> bool:
+        """
+        Whether ``save_dir/last.pth`` exists and its ``model_state`` is compatible with the
+        current model architecture, i.e. ``_maybe_resume`` would actually be able to resume
+        from it (rather than silently falling back to epoch 1 with randomly-initialized
+        weights). This is checked from ``_maybe_warm_start`` so an incompatible ``last.pth``
+        (e.g. left over from a run with a different model architecture) doesn't block the
+        configured ``warm_start_checkpoint`` fallback.
+        """
+        if not self.save_dir:
+            return False
+        last_path = os.path.join(self.save_dir, "last.pth")
+        if not os.path.exists(last_path):
+            return False
+        try:
+            checkpoint = torch.load(last_path, map_location=self.device, weights_only=False)
+        except Exception as exc:  # noqa: BLE001 - best-effort compatibility probe
+            print(f"[WarmStart] Could not read {last_path} to check resume compatibility: {exc}")
+            return False
+        return self._model_state_compatible(checkpoint.get("model_state", {}))
+
     def _maybe_warm_start(self) -> None:
         """
         Warm-start model weights from ``config.training.warm_start_checkpoint`` (e.g. a
@@ -650,17 +679,25 @@ class Trainer:
         dataset/hyperparameters and should not be carried over blindly into a
         differently-configured fine-tuning run.
 
-        Skipped if this run's own ``save_dir`` already has a ``last.pth`` to resume
-        from (i.e. this is a continuation of the same fine-tuning run, e.g. after a
-        preemption), so an in-progress fine-tune is never reset back to the warm-start
-        checkpoint.
+        Skipped if this run's own ``save_dir`` already has a ``last.pth`` that is actually
+        resumable (i.e. its ``model_state`` matches the current model architecture), so an
+        in-progress fine-tune is never reset back to the warm-start checkpoint. If
+        ``last.pth`` exists but is *not* resumable (e.g. it was left over from a run with a
+        different model architecture), it is ignored here and the configured
+        ``warm_start_checkpoint`` is used instead; ``_maybe_resume`` will independently detect
+        the same incompatibility later and start the optimizer/epoch counter fresh, so
+        training warm-starts from ``warm_start_checkpoint`` rather than from random
+        initialization.
         """
         warm_start_path = self.config.training.warm_start_checkpoint
         if not warm_start_path:
             return
-        if self.save_dir and os.path.exists(os.path.join(self.save_dir, "last.pth")):
-            print(f"[WarmStart] {os.path.join(self.save_dir, 'last.pth')} exists; resuming that run instead of warm-starting.")
-            return
+        last_path = os.path.join(self.save_dir, "last.pth") if self.save_dir else None
+        if last_path and os.path.exists(last_path):
+            if self._last_checkpoint_is_resumable():
+                print(f"[WarmStart] {last_path} exists and is resumable; resuming that run instead of warm-starting.")
+                return
+            print(f"[WarmStart] {last_path} exists but is not compatible with the current model architecture; ignoring it.")
         if not os.path.exists(warm_start_path):
             raise FileNotFoundError(f"warm_start_checkpoint not found: {warm_start_path}")
 
@@ -669,11 +706,7 @@ class Trainer:
         # default `weights_only=True` restricted unpickler will not load.
         checkpoint = torch.load(warm_start_path, map_location=self.device, weights_only=False)
         saved_state = checkpoint.get("model_state", {})
-        current_state = self.model.state_dict()
-        compatible = saved_state.keys() == current_state.keys() and all(
-            saved_state[key].shape == current_state[key].shape for key in current_state
-        )
-        if not compatible:
+        if not self._model_state_compatible(saved_state):
             raise ValueError(f"warm_start_checkpoint {warm_start_path} is not compatible with the current model architecture.")
 
         self.model.load_state_dict(saved_state)
@@ -724,16 +757,21 @@ class Trainer:
         # default `weights_only=True` restricted unpickler will not load.
         checkpoint = torch.load(last_path, map_location=self.device, weights_only=False)
         saved_state = checkpoint.get("model_state", {})
-        current_state = self.model.state_dict()
-        compatible = saved_state.keys() == current_state.keys() and all(
-            saved_state[key].shape == current_state[key].shape for key in current_state
-        )
-        if not compatible:
+        if not self._model_state_compatible(saved_state):
             print(f"[Resume] {last_path} does not match the current model; starting from scratch.")
             return 1
 
         self.model.load_state_dict(saved_state)
-        self.optimizer.load_state_dict(checkpoint["optimizer_state"])
+        try:
+            self.optimizer.load_state_dict(checkpoint["optimizer_state"])
+        except (ValueError, RuntimeError, KeyError) as exc:
+            # E.g. training.freeze_modules changed since this checkpoint was written, so the
+            # optimizer's parameter groups no longer match. The model weights above are still
+            # valid and already loaded, so continue with a freshly-initialized optimizer/epoch
+            # counter (like a warm start) instead of crashing or silently reverting to random
+            # model initialization.
+            print(f"[Resume] Could not load optimizer state from {last_path} ({exc}); starting a fresh optimizer/epoch count.")
+            return 1
         if lr_scheduler is not None and checkpoint.get("scheduler_state") is not None:
             lr_scheduler.load_state_dict(checkpoint["scheduler_state"])
         if checkpoint.get("best_metric_list"):

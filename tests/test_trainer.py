@@ -649,6 +649,45 @@ def test_warm_start_skipped_when_last_checkpoint_exists(tmp_path, dummy_data):
     assert resumed._maybe_resume() == 2
 
 
+def test_warm_start_used_when_last_checkpoint_is_architecturally_incompatible(tmp_path, dummy_data):
+    """If save_dir/last.pth exists but can't actually be resumed (e.g. a leftover checkpoint
+    from a different model architecture), warm_start_checkpoint should still be applied
+    instead of silently falling back to random initialization."""
+    pretrain_dir = tmp_path / "pretrain"
+    pretrain_dir.mkdir()
+    pretrain_config = _make_config(pretrain_dir)
+    pretrain_config.training.max_epochs = 1
+    pretrain_run = Trainer(pretrain_config, spatial_input_channels=SPATIAL_CHANNELS)
+    patch_trainer(pretrain_run)
+    pretrain_run.run_training(dummy_data, dummy_data)
+    pretrained_state = pretrain_run.model.state_dict()
+
+    # save_dir already has an (incompatible) last.pth from a run with different hidden_features.
+    incompatible_dir = tmp_path / "incompatible"
+    incompatible_dir.mkdir()
+    incompatible_config = _make_config(incompatible_dir)
+    incompatible_config.model.hidden_features = [16, 32]
+    incompatible_config.training.max_epochs = 1
+    incompatible_run = Trainer(incompatible_config, spatial_input_channels=SPATIAL_CHANNELS)
+    patch_trainer(incompatible_run)
+    incompatible_run.run_training(dummy_data, dummy_data)
+    assert (incompatible_dir / "last.pth").exists()
+
+    # Same save_dir, now configured with the original (compatible) architecture and a
+    # warm_start_checkpoint: the incompatible last.pth must not block the warm start.
+    finetune_config = _make_config(incompatible_dir)
+    finetune_config.training.warm_start_checkpoint = str(pretrain_dir / "best.pth")
+    finetuned = Trainer(finetune_config, spatial_input_channels=SPATIAL_CHANNELS)
+    patch_trainer(finetuned)
+
+    for key, value in finetuned.model.state_dict().items():
+        assert torch.equal(value, pretrained_state[key])
+    assert finetuned._best_metric_list == []
+    # _maybe_resume also detects the incompatibility and starts fresh, preserving the
+    # warm-started weights instead of reverting to them being overwritten by chance.
+    assert finetuned._maybe_resume() == 1
+
+
 def test_warm_start_rejects_incompatible_checkpoint(tmp_path, dummy_data):
     pretrain_dir = tmp_path / "pretrain"
     pretrain_dir.mkdir()

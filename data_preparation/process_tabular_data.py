@@ -18,22 +18,18 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-def _resolve_norm_params_path(filename: str, *, search_dirs: tuple[Path, ...], default_dir: Path) -> Path | None:
+def _resolve_norm_params_path(filename: str, *, save_dir: Path) -> Path | None:
     """Resolve a normalization-params file path.
 
     If ``filename`` is empty, returns None (normalization params are not persisted).
-    Otherwise returns the first existing ``<dir>/<filename>`` across ``search_dirs`` so a
-    pre-fitted file (inference/eval-only mode) is picked up regardless of whether it lives in
-    ``root_dir`` or ``save_dir``. When no existing file is found, returns ``default_dir/filename``
-    so scalers can be fitted and saved there (training/first-run mode).
+    Otherwise returns ``save_dir/filename`` if it exists, so a pre-fitted file (inference/eval-only
+    mode, e.g. the regional workflow's national normalization artifacts copied into ``save_dir``) is
+    picked up. When no existing file is found, also returns ``save_dir/filename`` so scalers can be
+    fitted and saved there (training/first-run mode).
     """
     if not filename:
         return None
-    for d in search_dirs:
-        candidate = Path(d) / filename
-        if candidate.exists():
-            return candidate
-    return default_dir / filename
+    return Path(save_dir) / filename
 
 
 def _hex_id_from_weather_path(path: Path) -> str:
@@ -248,12 +244,8 @@ def main():
     weather_save_path = save_dir / args.weather_output_file
     fire_size_save_path = save_dir / args.fire_size_output_file
 
-    weather_norm_params_path = _resolve_norm_params_path(
-        args.weather_norm_params_file, search_dirs=(root_dir, save_dir), default_dir=save_dir
-    )
-    fire_size_norm_params_path = _resolve_norm_params_path(
-        args.fire_size_norm_params_file, search_dirs=(root_dir, save_dir), default_dir=save_dir
-    )
+    weather_norm_params_path = _resolve_norm_params_path(args.weather_norm_params_file, save_dir=save_dir)
+    fire_size_norm_params_path = _resolve_norm_params_path(args.fire_size_norm_params_file, save_dir=save_dir)
 
     # A norm-params file existing on disk means that source is in inference / eval-only mode:
     # its scalers are loaded from the file and the train split is not needed to fit them. Each
