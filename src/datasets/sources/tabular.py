@@ -113,9 +113,10 @@ class TabularSource(DataSource):
         data = patch_info["data"] if "data" in patch_info else np.load(patch_info["file_path"])
         zone_arr = data[:, :, self.zone_channel]
         if self.zone_id_remap:
+            original_zone_arr = zone_arr
             zone_arr = np.copy(zone_arr)
             for old_id, new_id in self.zone_id_remap.items():
-                zone_arr[zone_arr == old_id] = new_id
+                zone_arr[original_zone_arr == old_id] = new_id
         mask = ~np.isnan(zone_arr) & (zone_arr > 0)
         zone_arr = zone_arr[mask]
 

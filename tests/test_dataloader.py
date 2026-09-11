@@ -210,6 +210,34 @@ def test_tabular_source_hex_id_col_isolates_hexels(temp_data_dir):
     assert set(np.unique(sample_hex2)) <= {1000.0, 3000.0}
 
 
+def test_tabular_source_zone_id_remap_does_not_cascade(temp_data_dir):
+    """A remap like {45: 26, 26: 27} must not let the 45->26 write bleed into the 26->27 comparison,
+    which would incorrectly send original zone 45 pixels to 27 instead of 26."""
+    tmpdir, _, _, _, _, _, _, _ = temp_data_dir
+
+    weather_csv = "weather_remap_cascade.csv"
+    pd.DataFrame({"WeatherZone": [26, 27], "Temperature": [26.0, 27.0]}).to_csv(os.path.join(tmpdir, weather_csv), index=False)
+
+    patch = np.zeros((2, 2, 4), dtype=np.float32)
+    patch[:, :, 3] = 45.0  # whole patch is zone 45, should remap to 26 (not cascade to 27)
+    patch_path = os.path.join(tmpdir, "remap_patch.npy")
+    np.save(patch_path, patch)
+
+    params = TabularParams(
+        csv_name=weather_csv,
+        feature_names_list=["Temperature"],
+        fire_weather_zone_id_col="WeatherZone",
+        zone_id_remap={45: 26, 26: 27},
+        fire_weather_zone_selection_approach="mode",
+        num_samples_per_patch=4,
+    )
+    source = TabularSource(root_dir=tmpdir, params=params, modelling_approach="1")
+
+    sample = source.get_sample({"file_path": patch_path})
+
+    assert set(np.unique(sample)) == {26.0}
+
+
 def test_tabular_source_hex_id_col_requires_hex_id_in_patch_info(temp_data_dir):
     tmpdir, _, _, _, _, _, _, _ = temp_data_dir
 
@@ -444,6 +472,35 @@ def test_spatialized_tabular_global_mean_can_use_baseline_csv(temp_data_dir):
     sample = source.get_sample({"file_path": missing_patch_path})
 
     np.testing.assert_allclose(sample[0].numpy(), np.full((4, 4), 2.0, dtype=np.float32))
+
+
+def test_spatialized_tabular_zone_id_remap_does_not_cascade(temp_data_dir):
+    """A remap like {45: 26, 26: 27} must not let the 45->26 write bleed into the 26->27 comparison,
+    which would incorrectly send original zone 45 pixels to 27 instead of 26."""
+    tmpdir, _, _, _, _, _, _, _ = temp_data_dir
+
+    weather_csv = "weather_remap_cascade.csv"
+    pd.DataFrame({"WeatherZone": [26, 27], "Temperature": [26.0, 27.0]}).to_csv(os.path.join(tmpdir, weather_csv), index=False)
+
+    patch = np.zeros((2, 2, 4), dtype=np.float32)
+    patch[0, 0, 3] = 45.0  # should remap to 26
+    patch[0, 1, 3] = 26.0  # should remap to 27
+    patch_path = os.path.join(tmpdir, "remap_patch.npy")
+    np.save(patch_path, patch)
+
+    params = SpatializedTabularParams(
+        csv_name=weather_csv,
+        feature_names_list=["Temperature"],
+        fire_weather_zone_id_col="WeatherZone",
+        zone_id_remap={45: 26, 26: 27},
+        missing_value_strategy="zero",
+    )
+    source = SpatializedTabularSource(root_dir=tmpdir, params=params, modelling_approach="1")
+
+    sample = source.get_sample({"file_path": patch_path})
+
+    assert sample[0, 0, 0].item() == pytest.approx(26.0)
+    assert sample[0, 0, 1].item() == pytest.approx(27.0)
 
 
 def test_spatialized_tabular_lut_includes_all_zones(temp_data_dir):

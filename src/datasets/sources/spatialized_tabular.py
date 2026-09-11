@@ -253,9 +253,10 @@ class SpatializedTabularSource(DataSource):
         data = patch_info["data"] if "data" in patch_info else np.load(patch_info["file_path"], mmap_mode="r")
         zone_grid = np.asarray(data[:, :, self.zone_channel])
         if self.zone_id_remap:
+            original_zone_grid = zone_grid
             zone_grid = np.copy(zone_grid)
             for old_id, new_id in self.zone_id_remap.items():
-                zone_grid[zone_grid == old_id] = new_id
+                zone_grid[original_zone_grid == old_id] = new_id
         height, width = zone_grid.shape
 
         hex_id = _NO_HEX_ID
