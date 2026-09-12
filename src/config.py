@@ -334,6 +334,21 @@ class DataPrepConfig(BaseModel):
         return v
 
 
+class FullMapConfig(BaseModel):
+    """Configuration for the full-Canada map generation/mosaicking tool
+    (src/full_map/)."""
+
+    # Path to the national hexel-polygon shapefile used to place each predicted hexel
+    # raster at its real geographic location when mosaicking.
+    national_shapefile_path: str | None = None
+    # Column in `national_shapefile_path` holding each polygon's hex_id.
+    hexel_id_column: str = "hex_id"
+    # Paths to the already-stitched national ground-truth rasters, keyed by target name
+    # (e.g. "bp", "fi", "ros"). Each is used as both the reference grid for mosaicking that
+    # target's predicted hexels and the comparison raster for that target's diff map.
+    national_gt_raster_paths: dict[str, str] | None = None
+
+
 class Config(BaseModel):
     save_dir: str = "experiments/default"
     base_dir: str = "../yan_bp3"
@@ -349,6 +364,7 @@ class Config(BaseModel):
     logger: LoggerConfig
     metrics: list[str] = ["mse", "mae", "spearman", "ssim"]
     data_prep: DataPrepConfig = Field(default_factory=DataPrepConfig)
+    full_map: FullMapConfig = Field(default_factory=FullMapConfig)
 
     @model_validator(mode="after")
     def validate_target_alignment(self) -> "Config":

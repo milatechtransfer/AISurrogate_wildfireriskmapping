@@ -141,20 +141,20 @@ predicted_hexel_grid, grid_profile = predictor(spatial_batch, auxiliary_batch)
 
 To generate the full Canada hexel map of targets and/or predictions, run the following script (see --help for more args. information):
 
-```python -m src.datasets.postprocessing.full_map.generate_full_hexel_map --data-dir data/ --scale "log" --show_hex_borders --output "experiments/full_canada_map.png"```
+```python -m src.full_map.generate_full_hexel_map --data-dir data/ --scale "log" --show_hex_borders --output "experiments/full_canada_map.png"```
 
 Note that to generate the full Canada maps, the `.tif` files of the hexels are required.
 
 For example, to generate the full maps of ground truth targets (modify the `--data-dir` argument accordingly):
 
-```python -m src.datasets.postprocessing.full_map.generate_full_hexel_map --data-dir <raw_data_folder/> --scale "log" --show_hex_borders --output "full_canada_map_targets.png"```
+```python -m src.full_map.generate_full_hexel_map --data-dir <raw_data_folder/> --scale "log" --show_hex_borders --output "full_canada_map_targets.png"```
 
 Similarly, to generate the full maps of obtained predictions from an AI surrogate model (modify the `--data-dir` argument accordingly):
 
-```python -m src.datasets.postprocessing.full_map.generate_full_hexel_map --data-dir <model_outputs_folder/predicted_hexels> --pattern "*_predicted.tif" --scale "log" --show_hex_borders --output "full_canada_map_preds.png"```
+```python -m src.full_map.generate_full_hexel_map --data-dir <model_outputs_folder/predicted_hexels> --pattern "*_predicted.tif" --scale "log" --show_hex_borders --output "full_canada_map_preds.png"```
 
 You can also specify a fixed range of values for map generations via the `--vmin` and `--vmax` arguments.
 
 Finally, to generate a map of residuals (preds - targets) instead (modify the `--target-dir` and `--pred-dir` arguments accordingly):
 
-```python -m src.datasets.postprocessing.full_map.generate_full_hexel_diff_map --target-dir <raw_data_folder/> --target-pattern hex*/outputs/*_iter_bp.tif --pred-dir <model_outputs_folder/predicted_hexels> --pred-pattern "*_predicted.tif" --output "full_canada_map_diffs.png"```
+```python -m src.full_map.generate_full_hexel_diff_map --target-dir <raw_data_folder/> --target-pattern hex*/outputs/*_iter_bp.tif --pred-dir <model_outputs_folder/predicted_hexels> --pred-pattern "*_predicted.tif" --output "full_canada_map_diffs.png"```
