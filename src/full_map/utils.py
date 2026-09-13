@@ -5,7 +5,8 @@ import geopandas as gpd
 import numpy as np
 import rasterio
 from matplotlib.colors import LogNorm, Normalize
-from rasterio.warp import Resampling, reproject
+from rasterio.warp import Resampling, reproject, transform_bounds
+from rasterio.windows import Window, from_bounds
 
 
 def find_hex_files(folder: Path, pattern: str) -> dict[int, Path]:
@@ -161,25 +162,49 @@ def mosaic_predicted_hexels(
     with rasterio.open(reference_raster_path) as ref_src:
         ref_profile = ref_src.profile.copy()
         ref_nodata = ref_src.nodata if ref_src.nodata is not None else -9999.0
+        ref_crs = ref_src.crs
+        ref_transform = ref_src.transform
         mosaic = np.full((ref_src.height, ref_src.width), ref_nodata, dtype="float32")
 
         for hex_id, hex_path in file_map.items():
             with rasterio.open(hex_path) as hex_src:
                 hex_nodata = hex_src.nodata if hex_src.nodata is not None else -9999.0
-                reprojected = np.full((ref_src.height, ref_src.width), ref_nodata, dtype="float32")
+
+                # Reproject only into the small destination window covering this hexel's
+                # footprint, not the full national canvas. Reprojecting onto a
+                # national-sized array for every one of thousands of hexels is both
+                # extremely memory-hungry (one national-sized float32 array per hexel)
+                # and slow (reproject's cost scales with the destination array size), and
+                # is what was killing this step on the cluster.
+                hex_bounds_in_ref_crs = transform_bounds(hex_src.crs, ref_crs, *hex_src.bounds)
+                window = from_bounds(*hex_bounds_in_ref_crs, transform=ref_transform).round_lengths().round_offsets()
+                # Pad by 1px and clip to the reference raster's extent to avoid dropping
+                # edge pixels to floating-point rounding.
+                col_off = max(int(window.col_off) - 1, 0)
+                row_off = max(int(window.row_off) - 1, 0)
+                col_end = min(int(window.col_off + window.width) + 1, ref_src.width)
+                row_end = min(int(window.row_off + window.height) + 1, ref_src.height)
+                if col_end <= col_off or row_end <= row_off:
+                    print(f"Warning: hex_id={hex_id} ({hex_path.name}) footprint falls outside the reference raster; skipping.")
+                    continue
+
+                dst_window = Window(col_off=col_off, row_off=row_off, width=col_end - col_off, height=row_end - row_off)
+                dst_transform = ref_src.window_transform(dst_window)
+                reprojected = np.full((dst_window.height, dst_window.width), ref_nodata, dtype="float32")
                 reproject(
                     source=rasterio.band(hex_src, 1),
                     destination=reprojected,
                     src_transform=hex_src.transform,
                     src_crs=hex_src.crs,
                     src_nodata=hex_nodata,
-                    dst_transform=ref_src.transform,
-                    dst_crs=ref_src.crs,
+                    dst_transform=dst_transform,
+                    dst_crs=ref_crs,
                     dst_nodata=ref_nodata,
                     resampling=Resampling.nearest,
                 )
             valid = reprojected != ref_nodata
-            mosaic[valid] = reprojected[valid]
+            mosaic_window = mosaic[row_off:row_end, col_off:col_end]
+            mosaic_window[valid] = reprojected[valid]
             print(f"Pasted hex_id={hex_id} ({hex_path.name}) onto national mosaic ({valid.sum()} valid px).")
 
     ref_profile.update(count=1, dtype="float32", nodata=ref_nodata)

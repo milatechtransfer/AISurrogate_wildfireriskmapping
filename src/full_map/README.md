@@ -80,6 +80,27 @@ python -m src.full_map.generate_full_hexel_map --config path/to/config.yaml \
 - Writes one `{target}_national_predicted_map.tif` per target (with a configured GT raster)
   into `--output-dir`. Pass `--save-plots` to also save a `{target}_national_predicted_map.png`
   (`--scale {linear,log}` controls color scaling, `--title` sets the plot title prefix).
+- Each predicted hexel is reprojected only into the small destination window covering its own
+  footprint (not the full national canvas), so memory/compute scale with the number and size
+  of hexels rather than with the national raster size per hexel.
+
+This step is CPU-only (no GPU needed) but can still be memory-hungry for a Canada-wide
+reference raster (one full national float32 array is held in memory per target). Submit it
+as a job rather than running it on the login node:
+
+```bash
+sbatch run_files/full_map/generate_full_hexel_map.sh configs/your_config.yaml
+```
+
+Override `PRED_ROOT`, `OUTPUT_DIR`, or pass extra flags via `MOSAIC_ARGS`, e.g.:
+
+```bash
+MOSAIC_ARGS="--save-plots --scale=log" sbatch run_files/full_map/generate_full_hexel_map.sh configs/your_config.yaml
+```
+
+Adjust the script's `--mem` to comfortably fit `height * width * 4 bytes` for your national
+reference raster (check with
+`python -c "import rasterio; s = rasterio.open('<path>'); print(s.height, s.width, s.height*s.width*4/1e9, 'GB')"`).
 
 ## 3. Diff mosaics against ground truth
 
@@ -96,6 +117,13 @@ python -m src.full_map.generate_full_hexel_diff_map --config path/to/config.yaml
   summary metrics (`ccc`, `spearman`, `normalized_mae`, `n_valid_pixels`) computed over
   pixels valid in both rasters. Pass `--save-plots` for a `{target}_national_diff_map.png`
   (red/blue diverging colormap centered at 0).
+
+This step is also CPU-only but loads two full national rasters into memory per target; submit
+via:
+
+```bash
+sbatch run_files/full_map/generate_full_hexel_diff_map.sh configs/your_config.yaml
+```
 
 ## Module layout
 
