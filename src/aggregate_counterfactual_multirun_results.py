@@ -108,8 +108,22 @@ def extents_match(
     return bool(np.allclose(first, second, rtol=0.0, atol=EXTENT_ABSOLUTE_TOLERANCE_M))
 
 
+def percentage_change(mean_delta: float, mean_baseline: float) -> float:
+    if not np.isfinite(mean_delta) or not np.isfinite(mean_baseline) or mean_baseline == 0.0:
+        return float("nan")
+    return 100.0 * mean_delta / mean_baseline
+
+
 def summarize_response_rows(rows: pd.DataFrame) -> pd.DataFrame:
-    required = {"seed", "scenario", "endpoint", "mean_delta", "mean_absolute_delta"}
+    required = {
+        "seed",
+        "scenario",
+        "endpoint",
+        "mean_baseline",
+        "mean_delta",
+        "mean_absolute_delta",
+        "percentage_change",
+    }
     missing = sorted(required - set(rows.columns))
     if missing:
         raise ValueError(f"Response rows are missing required columns: {missing}.")
@@ -117,10 +131,14 @@ def summarize_response_rows(rows: pd.DataFrame) -> pd.DataFrame:
         rows.groupby(["scenario", "endpoint"], as_index=False)
         .agg(
             seed_count=("seed", "nunique"),
+            mean_baseline=("mean_baseline", "mean"),
+            std_baseline_across_seeds=("mean_baseline", "std"),
             mean_delta=("mean_delta", "mean"),
             std_delta_across_seeds=("mean_delta", "std"),
             mean_absolute_delta=("mean_absolute_delta", "mean"),
             std_absolute_delta_across_seeds=("mean_absolute_delta", "std"),
+            mean_percentage_change=("percentage_change", "mean"),
+            std_percentage_change_across_seeds=("percentage_change", "std"),
         )
         .sort_values(["scenario", "endpoint"])
         .reset_index(drop=True)
@@ -161,7 +179,7 @@ def _scenario_support_kwargs(config: CounterfactualConfig, scenario_name: str) -
     }
 
 
-def _load_seed_delta(
+def _load_seed_response(
     *,
     run: SeedRun,
     config: CounterfactualConfig,
@@ -169,9 +187,9 @@ def _load_seed_delta(
     scenario: str,
     endpoint: str,
     hex_id: str,
-) -> tuple[np.ma.MaskedArray, tuple[float, float, float, float], dict]:
+) -> tuple[np.ma.MaskedArray, np.ma.MaskedArray, tuple[float, float, float, float], dict]:
     prediction_dirs = prediction_dirs_from_index(run.experiment_dir)
-    _, _, _, delta, extent, profile = load_endpoint_response(
+    _, baseline, _, delta, extent, profile = load_endpoint_response(
         run.experiment_dir,
         prediction_dirs,
         hex_id,
@@ -180,7 +198,7 @@ def _load_seed_delta(
         endpoint=endpoint,
         **_scenario_support_kwargs(config, scenario),
     )
-    return delta, extent, profile
+    return baseline, delta, extent, profile
 
 
 def _write_raster(path: Path, array: np.ma.MaskedArray, profile: dict) -> None:
@@ -284,13 +302,14 @@ def aggregate_counterfactual_runs(
     plot_stds: dict[tuple[str, str], np.ma.MaskedArray] = {}
     plot_extents: dict[str, tuple[float, float, float, float]] = {}
     for endpoint in ENDPOINTS:
-        pooled_by_seed: dict[int, list[np.ndarray]] = {run.seed: [] for run in runs}
+        pooled_baseline_by_seed: dict[int, list[np.ndarray]] = {run.seed: [] for run in runs}
+        pooled_delta_by_seed: dict[int, list[np.ndarray]] = {run.seed: [] for run in runs}
         for hex_id in selected_hex_ids:
             seed_deltas = []
             reference_extent = None
             reference_profile = None
             for run in runs:
-                delta, extent, profile = _load_seed_delta(
+                baseline, delta, extent, profile = _load_seed_response(
                     run=run,
                     config=config,
                     raw_data_dir=raw_data_dir,
@@ -303,7 +322,11 @@ def aggregate_counterfactual_runs(
                 reference_extent = extent
                 reference_profile = profile
                 seed_deltas.append(delta)
-                pooled_by_seed[run.seed].append(finite_values(delta))
+                baseline_values = np.asarray(np.ma.asarray(baseline).filled(np.nan), dtype=np.float64)
+                delta_values = np.asarray(np.ma.asarray(delta).filled(np.nan), dtype=np.float64)
+                valid = np.isfinite(baseline_values) & np.isfinite(delta_values)
+                pooled_baseline_by_seed[run.seed].append(baseline_values[valid])
+                pooled_delta_by_seed[run.seed].append(delta_values[valid])
 
             if reference_extent is None or reference_profile is None:
                 raise RuntimeError(f"No seeded responses loaded for endpoint={endpoint!r}, hex_id={hex_id!r}.")
@@ -319,7 +342,14 @@ def aggregate_counterfactual_runs(
             plot_extents[hex_id] = reference_extent
 
         for run in runs:
-            pooled = np.concatenate(pooled_by_seed[run.seed]) if pooled_by_seed[run.seed] else np.array([], dtype=np.float64)
+            pooled_baseline = (
+                np.concatenate(pooled_baseline_by_seed[run.seed]) if pooled_baseline_by_seed[run.seed] else np.array([], dtype=np.float64)
+            )
+            pooled_delta = (
+                np.concatenate(pooled_delta_by_seed[run.seed]) if pooled_delta_by_seed[run.seed] else np.array([], dtype=np.float64)
+            )
+            mean_baseline = float(np.mean(pooled_baseline)) if pooled_baseline.size else float("nan")
+            mean_delta_value = float(np.mean(pooled_delta)) if pooled_delta.size else float("nan")
             response_rows.append(
                 {
                     "run_id": run.run_id,
@@ -327,9 +357,11 @@ def aggregate_counterfactual_runs(
                     "scenario": scenario,
                     "endpoint": endpoint,
                     "hex_ids": ",".join(selected_hex_ids),
-                    "pixel_count": int(pooled.size),
-                    "mean_delta": float(np.mean(pooled)) if pooled.size else float("nan"),
-                    "mean_absolute_delta": float(np.mean(np.abs(pooled))) if pooled.size else float("nan"),
+                    "pixel_count": int(pooled_delta.size),
+                    "mean_baseline": mean_baseline,
+                    "mean_delta": mean_delta_value,
+                    "mean_absolute_delta": float(np.mean(np.abs(pooled_delta))) if pooled_delta.size else float("nan"),
+                    "percentage_change": percentage_change(mean_delta_value, mean_baseline),
                 }
             )
 

@@ -13,6 +13,7 @@ from src.aggregate_counterfactual_multirun_results import (
     aggregate_counterfactual_runs,
     ensemble_mean_std,
     extents_match,
+    percentage_change,
     summarize_response_rows,
 )
 
@@ -46,22 +47,55 @@ def test_extents_match_ignores_submicron_raster_metadata_drift() -> None:
     assert not extents_match(first, (first[0], first[1], first[2] + 0.01, first[3]))
 
 
+def test_percentage_change_uses_mean_baseline() -> None:
+    assert percentage_change(-2.0, 8.0) == pytest.approx(-25.0)
+    assert np.isnan(percentage_change(1.0, 0.0))
+
+
 def test_summarize_response_rows_reports_across_seed_std() -> None:
     rows = pd.DataFrame(
         [
-            {"seed": 42, "scenario": "fuel", "endpoint": "bp", "mean_delta": 1.0, "mean_absolute_delta": 2.0},
-            {"seed": 1337, "scenario": "fuel", "endpoint": "bp", "mean_delta": 2.0, "mean_absolute_delta": 3.0},
-            {"seed": 2024, "scenario": "fuel", "endpoint": "bp", "mean_delta": 3.0, "mean_absolute_delta": 4.0},
+            {
+                "seed": 42,
+                "scenario": "fuel",
+                "endpoint": "bp",
+                "mean_baseline": 10.0,
+                "mean_delta": 1.0,
+                "mean_absolute_delta": 2.0,
+                "percentage_change": 10.0,
+            },
+            {
+                "seed": 1337,
+                "scenario": "fuel",
+                "endpoint": "bp",
+                "mean_baseline": 20.0,
+                "mean_delta": 2.0,
+                "mean_absolute_delta": 3.0,
+                "percentage_change": 20.0,
+            },
+            {
+                "seed": 2024,
+                "scenario": "fuel",
+                "endpoint": "bp",
+                "mean_baseline": 30.0,
+                "mean_delta": 3.0,
+                "mean_absolute_delta": 4.0,
+                "percentage_change": 30.0,
+            },
         ]
     )
 
     summary = summarize_response_rows(rows).iloc[0]
 
     assert summary["seed_count"] == 3
+    assert summary["mean_baseline"] == pytest.approx(20.0)
+    assert summary["std_baseline_across_seeds"] == pytest.approx(10.0)
     assert summary["mean_delta"] == pytest.approx(2.0)
     assert summary["std_delta_across_seeds"] == pytest.approx(1.0)
     assert summary["mean_absolute_delta"] == pytest.approx(3.0)
     assert summary["std_absolute_delta_across_seeds"] == pytest.approx(1.0)
+    assert summary["mean_percentage_change"] == pytest.approx(20.0)
+    assert summary["std_percentage_change_across_seeds"] == pytest.approx(10.0)
 
 
 def test_summarize_response_rows_requires_seed_column() -> None:
@@ -70,8 +104,10 @@ def test_summarize_response_rows_requires_seed_column() -> None:
             {
                 "scenario": "fuel",
                 "endpoint": "bp",
+                "mean_baseline": 10.0,
                 "mean_delta": 1.0,
                 "mean_absolute_delta": 2.0,
+                "percentage_change": 10.0,
             }
         ]
     )
@@ -128,13 +164,15 @@ def test_aggregate_counterfactual_runs_writes_mean_std_outputs(
         "nodata": -9999.0,
     }
 
-    def _fake_load_seed_delta(*, run, **_):
+    def _fake_load_seed_response(*, run, **_):
         value = float(run.run_id + 1)
-        return np.ma.array(np.full((2, 2), value)), (0.0, 200.0, 0.0, 200.0), profile
+        baseline = np.ma.array(np.full((2, 2), 10.0))
+        delta = np.ma.array(np.full((2, 2), value))
+        return baseline, delta, (0.0, 200.0, 0.0, 200.0), profile
 
     monkeypatch.setattr(
-        "src.aggregate_counterfactual_multirun_results._load_seed_delta",
-        _fake_load_seed_delta,
+        "src.aggregate_counterfactual_multirun_results._load_seed_response",
+        _fake_load_seed_response,
     )
 
     output_dir = aggregate_counterfactual_runs(
@@ -147,8 +185,11 @@ def test_aggregate_counterfactual_runs_writes_mean_std_outputs(
 
     response_summary = pd.read_csv(output_dir / "counterfactual_response_summary.csv")
     assert set(response_summary["endpoint"]) == {"bp", "fi", "ros"}
+    assert set(response_summary["mean_baseline"]) == {10.0}
     assert set(response_summary["mean_delta"]) == {2.0}
     assert set(response_summary["std_delta_across_seeds"]) == {1.0}
+    assert set(response_summary["mean_percentage_change"]) == {20.0}
+    assert set(response_summary["std_percentage_change_across_seeds"]) == {10.0}
 
     mean_path = output_dir / "rasters" / "hex16" / "climate_bp_delta_mean.tif"
     std_path = output_dir / "rasters" / "hex16" / "climate_bp_delta_std.tif"
