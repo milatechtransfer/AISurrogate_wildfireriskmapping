@@ -196,6 +196,52 @@ def test_generate_national_mosaics_produces_one_tif_per_target(tmp_path):
     assert np.allclose(fi_mosaic, 10.0)
 
 
+def test_generate_national_mosaics_skip_existing_reuses_prior_tif(tmp_path):
+    # Two independent 2x2 national reference grids, one per target.
+    bp_ref_path = tmp_path / "bp_gt.tif"
+    fi_ref_path = tmp_path / "fi_gt.tif"
+    _write_tif(bp_ref_path, np.full((2, 2), -9999.0, dtype="float32"), from_origin(0, 2, 1, 1))
+    _write_tif(fi_ref_path, np.full((2, 2), -9999.0, dtype="float32"), from_origin(0, 2, 1, 1))
+
+    pred_dir = tmp_path / "predictions"
+    # These would mosaic to 0.9/20.0 if (re)computed -- skip_existing should avoid that for bp.
+    _write_tif(
+        pred_dir / "test" / "predicted_hexels" / "hexel_12_bp_predicted.tif", np.full((2, 2), 0.9, dtype="float32"), from_origin(0, 2, 1, 1)
+    )
+    _write_tif(
+        pred_dir / "test" / "predicted_hexels" / "hexel_12_fi_predicted.tif",
+        np.full((2, 2), 20.0, dtype="float32"),
+        from_origin(0, 2, 1, 1),
+    )
+
+    shapefile_gdf_path = tmp_path / "hexels.shp"
+    gpd.GeoDataFrame({"hex_id": ["12"]}, geometry=[box(0, 0, 2, 2)], crs="EPSG:3978").to_file(shapefile_gdf_path)
+
+    output_dir = tmp_path / "national_mosaics"
+    output_dir.mkdir(parents=True)
+    # Pre-existing bp mosaic from an earlier (killed) run, with a value that would never come
+    # from mosaicking the 0.9-valued predicted hexel above.
+    _write_tif(output_dir / "bp_national_predicted_map.tif", np.full((2, 2), 0.123, dtype="float32"), from_origin(0, 2, 1, 1))
+
+    results = generate_national_mosaics(
+        pred_root=str(pred_dir),
+        pattern="*/predicted_hexels/hexel_*_predicted.tif",
+        shapefile_path=str(shapefile_gdf_path),
+        hexel_id_column="hex_id",
+        reference_raster_paths={"bp": str(bp_ref_path), "fi": str(fi_ref_path)},
+        output_dir=str(output_dir),
+        skip_existing=True,
+    )
+
+    assert set(results.keys()) == {"bp", "fi"}
+    bp_mosaic, _ = results["bp"]
+    fi_mosaic, _ = results["fi"]
+    # bp was skipped, so it should still hold its pre-existing value, not the recomputed 0.9.
+    assert np.allclose(bp_mosaic, 0.123)
+    # fi had no pre-existing output, so it should have been computed normally.
+    assert np.allclose(fi_mosaic, 20.0)
+
+
 def test_mosaic_predicted_hexels_raises_when_no_files_found(tmp_path):
     ref_path = tmp_path / "national_gt.tif"
     _write_tif(ref_path, np.full((2, 2), -9999.0, dtype="float32"), from_origin(0, 2, 1, 1))
@@ -282,3 +328,36 @@ def test_generate_national_diffs_skips_targets_with_missing_mosaic(tmp_path):
 
     # "fi" has no predicted mosaic on disk, so it's skipped rather than raising.
     assert set(all_metrics.keys()) == {"bp"}
+
+
+def test_generate_national_diffs_skip_existing_does_not_recompute(tmp_path):
+    transform = from_origin(0, 2, 1, 1)
+    mosaic_dir = tmp_path / "mosaics"
+    _write_tif(mosaic_dir / "bp_national_predicted_map.tif", np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32"), transform)
+    _write_tif(mosaic_dir / "fi_national_predicted_map.tif", np.array([[10.0, 20.0], [30.0, 40.0]], dtype="float32"), transform)
+
+    gt_dir = tmp_path / "gt"
+    bp_gt_path = gt_dir / "bp_gt.tif"
+    fi_gt_path = gt_dir / "fi_gt.tif"
+    _write_tif(bp_gt_path, np.array([[0.5, 1.5], [2.5, 3.5]], dtype="float32"), transform)
+    _write_tif(fi_gt_path, np.array([[9.0, 19.0], [29.0, 39.0]], dtype="float32"), transform)
+
+    output_dir = tmp_path / "diffs"
+    output_dir.mkdir(parents=True)
+    # Pre-existing bp diff from an earlier (killed) run.
+    _write_tif(output_dir / "bp_national_diff_map.tif", np.array([[0.1, 0.1], [0.1, 0.1]], dtype="float32"), transform)
+
+    all_metrics = generate_national_diffs(
+        mosaic_dir=str(mosaic_dir),
+        national_gt_raster_paths={"bp": str(bp_gt_path), "fi": str(fi_gt_path)},
+        output_dir=str(output_dir),
+        skip_existing=True,
+    )
+
+    # bp was skipped (its diff already existed) so it's omitted from the returned metrics;
+    # fi had no pre-existing diff, so it was computed normally.
+    assert set(all_metrics.keys()) == {"fi"}
+    assert all_metrics["fi"]["normalized_mae"] == pytest.approx(1.0 / np.mean([9.0, 19.0, 29.0, 39.0]))
+    # the pre-existing bp diff file should be untouched.
+    with rasterio.open(output_dir / "bp_national_diff_map.tif") as src:
+        assert np.allclose(src.read(1), 0.1)

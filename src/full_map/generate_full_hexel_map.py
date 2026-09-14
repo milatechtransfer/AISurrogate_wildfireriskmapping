@@ -71,6 +71,7 @@ def generate_national_mosaics(
     title: str | None = None,
     scale: str = "linear",
     save_plots: bool = False,
+    skip_existing: bool = False,
 ) -> dict[str, tuple[np.ndarray, dict]]:
     """
     Builds and saves one real-CRS national predicted-hexel mosaic per target.
@@ -89,9 +90,15 @@ def generate_national_mosaics(
         title: Optional plot title (per target name is appended automatically).
         scale: 'linear' or 'log' color scaling for the optional plots.
         save_plots: If True, also saves a real-coordinate PNG plot per target.
+        skip_existing: If True, skip (re)building a target's mosaic when
+            ``{target}_national_predicted_map.tif`` already exists in ``output_dir`` -- useful
+            for resuming after a job was killed partway through the target loop, without
+            re-mosaicking targets that already finished.
 
     Returns:
-        Mapping of target name -> (mosaic array, rasterio profile).
+        Mapping of target name -> (mosaic array, rasterio profile). Targets skipped via
+        ``skip_existing`` are read back from their existing ``.tif`` so callers still get a
+        complete result set.
     """
     pred_folder = Path(pred_root)
     if not pred_folder.exists():
@@ -111,6 +118,13 @@ def generate_national_mosaics(
             print(f"Warning: no reference/GT raster configured for target {target_name!r}; skipping its mosaic.")
             continue
 
+        output_tif_path = output_folder / f"{target_name}_national_predicted_map.tif"
+        if skip_existing and output_tif_path.exists():
+            print(f"Skipping {target_name!r}: {output_tif_path} already exists (--skip-existing).")
+            with rasterio.open(output_tif_path) as existing_src:
+                results[target_name] = (existing_src.read(1), existing_src.profile.copy())
+            continue
+
         reference_raster_path = reference_raster_paths[target_name]
         mosaic, profile = mosaic_predicted_hexels(
             file_map=file_map,
@@ -119,7 +133,6 @@ def generate_national_mosaics(
             reference_raster_path=reference_raster_path,
         )
 
-        output_tif_path = output_folder / f"{target_name}_national_predicted_map.tif"
         with rasterio.open(output_tif_path, "w", **profile) as dst:
             dst.write(mosaic, 1)
         print(f"Saved {target_name!r} national predicted mosaic to {output_tif_path}")
@@ -152,6 +165,12 @@ def main() -> None:
     parser.add_argument("--save-plots", action="store_true", help="Also save a PNG plot of each target's mosaic.")
     parser.add_argument("--scale", type=str, choices=["log", "linear"], default="linear", help="Color scaling for the optional plots.")
     parser.add_argument("--title", type=str, default=None, help="Optional plot title (target name is appended automatically).")
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip targets whose {target}_national_predicted_map.tif already exists in --output-dir "
+        "(e.g. to resume after a job was killed partway through).",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -170,6 +189,7 @@ def main() -> None:
         title=args.title,
         scale=args.scale,
         save_plots=args.save_plots,
+        skip_existing=args.skip_existing,
     )
 
 

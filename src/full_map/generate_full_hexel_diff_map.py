@@ -124,13 +124,20 @@ def generate_national_diffs(
     output_dir: str,
     title: str | None = None,
     save_plots: bool = False,
+    skip_existing: bool = False,
 ) -> dict[str, dict[str, float]]:
     """
     Diffs every target's national predicted mosaic (``{target}_national_predicted_map.tif`` in
     ``mosaic_dir``, as written by ``generate_full_hexel_map.py``) against that target's
     configured GT raster.
 
-    Returns a mapping of target name -> summary comparison metrics.
+    ``skip_existing``, if True, skips (re)computing a target's diff when
+    ``{target}_national_diff_map.tif`` already exists in ``output_dir`` -- useful for resuming
+    after a job was killed partway through the target loop. Skipped targets are omitted from
+    the returned metrics (no need to recompute metrics for a diff that was already produced).
+
+    Returns a mapping of target name -> summary comparison metrics (only for targets that were
+    (re)computed this run).
     """
     mosaic_folder = Path(mosaic_dir)
     output_folder = Path(output_dir)
@@ -143,8 +150,13 @@ def generate_national_diffs(
             print(f"Warning: no predicted mosaic found for target {target_name!r} at {pred_mosaic_path}; skipping its diff.")
             continue
 
+        diff_output_path = output_folder / f"{target_name}_national_diff_map.tif"
+        if skip_existing and diff_output_path.exists():
+            print(f"Skipping {target_name!r}: {diff_output_path} already exists (--skip-existing).")
+            continue
+
         diff, profile, metrics = compute_national_diff(str(pred_mosaic_path), gt_raster_path)
-        save_diff_raster(diff, profile, str(output_folder / f"{target_name}_national_diff_map.tif"))
+        save_diff_raster(diff, profile, str(diff_output_path))
 
         print(f"National diff summary metrics for target {target_name!r}:")
         for key, value in metrics.items():
@@ -173,6 +185,12 @@ def main() -> None:
     parser.add_argument("--output-dir", type=str, default="experiments/full_map", help="Directory to write one diff .tif per target into.")
     parser.add_argument("--save-plots", action="store_true", help="Also save a PNG diff plot per target.")
     parser.add_argument("--title", type=str, default=None, help="Optional plot title (target name is appended automatically).")
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip targets whose {target}_national_diff_map.tif already exists in --output-dir "
+        "(e.g. to resume after a job was killed partway through).",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -185,6 +203,7 @@ def main() -> None:
         output_dir=args.output_dir,
         title=args.title,
         save_plots=args.save_plots,
+        skip_existing=args.skip_existing,
     )
 
 

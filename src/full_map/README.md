@@ -83,6 +83,10 @@ python -m src.full_map.generate_full_hexel_map --config path/to/config.yaml \
 - Each predicted hexel is reprojected only into the small destination window covering its own
   footprint (not the full national canvas), so memory/compute scale with the number and size
   of hexels rather than with the national raster size per hexel.
+- Pass `--skip-existing` to skip (re)building a target's mosaic if its
+  `{target}_national_predicted_map.tif` already exists in `--output-dir` -- useful for resuming
+  after a job was killed partway through the target loop, without redoing already-finished
+  targets.
 
 This step is CPU-only (no GPU needed) but can still be memory-hungry for a Canada-wide
 reference raster (one full national float32 array is held in memory per target). Submit it
@@ -101,6 +105,8 @@ MOSAIC_ARGS="--save-plots --scale=log" sbatch run_files/full_map/generate_full_h
 Adjust the script's `--mem` to comfortably fit `height * width * 4 bytes` for your national
 reference raster (check with
 `python -c "import rasterio; s = rasterio.open('<path>'); print(s.height, s.width, s.height*s.width*4/1e9, 'GB')"`).
+At 100m resolution and a full Canada-wide extent (~55,000 x 46,000 px), that's ~10GB, so the
+default 48Gb has comfortable headroom; a smaller/regional reference raster needs much less.
 
 ## 3. Diff mosaics against ground truth
 
@@ -117,6 +123,9 @@ python -m src.full_map.generate_full_hexel_diff_map --config path/to/config.yaml
   summary metrics (`ccc`, `spearman`, `normalized_mae`, `n_valid_pixels`) computed over
   pixels valid in both rasters. Pass `--save-plots` for a `{target}_national_diff_map.png`
   (red/blue diverging colormap centered at 0).
+- Pass `--skip-existing` to skip (re)computing a target's diff if its
+  `{target}_national_diff_map.tif` already exists in `--output-dir` (e.g. to resume after a
+  killed job). Skipped targets are omitted from the returned metrics dict.
 
 This step is also CPU-only but loads two full national rasters into memory per target; submit
 via:

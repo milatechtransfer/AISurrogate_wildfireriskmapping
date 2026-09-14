@@ -13,14 +13,19 @@
 set -euo pipefail
 
 # This step is CPU-only (no model/GPU involved) but still loads two full national-grid
-# rasters (predicted mosaic + ground truth) into memory per target, sequentially.
-# Adjust --mem above to comfortably fit 2x (height * width * 4 bytes) for your rasters.
+# rasters (predicted mosaic + ground truth) into memory per target, sequentially, plus a
+# few numpy temporaries (masked arrays, diff array, valid mask) during the diff/metrics
+# computation. For a Canada-wide raster at 100m resolution (~55,000 x 46,000 px, ~10GB
+# each) peak usage is roughly 40-50GB -- 64Gb gives comfortable headroom. Adjust --mem to
+# fit 2-3x (height * width * 4 bytes) for your actual rasters.
 
 # Capture the first argument, default to the common pipeline config.
 CONFIG_FILE=${1:-configs/bp_common_input_pipeline.yaml}
 MOSAIC_DIR=${MOSAIC_DIR:-experiments/full_map}
 OUTPUT_DIR=${OUTPUT_DIR:-experiments/full_map}
 # Example: DIFF_ARGS="--save-plots --title='Burn Probability'"
+# To resume after a killed job without redoing already-finished targets:
+#   DIFF_ARGS="--skip-existing"
 DIFF_ARGS=${DIFF_ARGS:-}
 
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
