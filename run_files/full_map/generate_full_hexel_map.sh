@@ -26,8 +26,9 @@ CONFIG_FILE=${1:-configs/bp_common_input_pipeline.yaml}
 PRED_ROOT=${PRED_ROOT:-}
 OUTPUT_DIR=${OUTPUT_DIR:-experiments/full_map}
 # Example: MOSAIC_ARGS="--save-plots --scale=log --title='Burn Probability'"
-# To resume after a killed job without redoing already-finished targets:
-#   MOSAIC_ARGS="--skip-existing"
+# Resuming is automatic: existing {target}_national_predicted_map.tif files are skipped by
+# default. To force a full recompute instead, use:
+#   MOSAIC_ARGS="--force-recompute"
 MOSAIC_ARGS=${MOSAIC_ARGS:-}
 
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"

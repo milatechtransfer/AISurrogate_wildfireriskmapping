@@ -124,7 +124,7 @@ def generate_national_diffs(
     output_dir: str,
     title: str | None = None,
     save_plots: bool = False,
-    skip_existing: bool = False,
+    skip_existing: bool = True,
 ) -> dict[str, dict[str, float]]:
     """
     Diffs every target's national predicted mosaic (``{target}_national_predicted_map.tif`` in
@@ -186,10 +186,10 @@ def main() -> None:
     parser.add_argument("--save-plots", action="store_true", help="Also save a PNG diff plot per target.")
     parser.add_argument("--title", type=str, default=None, help="Optional plot title (target name is appended automatically).")
     parser.add_argument(
-        "--skip-existing",
+        "--force-recompute",
         action="store_true",
-        help="Skip targets whose {target}_national_diff_map.tif already exists in --output-dir "
-        "(e.g. to resume after a job was killed partway through).",
+        help="Recompute every target's diff even if {target}_national_diff_map.tif already exists "
+        "in --output-dir. By default, existing diffs are skipped (resume behavior).",
     )
     args = parser.parse_args()
 
@@ -203,7 +203,7 @@ def main() -> None:
         output_dir=args.output_dir,
         title=args.title,
         save_plots=args.save_plots,
-        skip_existing=args.skip_existing,
+        skip_existing=not args.force_recompute,
     )
 
 

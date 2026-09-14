@@ -71,7 +71,7 @@ def generate_national_mosaics(
     title: str | None = None,
     scale: str = "linear",
     save_plots: bool = False,
-    skip_existing: bool = False,
+    skip_existing: bool = True,
 ) -> dict[str, tuple[np.ndarray, dict]]:
     """
     Builds and saves one real-CRS national predicted-hexel mosaic per target.
@@ -166,10 +166,10 @@ def main() -> None:
     parser.add_argument("--scale", type=str, choices=["log", "linear"], default="linear", help="Color scaling for the optional plots.")
     parser.add_argument("--title", type=str, default=None, help="Optional plot title (target name is appended automatically).")
     parser.add_argument(
-        "--skip-existing",
+        "--force-recompute",
         action="store_true",
-        help="Skip targets whose {target}_national_predicted_map.tif already exists in --output-dir "
-        "(e.g. to resume after a job was killed partway through).",
+        help="Recompute every target's mosaic even if {target}_national_predicted_map.tif already exists "
+        "in --output-dir. By default, existing mosaics are skipped and read back instead (resume behavior).",
     )
     args = parser.parse_args()
 
@@ -189,7 +189,7 @@ def main() -> None:
         title=args.title,
         scale=args.scale,
         save_plots=args.save_plots,
-        skip_existing=args.skip_existing,
+        skip_existing=not args.force_recompute,
     )
 
 

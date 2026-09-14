@@ -24,8 +24,9 @@ CONFIG_FILE=${1:-configs/bp_common_input_pipeline.yaml}
 MOSAIC_DIR=${MOSAIC_DIR:-experiments/full_map}
 OUTPUT_DIR=${OUTPUT_DIR:-experiments/full_map}
 # Example: DIFF_ARGS="--save-plots --title='Burn Probability'"
-# To resume after a killed job without redoing already-finished targets:
-#   DIFF_ARGS="--skip-existing"
+# Resuming is automatic: existing {target}_national_diff_map.tif files are skipped by default.
+# To force a full recompute instead, use:
+#   DIFF_ARGS="--force-recompute"
 DIFF_ARGS=${DIFF_ARGS:-}
 
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"

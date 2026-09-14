@@ -83,10 +83,10 @@ python -m src.full_map.generate_full_hexel_map --config path/to/config.yaml \
 - Each predicted hexel is reprojected only into the small destination window covering its own
   footprint (not the full national canvas), so memory/compute scale with the number and size
   of hexels rather than with the national raster size per hexel.
-- Pass `--skip-existing` to skip (re)building a target's mosaic if its
-  `{target}_national_predicted_map.tif` already exists in `--output-dir` -- useful for resuming
-  after a job was killed partway through the target loop, without redoing already-finished
-  targets.
+- By default (resume-friendly), a target's mosaic is skipped and read back if its
+  `{target}_national_predicted_map.tif` already exists in `--output-dir` -- useful after a job
+  was killed partway through the target loop, so already-finished targets aren't redone. Pass
+  `--force-recompute` to always rebuild every target's mosaic regardless of existing files.
 
 This step is CPU-only (no GPU needed) but can still be memory-hungry for a Canada-wide
 reference raster (one full national float32 array is held in memory per target). Submit it
@@ -123,9 +123,10 @@ python -m src.full_map.generate_full_hexel_diff_map --config path/to/config.yaml
   summary metrics (`ccc`, `spearman`, `normalized_mae`, `n_valid_pixels`) computed over
   pixels valid in both rasters. Pass `--save-plots` for a `{target}_national_diff_map.png`
   (red/blue diverging colormap centered at 0).
-- Pass `--skip-existing` to skip (re)computing a target's diff if its
-  `{target}_national_diff_map.tif` already exists in `--output-dir` (e.g. to resume after a
-  killed job). Skipped targets are omitted from the returned metrics dict.
+- By default (resume-friendly), a target's diff is skipped if its
+  `{target}_national_diff_map.tif` already exists in `--output-dir` (e.g. after a killed job);
+  skipped targets are omitted from the returned metrics dict. Pass `--force-recompute` to
+  always recompute every target's diff regardless of existing files.
 
 This step is also CPU-only but loads two full national rasters into memory per target; submit
 via:
