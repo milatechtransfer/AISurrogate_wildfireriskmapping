@@ -135,11 +135,42 @@ via:
 sbatch run_files/full_map/generate_full_hexel_diff_map.sh configs/your_config.yaml
 ```
 
+## Visualizing a saved mosaic or diff map
+
+Both step 2 and step 3 can already save a plot inline via `--save-plots`, but if you just have
+a `.tif` sitting around (e.g. produced on the cluster and now being explored locally) and want
+to (re-)plot it without config/reference-raster setup, use `visualize_mosaic.py`:
+
+```bash
+python -m src.full_map.visualize_mosaic \
+    --tif experiments/full_map/bp_national_predicted_map.tif \
+    --output experiments/full_map/bp_national_predicted_map.png \
+    --scale log --title "Burn Probability"
+
+# Diff rasters (prediction - GT) use a red/blue diverging colormap centered at 0 instead:
+python -m src.full_map.visualize_mosaic \
+    --tif experiments/full_map/bp_national_diff_map.tif \
+    --output experiments/full_map/bp_national_diff_map.png \
+    --diff --title "Burn Probability Diff"
+```
+
+It reads bounds/CRS/nodata straight from the raster file itself, so it works on any saved
+mosaic or diff `.tif` independent of the pipeline run that produced it. `plot_raster(...)` can
+also be called directly (e.g. from a notebook) for the same behavior.
+
+**Memory:** a full Canada-wide 100m raster is ~55,000 x 46,000 px (~10GB as float32) -- reading
+it at full resolution just to make a PNG is easily enough to crash a laptop/VS Code. By default
+`--max-dim 2000` caps the larger dimension to 2000px: GDAL decodes directly at that reduced
+resolution (nearest-neighbor, so nodata isn't blended into valid pixels), so the full-resolution
+array is never loaded into memory. Lower `--max-dim` further (e.g. `500`) if it's still too
+heavy, or set `--max-dim 0 --downsample 1` to force a full-resolution read.
+
 ## Module layout
 
 - `generate_predictions.py` — inference + per-hexel raster/metric export (step 1)
 - `generate_full_hexel_map.py` — `generate_national_mosaics(...)`, real-CRS mosaicking (step 2)
 - `generate_full_hexel_diff_map.py` — `generate_national_diffs(...)` / `compute_national_diff`, GT comparison (step 3)
+- `visualize_mosaic.py` — `plot_raster(...)`, standalone plotting for any saved mosaic/diff `.tif`
 - `utils.py` — shared helpers: `load_hexel_shapefile`, `group_predicted_hexel_files_by_target`,
   `mosaic_predicted_hexels`, `calculate_global_stats`, `get_scale_settings`
 

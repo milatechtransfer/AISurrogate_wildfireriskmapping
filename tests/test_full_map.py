@@ -14,6 +14,7 @@ from src.full_map.generate_full_hexel_diff_map import compute_national_diff, gen
 from src.full_map.generate_full_hexel_map import generate_national_mosaics
 from src.full_map.generate_predictions import reshape_hexel_metrics_to_wide
 from src.full_map.utils import group_predicted_hexel_files_by_target, load_hexel_shapefile, mosaic_predicted_hexels
+from src.full_map.visualize_mosaic import plot_raster
 
 
 def _write_tif(path: Path, array: np.ndarray, transform, crs="EPSG:3978", nodata: float = -9999.0) -> None:
@@ -361,3 +362,41 @@ def test_generate_national_diffs_skip_existing_does_not_recompute(tmp_path):
     # the pre-existing bp diff file should be untouched.
     with rasterio.open(output_dir / "bp_national_diff_map.tif") as src:
         assert np.allclose(src.read(1), 0.1)
+
+
+def test_plot_raster_saves_png_for_prediction_and_diff(tmp_path):
+    transform = from_origin(0, 2, 1, 1)
+    pred_path = tmp_path / "bp_national_predicted_map.tif"
+    diff_path = tmp_path / "bp_national_diff_map.tif"
+    _write_tif(pred_path, np.array([[0.1, 0.5], [0.9, -9999.0]], dtype="float32"), transform)
+    _write_tif(diff_path, np.array([[-0.2, 0.0], [0.3, -9999.0]], dtype="float32"), transform)
+
+    pred_out = tmp_path / "bp_national_predicted_map.png"
+    diff_out = tmp_path / "bp_national_diff_map.png"
+    plot_raster(str(pred_path), str(pred_out), title="Burn Probability", scale="linear")
+    plot_raster(str(diff_path), str(diff_out), title="Burn Probability Diff", diff=True)
+
+    assert pred_out.exists()
+    assert diff_out.exists()
+
+
+def test_plot_raster_raises_when_all_pixels_are_nodata(tmp_path):
+    transform = from_origin(0, 2, 1, 1)
+    empty_path = tmp_path / "empty.tif"
+    _write_tif(empty_path, np.full((2, 2), -9999.0, dtype="float32"), transform)
+
+    with pytest.raises(ValueError, match="No valid"):
+        plot_raster(str(empty_path), str(tmp_path / "out.png"))
+
+
+def test_plot_raster_downsamples_large_raster_via_max_dim(tmp_path):
+    from src.full_map.visualize_mosaic import _read_downsampled
+
+    transform = from_origin(0, 100, 1, 1)
+    large_path = tmp_path / "large_national_predicted_map.tif"
+    _write_tif(large_path, np.random.rand(100, 100).astype("float32"), transform)
+
+    band, _, _ = _read_downsampled(str(large_path), downsample=1, max_dim=10)
+
+    # GDAL should have decoded directly at (close to) the requested cap, not the full 100x100.
+    assert max(band.shape) <= 10
