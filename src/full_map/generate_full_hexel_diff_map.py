@@ -22,6 +22,7 @@ import yaml
 from matplotlib.colors import TwoSlopeNorm
 
 from src.config import Config
+from src.full_map.utils import mask_nodata
 from src.metrics import compute_ccc, compute_normalized_mae, compute_spearman
 
 
@@ -35,7 +36,7 @@ def _read_masked(path: str) -> tuple[np.ma.MaskedArray, dict, rasterio.coords.Bo
     with rasterio.open(path) as src:
         arr = src.read(1)
         nodata = src.nodata
-        arr = np.ma.masked_equal(arr, nodata) if nodata is not None else np.ma.masked_invalid(arr)
+        arr = mask_nodata(arr, nodata) if nodata is not None else np.ma.masked_invalid(arr)
         return arr, src.profile.copy(), src.bounds
 
 

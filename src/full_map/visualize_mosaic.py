@@ -33,7 +33,7 @@ import rasterio
 from matplotlib.colors import Normalize, TwoSlopeNorm
 from rasterio.enums import Resampling
 
-from src.full_map.utils import get_scale_settings
+from src.full_map.utils import get_scale_settings, mask_nodata
 
 
 def _read_downsampled(tif_path: str, downsample: int, max_dim: int | None) -> tuple[np.ndarray, float, "rasterio.coords.BoundingBox"]:
@@ -93,7 +93,7 @@ def plot_raster(
     """
     band, nodata, bounds = _read_downsampled(tif_path, downsample=downsample, max_dim=max_dim)
 
-    masked = np.ma.masked_equal(band, nodata)
+    masked = mask_nodata(band, nodata)
     valid = masked.compressed()
     if valid.size == 0:
         raise ValueError(f"No valid (non-nodata) pixels found in {tif_path}.")

@@ -400,3 +400,46 @@ def test_plot_raster_downsamples_large_raster_via_max_dim(tmp_path):
 
     # GDAL should have decoded directly at (close to) the requested cap, not the full 100x100.
     assert max(band.shape) <= 10
+
+
+def test_mosaic_predicted_hexels_nan_nodata_does_not_overwrite_valid_pixels(tmp_path):
+    """Regression test: when the reference (national GT) raster uses nodata=NaN (as real
+    BP/FI national rasters do), a naive `reprojected != nodata` check is always True for NaN
+    (since `nan != nan`), so padded background NaN pixels from a *later*-processed hexel's
+    destination window can incorrectly overwrite an *earlier*-processed neighboring hexel's
+    already-valid pixels. This must not happen."""
+    ref_transform = from_origin(0, 4, 1, 1)
+    ref_array = np.full((4, 4), np.nan, dtype="float32")
+    ref_path = tmp_path / "national_gt_nan_nodata.tif"
+    _write_tif(ref_path, ref_array, ref_transform, nodata=np.nan)
+
+    pred_dir = tmp_path / "predictions"
+    hex12_transform = from_origin(0, 4, 1, 1)  # top-left quadrant
+    hex12_array = np.full((2, 2), 0.5, dtype="float32")
+    hex12_path = pred_dir / "predicted_hexels" / "hexel_12_predicted.tif"
+    _write_tif(hex12_path, hex12_array, hex12_transform)
+
+    hex7_transform = from_origin(2, 2, 1, 1)  # bottom-right quadrant, processed after hex12
+    hex7_array = np.full((2, 2), 0.8, dtype="float32")
+    hex7_path = pred_dir / "predicted_hexels" / "hexel_7_predicted.tif"
+    _write_tif(hex7_path, hex7_array, hex7_transform)
+
+    shapefile_gdf = gpd.GeoDataFrame(
+        {"hex_id": ["12", "7"]},
+        geometry=[box(0, 2, 2, 4), box(2, 0, 4, 2)],
+        crs="EPSG:3978",
+    )
+
+    mosaic, profile = mosaic_predicted_hexels(
+        file_map={12: hex12_path, 7: hex7_path},
+        shapefile_gdf=shapefile_gdf,
+        hexel_id_column="hex_id",
+        reference_raster_path=str(ref_path),
+    )
+
+    assert np.isnan(profile["nodata"])
+    # hex12's valid pixels must survive hex7 being pasted afterwards.
+    assert np.allclose(mosaic[0:2, 0:2], 0.5)
+    assert np.allclose(mosaic[2:4, 2:4], 0.8)
+    # untouched region remains nodata (NaN).
+    assert np.all(np.isnan(mosaic[0:2, 2:4]))

@@ -28,7 +28,7 @@ import rasterio
 import yaml
 
 from src.config import Config
-from src.full_map.utils import group_predicted_hexel_files_by_target
+from src.full_map.utils import group_predicted_hexel_files_by_target, mask_nodata, valid_pixel_mask
 
 
 def load_config(path: str) -> Config:
@@ -41,8 +41,9 @@ def _describe_raster(path: str, label: str) -> np.ndarray:
     with rasterio.open(path) as src:
         band = src.read(1)
         nodata = src.nodata if src.nodata is not None else -9999.0
-        n_nodata = int((band == nodata).sum())
-        valid = band[band != nodata]
+        valid_mask = valid_pixel_mask(band, nodata)
+        n_nodata = int((~valid_mask).sum())
+        valid = band[valid_mask]
         print(f"[{label}] path={path}")
         print(f"  shape={band.shape} transform={src.transform} crs={src.crs} nodata={src.nodata}")
         print(f"  nodata px: {n_nodata}/{band.size} ({100 * n_nodata / band.size:.1f}%)")
@@ -94,7 +95,7 @@ def main() -> None:
 
         with rasterio.open(file_map[args.hex_id]) as src:
             nodata = src.nodata if src.nodata is not None else -9999.0
-        masked = np.ma.masked_equal(band, nodata)
+        masked = mask_nodata(band, nodata)
         im = ax.imshow(masked)
         ax.set_title(f"{target} (hex {args.hex_id})")
         ax.axis("off")

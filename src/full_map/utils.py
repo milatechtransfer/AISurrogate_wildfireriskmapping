@@ -9,6 +9,28 @@ from rasterio.warp import Resampling, reproject, transform_bounds
 from rasterio.windows import Window, from_bounds
 
 
+def valid_pixel_mask(array: np.ndarray, nodata: float | None) -> np.ndarray:
+    """Boolean mask of "valid" (non-nodata) pixels in `array`.
+
+    Handles a NaN `nodata` sentinel correctly: a plain `array != nodata` comparison is always
+    True when `nodata` is NaN (since `nan != nan` in numpy/IEEE-754), which silently treats
+    every pixel -- including genuine nodata background -- as valid. This is what caused
+    mosaicked bp/fi national maps (whose GT rasters use `nodata=nan`) to have gaps: reprojected
+    background NaN pixels were incorrectly pasted over already-valid neighboring hexels' data.
+    """
+    if nodata is None:
+        return np.isfinite(array)
+    if isinstance(nodata, float) and np.isnan(nodata):
+        return ~np.isnan(array)
+    return array != nodata
+
+
+def mask_nodata(array: np.ndarray, nodata: float | None) -> np.ma.MaskedArray:
+    """Masked-array view of `array` with nodata pixels masked, NaN-nodata-safe (see
+    `valid_pixel_mask`) -- use in place of `np.ma.masked_equal(array, nodata)`."""
+    return np.ma.masked_array(array, mask=~valid_pixel_mask(array, nodata))
+
+
 def find_hex_files(folder: Path, pattern: str) -> dict[int, Path]:
     """Scans a folder for files matching the pattern."""
     files = list(folder.glob(pattern))
@@ -72,7 +94,7 @@ def calculate_global_stats(file_map: dict[int, Path]) -> tuple[float, float]:
                 data = src.read(1)
 
                 if src.nodata is not None:
-                    data = np.ma.masked_equal(data, src.nodata)
+                    data = mask_nodata(data, src.nodata)
 
                 if data.count() == 0:
                     continue
@@ -202,7 +224,7 @@ def mosaic_predicted_hexels(
                     dst_nodata=ref_nodata,
                     resampling=Resampling.nearest,
                 )
-            valid = reprojected != ref_nodata
+            valid = valid_pixel_mask(reprojected, ref_nodata)
             mosaic_window = mosaic[row_off:row_end, col_off:col_end]
             mosaic_window[valid] = reprojected[valid]
             print(f"Pasted hex_id={hex_id} ({hex_path.name}) onto national mosaic ({valid.sum()} valid px).")

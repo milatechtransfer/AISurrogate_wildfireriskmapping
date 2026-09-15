@@ -87,6 +87,13 @@ python -m src.full_map.generate_full_hexel_map --config path/to/config.yaml \
   `{target}_national_predicted_map.tif` already exists in `--output-dir` -- useful after a job
   was killed partway through the target loop, so already-finished targets aren't redone. Pass
   `--force-recompute` to always rebuild every target's mosaic regardless of existing files.
+- **NaN-nodata safe**: nodata comparisons in this module use `valid_pixel_mask`/`mask_nodata`
+  (not `np.ma.masked_equal`/`array != nodata`), because a plain equality/inequality check
+  against a NaN nodata sentinel is always `False`/`True` respectively in numpy (`nan != nan` is
+  `True`). Some national GT rasters (e.g. bp/fi) use `nodata=nan` while others (e.g. ros) use a
+  real numeric sentinel -- without this, reprojected background NaN pixels from a hexel
+  processed later could silently overwrite an already-pasted neighboring hexel's valid data,
+  producing gaps in the mosaic for NaN-nodata targets only.
 
 This step is CPU-only (no GPU needed) but can still be memory-hungry for a Canada-wide
 reference raster (one full national float32 array is held in memory per target). Submit it

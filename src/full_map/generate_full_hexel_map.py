@@ -24,6 +24,7 @@ from src.full_map.utils import (
     get_scale_settings,
     group_predicted_hexel_files_by_target,
     load_hexel_shapefile,
+    mask_nodata,
     mosaic_predicted_hexels,
 )
 
@@ -36,7 +37,7 @@ def load_config(path: str) -> Config:
 
 def _plot_mosaic(mosaic: np.ndarray, profile: dict, reference_raster_path: str, output_path: str, title: str | None, scale: str) -> None:
     nodata = profile.get("nodata", -9999.0)
-    masked = np.ma.masked_equal(mosaic, nodata)
+    masked = mask_nodata(mosaic, nodata)
     valid = masked.compressed()
     pos_min = float(valid[valid > 0].min()) if valid[valid > 0].size else 1e-6
     global_max = float(valid.max()) if valid.size else 1.0
