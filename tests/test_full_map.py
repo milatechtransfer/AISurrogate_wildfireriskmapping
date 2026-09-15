@@ -284,6 +284,42 @@ def test_compute_national_diff_computes_pixelwise_error_over_valid_region(tmp_pa
     assert profile["nodata"] == -9999.0
 
 
+def test_compute_national_diff_handles_integer_dtype_gt_raster(tmp_path):
+    """Regression test: some GT rasters (e.g. ros) are stored as an integer dtype with a
+    numeric nodata sentinel (e.g. uint8/255) rather than float32/NaN. Filling nodata with NaN
+    on an integer-dtype masked array used to raise `TypeError: Cannot convert fill_value nan to
+    dtype uint8`; the diff must be computed in floating point regardless of the GT dtype."""
+    transform = from_origin(0, 2, 1, 1)
+    pred_array = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
+    gt_array = np.array([[0, 1], [2, 255]], dtype="uint8")
+
+    pred_path = tmp_path / "pred_mosaic.tif"
+    gt_path = tmp_path / "national_gt.tif"
+    _write_tif(pred_path, pred_array, transform)
+    with rasterio.open(
+        gt_path,
+        "w",
+        driver="GTiff",
+        height=gt_array.shape[0],
+        width=gt_array.shape[1],
+        count=1,
+        dtype="uint8",
+        crs="EPSG:3978",
+        transform=transform,
+        nodata=255,
+    ) as dst:
+        dst.write(gt_array, 1)
+
+    diff, profile, metrics = compute_national_diff(str(pred_path), str(gt_path))
+
+    # only 3 of 4 pixels are valid (the 4th is nodata=255 in the GT raster)
+    assert metrics["n_valid_pixels"] == 3
+    assert diff[0, 0] == pytest.approx(1.0)
+    assert diff[0, 1] == pytest.approx(1.0)
+    assert diff[1, 0] == pytest.approx(1.0)
+    assert diff.mask[1, 1]
+
+
 def test_generate_national_diffs_produces_one_result_per_target(tmp_path):
     transform = from_origin(0, 2, 1, 1)
     mosaic_dir = tmp_path / "mosaics"

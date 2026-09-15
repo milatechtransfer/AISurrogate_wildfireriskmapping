@@ -54,7 +54,11 @@ def compute_national_diff(pred_path: str, gt_path: str) -> tuple[np.ma.MaskedArr
         raise ValueError(f"Prediction mosaic bounds {pred_bounds} do not match GT raster bounds {gt_bounds}. Are they on the same grid?")
 
     valid = ~np.ma.getmaskarray(pred_arr) & ~np.ma.getmaskarray(gt_arr)
-    diff = np.ma.masked_array(pred_arr.filled(np.nan) - gt_arr.filled(np.nan), mask=~valid)
+    # Cast to float before filling with NaN: integer-dtype rasters (e.g. ros GT, which uses a
+    # uint8 array with nodata=255) cannot hold a NaN fill value.
+    pred_float = np.ma.filled(pred_arr.astype(np.float64), np.nan)
+    gt_float = np.ma.filled(gt_arr.astype(np.float64), np.nan)
+    diff = np.ma.masked_array(pred_float - gt_float, mask=~valid)
 
     out_profile = gt_profile.copy()
     out_profile.update(count=1, dtype="float32", nodata=-9999.0)
