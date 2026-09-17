@@ -293,14 +293,15 @@ def test_hazard_eval_config_parses_and_references_model_config():
     assert config.stitch_mode == "mean"
 
 
-def test_hazard_q3_multiseed_config_uses_prediction_max_on_actual_support():
+def test_hazard_q3_multiseed_config_uses_separate_gt_and_prediction_maxima():
     config = _load_hazard_eval_config(HAZARD_Q3_EVAL_CONFIG)
 
     assert config.model.config_path == "configs/multi_output_spatial_weather_firesize_q3.yaml"
     assert config.model.checkpoint_dir is not None
     assert config.model.checkpoint_dir.endswith("unet_256_firesize_q3")
     assert config.mask_scope == "actual"
-    assert config.scale_denominator_source == "prediction"
+    assert config.scale_denominator_source == "all_raw_ground_truth"
+    assert config.self_normalized_prediction is True
 
 
 def test_hazard_eval_config_defaults():
