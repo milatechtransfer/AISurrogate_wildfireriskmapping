@@ -24,6 +24,6 @@ scale_denominator: null
 scale_denominator_source: "all_raw_ground_truth"
 reference_denominator_path: null
 # Scale each seed's predictions separately by its maximum over actual-area test hexels.
-self_normalized_prediction: true
+self_normalized_prediction: false
 
 save_hazard_map: true
