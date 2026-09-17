@@ -19,9 +19,11 @@ model:
 fi_cap: 10000.0
 scale_to: 100.0
 bin_thresholds: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0]
+# Scale GT by the maximum raw GT hazard across every raw-data hexel.
 scale_denominator: null
-scale_denominator_source: "prediction"
+scale_denominator_source: "all_raw_ground_truth"
 reference_denominator_path: null
+# Use the same dataset-wide GT denominator for predictions.
 self_normalized_prediction: false
 
 save_hazard_map: true
