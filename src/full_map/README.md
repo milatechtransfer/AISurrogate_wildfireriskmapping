@@ -142,6 +142,43 @@ via:
 sbatch run_files/full_map/generate_full_hexel_diff_map.sh configs/your_config.yaml
 ```
 
+## 4. National hazard map (BP x FI)
+
+Hazard (`hazard = BP x min(FI, fi_cap)`, scaled and binned into NRCan-style hazard classes,
+see `src/datasets/postprocessing/hazard.py`) is computed directly from the already-mosaicked
+national `bp`/`fi` rasters -- both the step-2 predicted mosaics and the configured GT rasters --
+so no separate per-hexel/all-split hazard reconstruction pipeline is needed. (Hexel-level BP/FI
+hazard diagnostics for the test split, if you want those separately, are still available via
+`src/evaluate_hazard.py`.)
+
+```
+python -m src.full_map.generate_national_hazard_map --config path/to/config.yaml \
+    --mosaic-dir experiments/full_map --output-dir experiments/full_map
+```
+
+- Requires `config.full_map.national_gt_raster_paths` to include both `bp` and `fi`, and
+  `--mosaic-dir` to contain `bp_national_predicted_map.tif` / `fi_national_predicted_map.tif`
+  from step 2.
+- All four rasters (predicted bp/fi, ground-truth bp/fi) must already share one grid
+  (CRS/transform/shape) -- true by construction, since step 2 mosaics predictions directly onto
+  each target's GT raster grid.
+- Hazard math is controlled by `config.full_map.hazard_fi_cap`, `hazard_scale_to`, and
+  `hazard_bin_thresholds` (defaults match the hexel-level hazard pipeline). The scale
+  denominator is `config.full_map.hazard_scale_denominator` if set (or `--scale-denominator`),
+  otherwise it's derived as the max finite raw hazard over the ground-truth bp/fi rasters.
+- Writes binned (1-based NRCan hazard class) `hazard_national_predicted_map.tif` and
+  `hazard_national_ground_truth_map.tif` into `--output-dir`, plus a `hazard_national_summary.json`
+  with the resolved denominator and hazard class metrics (`calculate_hazard_class_metrics`)
+  comparing the two binned maps. Pass `--save-plots` for PNGs of each.
+- By default (resume-friendly), both outputs are skipped and metrics are read back if they
+  already exist in `--output-dir`; pass `--force-recompute` to always rebuild.
+- Pass `--gt-only` to compute just the ground-truth hazard map, without needing predicted
+  mosaics/`--mosaic-dir` at all (useful before or independent of running steps 1-2):
+  ```
+  python -m src.full_map.generate_national_hazard_map --config path/to/config.yaml \
+      --gt-only --output-dir experiments/full_map
+  ```
+
 ## Visualizing a saved mosaic or diff map
 
 Both step 2 and step 3 can already save a plot inline via `--save-plots`, but if you just have
@@ -177,6 +214,7 @@ heavy, or set `--max-dim 0 --downsample 1` to force a full-resolution read.
 - `generate_predictions.py` — inference + per-hexel raster/metric export (step 1)
 - `generate_full_hexel_map.py` — `generate_national_mosaics(...)`, real-CRS mosaicking (step 2)
 - `generate_full_hexel_diff_map.py` — `generate_national_diffs(...)` / `compute_national_diff`, GT comparison (step 3)
+- `generate_national_hazard_map.py` — `generate_national_hazard_maps(...)`, BP x FI hazard from national rasters (step 4)
 - `visualize_mosaic.py` — `plot_raster(...)`, standalone plotting for any saved mosaic/diff `.tif`
 - `utils.py` — shared helpers: `load_hexel_shapefile`, `group_predicted_hexel_files_by_target`,
   `mosaic_predicted_hexels`, `calculate_global_stats`, `get_scale_settings`

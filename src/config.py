@@ -348,6 +348,20 @@ class FullMapConfig(BaseModel):
     # target's predicted hexels and the comparison raster for that target's diff map.
     national_gt_raster_paths: dict[str, str] | None = None
 
+    # Hazard = BP x FI parameters for src.full_map.generate_national_hazard_map, applied
+    # directly to the already-mosaicked national bp/fi rasters (both predicted and GT).
+    hazard_fi_cap: float | None = Field(default=DEFAULT_FI_CAP, gt=0.0)
+    hazard_scale_to: float = Field(default=DEFAULT_SCALE_TO, gt=0.0)
+    hazard_bin_thresholds: list[float] = Field(default_factory=lambda: list(DEFAULT_HAZARD_BIN_THRESHOLDS))
+    # If unset, the denominator is derived as the max finite raw hazard over the national GT
+    # bp/fi rasters (mirrors hexel-level scale_denominator_source="all_raw_ground_truth").
+    hazard_scale_denominator: float | None = Field(default=None, gt=0.0)
+
+    @field_validator("hazard_bin_thresholds")
+    @classmethod
+    def _validate_hazard_bin_thresholds(cls, thresholds: list[float]) -> list[float]:
+        return validate_bin_thresholds(thresholds, name="hazard_bin_thresholds").tolist()
+
 
 class Config(BaseModel):
     save_dir: str = "experiments/default"
