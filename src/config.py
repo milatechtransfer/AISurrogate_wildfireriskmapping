@@ -404,6 +404,12 @@ def apply_run_id_overrides(config: "Config", run_id: int) -> int:
     run_seed = SEEDS[run_id]
     config.seed = run_seed
     config.save_dir = str(Path(config.save_dir) / f"seed_{run_seed}")
+    if config.training.warm_start_checkpoint:
+        config.training.warm_start_checkpoint = config.training.warm_start_checkpoint.format(
+            save_dir=config.save_dir,
+            seed=run_seed,
+            run_id=run_id,
+        )
     if config.logger.experiment_name:
         config.logger.experiment_name = f"{config.logger.experiment_name}_seed{run_seed}"
     return run_seed

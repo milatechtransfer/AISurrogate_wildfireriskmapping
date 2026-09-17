@@ -399,6 +399,7 @@ def test_hazard_eval_config_reference_file_with_path_parses():
 def test_apply_run_id_overrides_derives_seed_save_dir_and_experiment_name():
     config = _load_config(BP_CONFIG)
     config.save_dir = "experiments/my_run"
+    config.training.warm_start_checkpoint = "{save_dir}/best_base_{seed}_{run_id}.pth"
     config.logger.experiment_name = "my_experiment"
 
     run_seed = apply_run_id_overrides(config, run_id=2)
@@ -406,6 +407,7 @@ def test_apply_run_id_overrides_derives_seed_save_dir_and_experiment_name():
     assert run_seed == SEEDS[2]
     assert config.seed == SEEDS[2]
     assert config.save_dir == f"experiments/my_run/seed_{SEEDS[2]}"
+    assert config.training.warm_start_checkpoint == f"experiments/my_run/seed_{SEEDS[2]}/best_base_{SEEDS[2]}_2.pth"
     assert config.logger.experiment_name == f"my_experiment_seed{SEEDS[2]}"
 
 
