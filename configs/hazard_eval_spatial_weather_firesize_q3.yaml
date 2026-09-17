@@ -23,7 +23,7 @@ bin_thresholds: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 5
 scale_denominator: null
 scale_denominator_source: "all_raw_ground_truth"
 reference_denominator_path: null
-# Scale each seed's predictions separately by its maximum over actual-area test hexels.
+# Use the same dataset-wide GT denominator for predictions.
 self_normalized_prediction: false
 
 save_hazard_map: true
