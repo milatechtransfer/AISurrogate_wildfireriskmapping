@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import gc
 import json
 from pathlib import Path
 from typing import Any
@@ -35,13 +36,9 @@ from src.datasets.postprocessing.hazard import (
     DEFAULT_FI_CAP,
     DEFAULT_HAZARD_BIN_THRESHOLDS,
     DEFAULT_SCALE_TO,
-    bin_scaled_hazard,
-    compute_raw_hazard,
-    max_finite_hazard,
-    scale_hazard,
+    validate_bin_thresholds,
 )
 from src.datasets.postprocessing.hazard_metrics import calculate_hazard_class_metrics, flatten_hazard_class_metrics
-from src.full_map.utils import mask_nodata
 
 PREDICTED_HAZARD_FILENAME = "hazard_national_predicted_map.tif"
 GROUND_TRUTH_HAZARD_FILENAME = "hazard_national_ground_truth_map.tif"
@@ -56,18 +53,22 @@ def load_config(path: str) -> Config:
     return Config(**raw)
 
 
-def _read_masked(path: str) -> tuple[np.ma.MaskedArray, dict, rasterio.coords.BoundingBox]:
+def _read_float32_nan(path: str) -> tuple[np.ndarray, dict, rasterio.coords.BoundingBox]:
+    """Reads band 1 as float32 with nodata pixels converted to NaN in place (no masked-array
+    copy), to keep peak memory as low as possible for national-scale (Canada-wide) rasters.
+    """
     with rasterio.open(path) as src:
-        arr = src.read(1)
+        arr = src.read(1, out_dtype="float32")
         nodata = src.nodata
-        arr = mask_nodata(arr, nodata) if nodata is not None else np.ma.masked_invalid(arr)
+        if nodata is not None and not (isinstance(nodata, float) and np.isnan(nodata)):
+            arr[arr == nodata] = np.nan
         return arr, src.profile.copy(), src.bounds
 
 
-def _require_common_grid(arrays: dict[str, tuple[np.ma.MaskedArray, dict, rasterio.coords.BoundingBox]]) -> None:
+def _require_common_grid(arrays: dict[str, tuple[np.ndarray, dict, rasterio.coords.BoundingBox]]) -> None:
     """Raises if the given (array, profile, bounds) grids don't all match shape/bounds.
 
-    Hazard combines bp/fi pixelwise with no reprojection, so all four rasters (predicted
+    Hazard combines bp/fi pixelwise with no reprojection, so all rasters involved (predicted
     bp/fi, ground-truth bp/fi) must already share one grid.
     """
     names = list(arrays)
@@ -82,8 +83,55 @@ def _require_common_grid(arrays: dict[str, tuple[np.ma.MaskedArray, dict, raster
             raise ValueError(f"{name!r} raster bounds {bounds} do not match {reference_name!r} bounds {reference_bounds}.")
 
 
-def _to_nan_filled(arr: np.ma.MaskedArray) -> np.ndarray:
-    return np.ma.filled(arr.astype(np.float64), np.nan)
+def _raw_hazard_inplace(bp: np.ndarray, fi: np.ndarray, fi_cap: float | None) -> np.ndarray:
+    """Computes ``bp * min(fi, fi_cap)`` in place, mutating and reusing ``bp``'s buffer as the
+    output (and freeing ``fi``) to avoid allocating another national-sized array."""
+    if fi_cap is not None:
+        np.minimum(fi, np.float32(fi_cap), out=fi)
+    bp *= fi  # bp now holds raw hazard
+    return bp
+
+
+def _scale_and_bin_inplace(raw: np.ndarray, denominator: float, scale_to: float, bin_edges: np.ndarray, invalid_class: int) -> np.ndarray:
+    """Scales ``raw`` in place, then bins it into 1-based hazard classes (int32). ``raw`` is
+    fully consumed (mutated into the scaled array) before the class array is allocated, so only
+    one extra national-sized array (the int32 output) is created."""
+    raw *= np.float32(scale_to / denominator)
+    finite_mask = np.isfinite(raw)
+    classes = np.searchsorted(bin_edges, raw, side="right").astype(np.int32)
+    classes += 1
+    classes[~finite_mask] = invalid_class
+    return classes
+
+
+def _raw_hazard_denominator(raw: np.ndarray) -> float:
+    """Max finite, positive raw-hazard value in ``raw`` (float32-safe; avoids hazard.py's
+    ``max_finite_hazard``, which upcasts to float64 -- expensive at national-raster scale)."""
+    finite = raw[np.isfinite(raw)]
+    if finite.size == 0:
+        raise ValueError("no finite hazard values found to compute a denominator")
+    value = float(finite.max())
+    if value <= 0.0:
+        raise ValueError(f"maximum finite hazard must be > 0, got {value}")
+    return value
+
+
+def _compute_binned_hazard_inplace(
+    bp: np.ndarray,
+    fi: np.ndarray,
+    fi_cap: float | None,
+    denominator: float,
+    scale_to: float,
+    bin_edges: np.ndarray,
+    invalid_class: int,
+) -> np.ndarray:
+    """Computes ``bin(scale(bp * min(fi, fi_cap)))`` in float32, mutating ``bp``/``fi`` in
+    place to avoid allocating extra national-sized arrays (each is ~10GB at Canada-wide 100m
+    resolution). Returns a new int32 class array; ``bp``/``fi`` are left in an unusable state
+    (fully consumed) after this call.
+    """
+    raw = _raw_hazard_inplace(bp, fi, fi_cap)
+    return _scale_and_bin_inplace(raw, denominator, scale_to, bin_edges, invalid_class)
 
 
 def generate_national_hazard_maps(
@@ -114,6 +162,11 @@ def generate_national_hazard_maps(
     so ground truth and predictions are scaled/binned consistently without needing an explicit
     reference value.
 
+    Memory: at Canada-wide 100m resolution (~55,000 x 46,000 px, ~10GB per float32 raster),
+    this processes ground truth and prediction sequentially (never holding both sets of bp/fi
+    rasters at once) and mutates arrays in place, so peak memory stays close to 2-3 national
+    rasters' worth rather than growing with the number of hazard products/targets involved.
+
     Returns a summary dict with the resolved denominator and, when predictions are given, the
     hazard class metrics comparing the binned predicted map against the binned ground-truth map
     (via ``calculate_hazard_class_metrics``). Writes nothing and returns metrics read back from
@@ -125,6 +178,7 @@ def generate_national_hazard_maps(
 
     if bin_thresholds is None:
         bin_thresholds = list(DEFAULT_HAZARD_BIN_THRESHOLDS)
+    bin_edges = validate_bin_thresholds(bin_thresholds)
     num_classes = len(bin_thresholds) + 1
 
     output_folder = Path(output_dir)
@@ -144,27 +198,29 @@ def generate_national_hazard_maps(
         metrics = calculate_hazard_class_metrics(binned_pred, binned_gt, invalid_class=invalid_class, num_classes=num_classes)
         return {"denominator": None, "metrics": flatten_hazard_class_metrics(metrics)}
 
-    rasters = {
-        "ground_truth_bp": _read_masked(gt_bp_path),
-        "ground_truth_fi": _read_masked(gt_fi_path),
-    }
-    if compute_predicted:
-        rasters["predicted_bp"] = _read_masked(predicted_bp_path)  # type: ignore[arg-type]
-        rasters["predicted_fi"] = _read_masked(predicted_fi_path)  # type: ignore[arg-type]
-    _require_common_grid(rasters)
+    # --- Ground truth phase: only gt bp/fi are held in memory at once. ---
+    gt_bp, gt_profile, gt_bounds = _read_float32_nan(gt_bp_path)
+    gt_fi, _, gt_fi_bounds = _read_float32_nan(gt_fi_path)
+    _require_common_grid({"ground_truth_bp": (gt_bp, gt_profile, gt_bounds), "ground_truth_fi": (gt_fi, gt_profile, gt_fi_bounds)})
 
-    gt_bp = _to_nan_filled(rasters["ground_truth_bp"][0])
-    gt_fi = _to_nan_filled(rasters["ground_truth_fi"][0])
-    raw_gt = compute_raw_hazard(gt_bp, gt_fi, fi_cap)
-    denominator = float(scale_denominator) if scale_denominator is not None else max_finite_hazard(raw_gt)
-    scaled_gt = scale_hazard(raw_gt, denominator, scale_to)
-    binned_gt = bin_scaled_hazard(scaled_gt, bin_thresholds, invalid_class)
+    if scale_denominator is not None:
+        denominator = float(scale_denominator)
+        binned_gt = _compute_binned_hazard_inplace(gt_bp, gt_fi, fi_cap, denominator, scale_to, bin_edges, invalid_class)
+        del gt_bp, gt_fi
+    else:
+        raw_gt = _raw_hazard_inplace(gt_bp, gt_fi, fi_cap)
+        del gt_fi
+        gc.collect()
+        denominator = _raw_hazard_denominator(raw_gt)
+        binned_gt = _scale_and_bin_inplace(raw_gt, denominator, scale_to, bin_edges, invalid_class)
+        del raw_gt
+    gc.collect()
 
-    out_profile = rasters["ground_truth_bp"][1].copy()
+    out_profile = gt_profile.copy()
     out_profile.update(count=1, dtype="int32", nodata=invalid_class)
 
     with rasterio.open(gt_output_path, "w", **out_profile) as dst:
-        dst.write(binned_gt.astype("int32"), 1)
+        dst.write(binned_gt, 1)
     print(f"Saved ground-truth national hazard map to {gt_output_path}")
 
     if save_plots:
@@ -173,14 +229,21 @@ def generate_national_hazard_maps(
 
     flat_metrics: dict[str, float] | None = None
     if compute_predicted:
-        pred_bp = _to_nan_filled(rasters["predicted_bp"][0])
-        pred_fi = _to_nan_filled(rasters["predicted_fi"][0])
-        raw_pred = compute_raw_hazard(pred_bp, pred_fi, fi_cap)
-        scaled_pred = scale_hazard(raw_pred, denominator, scale_to)
-        binned_pred = bin_scaled_hazard(scaled_pred, bin_thresholds, invalid_class)
+        # --- Prediction phase: gt bp/fi are already freed; only pred bp/fi are loaded now. ---
+        pred_bp, pred_profile, pred_bounds = _read_float32_nan(predicted_bp_path)  # type: ignore[arg-type]
+        pred_fi, _, pred_fi_bounds = _read_float32_nan(predicted_fi_path)  # type: ignore[arg-type]
+        _require_common_grid(
+            {
+                "predicted_bp": (pred_bp, pred_profile, pred_bounds),
+                "predicted_fi": (pred_fi, pred_profile, pred_fi_bounds),
+                "ground_truth_bp": (binned_gt, gt_profile, gt_bounds),
+            }
+        )
+        binned_pred = _compute_binned_hazard_inplace(pred_bp, pred_fi, fi_cap, denominator, scale_to, bin_edges, invalid_class)
+        gc.collect()
 
         with rasterio.open(pred_output_path, "w", **out_profile) as dst:
-            dst.write(binned_pred.astype("int32"), 1)
+            dst.write(binned_pred, 1)
         print(f"Saved predicted national hazard map to {pred_output_path}")
 
         metrics = calculate_hazard_class_metrics(binned_pred, binned_gt, invalid_class=invalid_class, num_classes=num_classes)

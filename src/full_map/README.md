@@ -156,6 +156,18 @@ python -m src.full_map.generate_national_hazard_map --config path/to/config.yaml
     --mosaic-dir experiments/full_map --output-dir experiments/full_map
 ```
 
+Or via SLURM (recommended for Canada-wide rasters; ground truth and prediction are processed
+sequentially and combined in place to minimize peak memory, but each phase still briefly holds
+~2-3 national-sized arrays, so this needs more headroom than a single mosaic, e.g. `--mem=64Gb`):
+
+```
+sbatch run_files/full_map/generate_national_hazard_map.sh configs/your_config.yaml
+# GT-only:
+GT_ONLY=1 sbatch run_files/full_map/generate_national_hazard_map.sh configs/your_config.yaml
+# extra flags, e.g. plots:
+HAZARD_ARGS="--save-plots" sbatch run_files/full_map/generate_national_hazard_map.sh configs/your_config.yaml
+```
+
 - Requires `config.full_map.national_gt_raster_paths` to include both `bp` and `fi`, and
   `--mosaic-dir` to contain `bp_national_predicted_map.tif` / `fi_national_predicted_map.tif`
   from step 2.
