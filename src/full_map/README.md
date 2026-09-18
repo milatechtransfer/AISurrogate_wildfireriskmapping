@@ -191,6 +191,38 @@ HAZARD_ARGS="--save-plots" sbatch run_files/full_map/generate_national_hazard_ma
       --gt-only --output-dir experiments/full_map
   ```
 
+## 5. Hazard confusion matrix and ordinal accuracy stats
+
+`generate_national_hazard_map.py` already writes basic hazard class metrics (exact/within-1/
+within-2 accuracy, mean absolute class error, macro IoU/F1) into `hazard_national_summary.json`
+when both predicted and ground-truth maps are computed together, but drops the full confusion
+matrix. Use `compute_hazard_confusion_matrix.py` to (re-)compute all of these, including the
+full confusion matrix, directly from the two saved hazard class rasters -- independent of
+whether/how they were originally generated (e.g. across two separate `--gt-only` runs):
+
+```
+python -m src.full_map.compute_hazard_confusion_matrix \
+    --pred-tif experiments/full_map/hazard_national_predicted_map.tif \
+    --gt-tif experiments/full_map/hazard_national_ground_truth_map.tif \
+    --output-dir experiments/full_map --save-plot
+```
+
+Or via SLURM:
+
+```
+sbatch run_files/full_map/compute_hazard_confusion_matrix.sh \
+    experiments/full_map/hazard_national_predicted_map.tif \
+    experiments/full_map/hazard_national_ground_truth_map.tif
+```
+
+- Reads both rasters in row-block windows (`--block-rows`, default 4096) and accumulates only
+  the tiny `num_classes x num_classes` confusion matrix, so it never holds a full national-sized
+  array in memory (much lighter than step 4).
+- `--num-classes` (default 13) must match how the rasters were binned (`len(hazard_bin_thresholds) + 1`).
+- Writes `hazard_confusion_matrix_summary.json` (flattened metrics + full confusion matrix) into
+  `--output-dir`; pass `--save-plot` for a row-normalized confusion matrix heatmap PNG
+  (`hazard_confusion_matrix.png`).
+
 ## Visualizing a saved mosaic or diff map
 
 Both step 2 and step 3 can already save a plot inline via `--save-plots`, but if you just have
@@ -227,6 +259,7 @@ heavy, or set `--max-dim 0 --downsample 1` to force a full-resolution read.
 - `generate_full_hexel_map.py` — `generate_national_mosaics(...)`, real-CRS mosaicking (step 2)
 - `generate_full_hexel_diff_map.py` — `generate_national_diffs(...)` / `compute_national_diff`, GT comparison (step 3)
 - `generate_national_hazard_map.py` — `generate_national_hazard_maps(...)`, BP x FI hazard from national rasters (step 4)
+- `compute_hazard_confusion_matrix.py` — `accumulate_confusion_matrix(...)`, windowed confusion matrix/ordinal stats (step 5)
 - `visualize_mosaic.py` — `plot_raster(...)`, standalone plotting for any saved mosaic/diff `.tif`
 - `utils.py` — shared helpers: `load_hexel_shapefile`, `group_predicted_hexel_files_by_target`,
   `mosaic_predicted_hexels`, `calculate_global_stats`, `get_scale_settings`
