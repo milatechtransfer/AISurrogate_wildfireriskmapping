@@ -1,0 +1,38 @@
+raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
+save_dir: "experiments/counterfactual_fuel_polygons_multi_output_hex16_q3_256"
+hex_ids: ["16"]
+
+# Single multi-output checkpoint jointly predicting bp/fi/ros.
+endpoints:
+  bp:
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+  fi:
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+  ros:
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+
+scenarios:
+  - name: "baseline"
+    kind: "baseline"
+    description: "Unmodified prepared fuel inputs."
+
+  # Replacement fuel 13 is the D-1/D-2 aspen pair, blended per hexel by its season
+  # weights. Code 12 (pure D-2 green) is deliberately not used: its curve is
+  # identically zero, so the model cannot distinguish it from a non-fuel barrier.
+  - name: "pooled_burn_scars_to_aspen"
+    kind: "fuel"
+    description: "Convert every burnable pixel inside the pooled BurnP3+ fire perimeters to D-1/D-2 aspen. Perimeters come from a 10-iteration hex16 rerun; pooling all iterations represents accumulated fire scars rather than one season, since BurnP3+ fires never overlap within an iteration."
+    params:
+      mode: "burnable_to_burnable_fixed"
+      nonfuel_ids: [100, 101, 102, 105, 106, 110]
+      # source_fuel_ids omitted => every burnable pixel inside the mask is converted.
+      replacement_fuel_id: 13
+      fire_polygons:
+        path: "/network/projects/amlrt_internships/nrcan_05_wildfires/bp3+_500iter/burn-perimeters.gpkg"
+        layer: "final_burn_perimeters"
+        # This layer was already reduced to one final footprint per fire.
+        final_perimeter_only: false
+        buffer_m: 0

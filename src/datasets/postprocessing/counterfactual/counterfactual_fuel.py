@@ -314,18 +314,23 @@ def replace_burnable_with_nonfuel(
 def replace_burnable_with_fixed(
     fuel: np.ndarray,
     nonfuel_ids: list[int] | tuple[int, ...],
-    source_fuel_ids: list[int] | tuple[int, ...],
+    source_fuel_ids: list[int] | tuple[int, ...] | None,
     replacement_fuel_id: int,
     *,
     scenario_name: str = "fuel_type_substitution",
     edit_mask: np.ndarray | None = None,
     nodata_value: int = FUEL_NODATA,
 ) -> tuple[np.ndarray, np.ndarray, FuelEditReport]:
-    """Replace pixels matching one burnable fuel ID with a different fixed burnable fuel ID."""
+    """Replace burnable pixels with a fixed burnable fuel ID.
 
-    if not source_fuel_ids:
-        raise ValueError("At least one source fuel ID is required.")
-    if set(source_fuel_ids) & set(nonfuel_ids):
+    `source_fuel_ids=None` targets every burnable pixel, which is the useful
+    default when `edit_mask` already restricts the edit to a region (e.g. fire
+    perimeters). An empty list is rejected as a likely config mistake.
+    """
+
+    if source_fuel_ids is not None and not source_fuel_ids:
+        raise ValueError("source_fuel_ids must be omitted (to target all burnable fuel) or contain at least one ID.")
+    if source_fuel_ids is not None and set(source_fuel_ids) & set(nonfuel_ids):
         raise ValueError(f"source_fuel_ids={sorted(source_fuel_ids)} must not overlap nonfuel_ids={sorted(nonfuel_ids)}.")
     if replacement_fuel_id in set(nonfuel_ids):
         raise ValueError(f"replacement_fuel_id={replacement_fuel_id} is a non-fuel ID.")
@@ -333,7 +338,12 @@ def replace_burnable_with_fixed(
     fuel_arr = np.asarray(fuel)
     base_nonfuel = nonfuel_mask(fuel_arr, nonfuel_ids, nodata_value=nodata_value)
     base_burnable = burnable_mask(fuel_arr, nonfuel_ids, nodata_value=nodata_value)
-    base_source = base_burnable & np.isin(fuel_arr, list(source_fuel_ids))
+    if source_fuel_ids is None:
+        base_source = base_burnable
+        note = "all burnable fuel replaced with fixed burnable fuel"
+    else:
+        base_source = base_burnable & np.isin(fuel_arr, list(source_fuel_ids))
+        note = f"source_fuel_ids={sorted(source_fuel_ids)} replaced with fixed burnable fuel"
     selected = base_source if edit_mask is None else (np.asarray(edit_mask, dtype=bool) & base_source)
 
     edited = fuel_arr.copy()
@@ -346,7 +356,7 @@ def replace_burnable_with_fixed(
         candidate_pixels=int(base_source.sum()),
         original_nonfuel_pixels=int(base_nonfuel.sum()),
         original_burnable_pixels=int(base_burnable.sum()),
-        note=f"source_fuel_ids={sorted(source_fuel_ids)} replaced with fixed burnable fuel",
+        note=note,
     )
     return edited, selected, report
 
@@ -488,14 +498,14 @@ def apply_fuel_edit(
         )
         components = pd.DataFrame()
     elif mode == "burnable_to_burnable_fixed":
-        required = {"source_fuel_ids", "replacement_fuel_id"}
-        missing = sorted(required - params.keys())
-        if missing:
-            raise ValueError(f"burnable_to_burnable_fixed requires parameters: {missing}.")
+        if "replacement_fuel_id" not in params:
+            raise ValueError("burnable_to_burnable_fixed requires parameter: replacement_fuel_id.")
+        raw_source_ids = params.get("source_fuel_ids")
+        source_ids = None if raw_source_ids is None else [int(value) for value in raw_source_ids]
         edited, edit_mask, report = replace_burnable_with_fixed(
             fuel,
             nonfuel_ids,
-            [int(value) for value in params["source_fuel_ids"]],
+            source_ids,
             int(params["replacement_fuel_id"]),
             scenario_name=scenario_name,
             edit_mask=params.get("edit_mask"),

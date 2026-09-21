@@ -154,3 +154,16 @@ def test_load_counterfactual_config_requires_standard_baseline_name(tmp_path: Pa
 
     with pytest.raises(ValueError, match="named 'baseline'"):
         load_counterfactual_config(path)
+
+
+def test_polygon_fuel_config_uses_q3_checkpoint_and_seasonal_aspen() -> None:
+    config = load_counterfactual_config(Path("configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml"))
+
+    assert {endpoint.config_path for endpoint in config.endpoints.values()} == {
+        Path("configs/multi_output_spatial_weather_firesize_q3.yaml")
+    }
+    assert all(endpoint.checkpoint_dir is not None for endpoint in config.endpoints.values())
+    scenario = config.scenario("pooled_burn_scars_to_aspen")
+    assert scenario.params["replacement_fuel_id"] == 13
+    assert scenario.params["fire_polygons"]["layer"] == "final_burn_perimeters"
+    assert scenario.params["fire_polygons"]["final_perimeter_only"] is False
