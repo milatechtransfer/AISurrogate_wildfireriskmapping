@@ -216,6 +216,15 @@ python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_cha
 Run `--help` on any script for the full set of options (e.g. `--zone_overlay` to draw
 firezone boundaries, `--downsample` for lower-resolution map rendering).
 
-Submit `run_files/counterfactual_fuel_iROS.sh` for GPU evaluation, then
-`run_files/counterfactual_fuel_plots.sh` for all configured intervention, response,
-local-zoom, and change-distribution plots.
+The default SLURM workflow evaluates all three configured seeds and aggregates their
+mean/std responses:
+
+```bash
+bash run_files/counterfactual/submit_all_counterfactuals.sh fuel fuel_polygons
+```
+
+For a seed-42-only fallback, use the same entry point:
+
+```bash
+bash run_files/counterfactual/submit_all_counterfactuals.sh --single-seed fuel fuel_polygons
+```
