@@ -3,8 +3,7 @@ save_dir: "experiments/counterfactual_fire_size_spread_days_multi_output_hex16_q
 hex_ids: ["16"]
 nonfuel_ids: [100, 101, 102, 105, 106, 110]
 
-# Single multi-output checkpoint jointly predicting bp/fi/ros. See
-# counterfactual_windy_weather_zone_dependent_multi_output.yaml for details on this pattern.
+# Single multi-output checkpoint jointly predicting bp/fi/ros.
 endpoints:
   bp:
     config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
