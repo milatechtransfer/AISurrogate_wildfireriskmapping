@@ -317,3 +317,51 @@ def test_run_counterfactual_evaluation_dedupes_endpoints_sharing_config(
     assert index["prediction_dir"].nunique() == 1
     metrics = pd.read_csv(save_dir / "counterfactual_metrics.csv")
     assert set(metrics["endpoint"]) == {"bp", "fi"}
+
+
+def test_run_counterfactual_evaluation_reads_endpoint_checkpoint_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path
+    data_root = project_root / "data"
+    training_dir = project_root / "trained"
+    checkpoint_dir = project_root / "shared_checkpoints"
+    save_dir = project_root / "counterfactual"
+    data_root.mkdir()
+    training_dir.mkdir()
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "best.pt").write_bytes(b"shared-checkpoint")
+    pd.DataFrame([{"hex_id": "16", "filename": "patch.npy", "valid_ratio": 1.0}]).to_csv(
+        data_root / "test.csv",
+        index=False,
+    )
+    config_path = project_root / "counterfactual.yaml"
+    with config_path.open("w") as handle:
+        yaml.safe_dump(
+            {
+                "raw_data_dir": "raw",
+                "save_dir": "counterfactual",
+                "hex_ids": ["16"],
+                "endpoints": {
+                    "bp": {
+                        "config_path": "bp.yaml",
+                        "checkpoint_dir": str(checkpoint_dir),
+                    }
+                },
+                "scenarios": [{"name": "baseline", "kind": "baseline"}],
+            },
+            handle,
+        )
+
+    run_config = _EndpointRunConfig(
+        save_dir=str(training_dir),
+        data=_DataConfig(root_dir=str(data_root)),
+    )
+    monkeypatch.setattr("src.evaluate_counterfactual.load_config", lambda _: run_config)
+    monkeypatch.setattr("src.evaluate_counterfactual.evaluate_hexels", lambda **_: {"mae": 1.5})
+
+    run_counterfactual_evaluation(config_path, project_root=project_root)
+
+    copied = save_dir / "predictions" / "baseline" / "bp" / "best.pt"
+    assert copied.read_bytes() == b"shared-checkpoint"

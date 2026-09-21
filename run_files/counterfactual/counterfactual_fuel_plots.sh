@@ -14,20 +14,18 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
 source .venv/bin/activate
 
-config="configs/counterfactual_fuel_multi_output.yaml"
+config="configs/counterfactual/counterfactual_fuel_multi_output.yaml"
 hex_id="16"
 scenarios=(
-    "remove_barriers_adjacent_modal"
-    "remove_barriers_fixed_c2"
-    "insert_random_nonfuel_10pct"
+    "c2_to_mixedwood_fixed"
 )
 endpoints=("bp" "fi" "ros")
 
+# Local zoom panels require an edit that changes burnable support; this scenario
+# substitutes one burnable fuel type for another.
 for scenario in "${scenarios[@]}"; do
     python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_intervention_map \
         --config "${config}" --scenario "${scenario}" --endpoint bp --hex_id "${hex_id}"
-    python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_local_zoom_panels \
-        --config "${config}" --scenario "${scenario}" --hex_id "${hex_id}"
 
     for endpoint in "${endpoints[@]}"; do
         python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \

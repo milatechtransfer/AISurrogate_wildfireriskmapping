@@ -25,6 +25,7 @@ def test_load_counterfactual_config_supports_custom_endpoints(tmp_path: Path) ->
             "endpoints": {
                 "hazard": {
                     "config_path": "configs/hazard.yaml",
+                    "checkpoint_dir": "/checkpoints/hazard",
                 }
             },
             "scenarios": [
@@ -42,6 +43,7 @@ def test_load_counterfactual_config_supports_custom_endpoints(tmp_path: Path) ->
 
     assert config.hex_ids == ["01", "16"]
     assert list(config.endpoints) == ["hazard"]
+    assert config.endpoints["hazard"].checkpoint_dir == Path("/checkpoints/hazard")
     assert config.scenarios[1].fuel_edit() == {"mode": "nonfuel_to_burnable_local_adjacent_modal"}
     assert config.scenario("remove_barriers") == config.scenarios[1]
 

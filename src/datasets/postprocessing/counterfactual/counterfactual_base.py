@@ -20,6 +20,7 @@ class EndpointConfig:
     name: str
     config_path: Path
     baseline_data_root: Path | None = None
+    checkpoint_dir: Path | None = None
 
     @classmethod
     def from_mapping(cls, name: str, raw: object) -> EndpointConfig:
@@ -29,10 +30,12 @@ class EndpointConfig:
         if "config_path" not in raw:
             raise ValueError(f"Endpoint {name!r} is missing required key 'config_path'.")
         baseline_data_root = raw.get("baseline_data_root")
+        checkpoint_dir = raw.get("checkpoint_dir")
         return cls(
             name=name,
             config_path=Path(str(raw["config_path"])),
             baseline_data_root=Path(str(baseline_data_root)) if baseline_data_root else None,
+            checkpoint_dir=Path(str(checkpoint_dir)) if checkpoint_dir else None,
         )
 
 

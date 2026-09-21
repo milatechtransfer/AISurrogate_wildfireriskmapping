@@ -189,16 +189,16 @@ def run_counterfactual_evaluation(
     summary_frames = []
     component_frames = []
     weather_summary_frames = []
-    # Cache one materialized run per (scenario, resolved config_path, resolved data_root).
+    # Cache one materialized run per scenario, model config, data root, and checkpoint.
     # Multiple logical endpoint names (e.g. "bp"/"fi"/"ros") can point at the exact same
     # multi-output checkpoint so that existing per-target plotting scripts keep working
     # unchanged; in that case the underlying model only needs to run inference once per
     # scenario, and every alias endpoint reuses that run's prediction_dir/metrics/summaries.
-    run_cache: dict[tuple[str, Path, Path], dict[str, Any]] = {}
+    run_cache: dict[tuple[str, Path, Path, Path], dict[str, Any]] = {}
     for endpoint in endpoints:
         endpoint_config_path = resolve_project_path(endpoint.config_path, project_root)
         base_config = load_config(str(endpoint_config_path))
-        source_save_dir = resolve_project_path(base_config.save_dir, project_root)
+        source_save_dir = resolve_project_path(endpoint.checkpoint_dir or base_config.save_dir, project_root)
         data_root = resolve_project_path(endpoint.baseline_data_root or base_config.data.root_dir, project_root)
         metadata = pd.read_csv(data_root / base_config.data.test_split)
         if "valid_ratio" in metadata.columns:
@@ -208,7 +208,12 @@ def run_counterfactual_evaluation(
             raise ValueError(f"No test metadata found for hex_ids={sorted(hex_ids)} and endpoint={endpoint.name!r}.")
 
         for scenario in scenarios:
-            cache_key = (scenario.name, endpoint_config_path.resolve(), data_root.resolve())
+            cache_key = (
+                scenario.name,
+                endpoint_config_path.resolve(),
+                data_root.resolve(),
+                source_save_dir.resolve(),
+            )
             cached = run_cache.get(cache_key)
             if cached is not None:
                 index_rows.append(
