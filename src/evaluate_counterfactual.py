@@ -19,11 +19,16 @@ from src.datasets.postprocessing.counterfactual.counterfactual_base import (
     resolve_counterfactual_paths,
     resolve_project_path,
 )
+from src.datasets.postprocessing.counterfactual.fire_size_counterfactual_transform import (
+    FireSizeCounterfactualResult,
+    materialize_fire_size_scenario,
+)
 from src.datasets.postprocessing.counterfactual.fuel_counterfactual_transform import FuelCounterfactualTransform
 from src.datasets.postprocessing.counterfactual.weather_counterfactual_transform import materialize_weather_scenario
 from src.evaluate_hexels import load_config
 from src.evaluate_hexels import main as evaluate_hexels
 
+SPATIALIZED_FIRE_SIZE_SOURCE_NAME = "spatialized_fire_size"
 SPATIALIZED_WEATHER_SOURCE_NAME = "spatialized_weather"
 
 
@@ -96,6 +101,32 @@ def _override_spatialized_weather_csv(
         raise ValueError(f"No {SPATIALIZED_WEATHER_SOURCE_NAME!r} input source configured; cannot apply a weather scenario.")
 
 
+def _spatialized_fire_size_params(base_config):
+    matches = [source.params for source in base_config.data.input_sources if source.name == SPATIALIZED_FIRE_SIZE_SOURCE_NAME]
+    if len(matches) != 1:
+        raise ValueError(f"Expected exactly one {SPATIALIZED_FIRE_SIZE_SOURCE_NAME!r} input source; found {len(matches)}.")
+    params = matches[0]
+    if len(params.feature_names_list) != 1 or params.quantiles is None:
+        raise ValueError(
+            f"{SPATIALIZED_FIRE_SIZE_SOURCE_NAME!r} must configure one feature with quantiles " "for a fire-size counterfactual."
+        )
+    return params
+
+
+def _override_spatialized_fire_size_lookup(
+    run_config,
+    result: FireSizeCounterfactualResult,
+) -> None:
+    """Point the q3 source at exact, hex-scoped precomputed quantile columns."""
+    params = _spatialized_fire_size_params(run_config)
+    params.csv_name = str(result.edited_csv_path.resolve())
+    params.global_fill_csv_name = str(result.global_fill_csv_path.resolve())
+    params.feature_names_list = list(result.feature_columns)
+    params.quantiles = None
+    params.aggregation = "mean"
+    params.hex_id_col = "hex_id"
+
+
 def _spatialized_weather_csv_name(base_config) -> str:
     for source in base_config.data.input_sources:
         if source.name == SPATIALIZED_WEATHER_SOURCE_NAME:
@@ -164,7 +195,8 @@ def run_counterfactual_evaluation(
     rasters under `<save_dir>/predictions/<scenario>/<endpoint>/`. Also writes, under
     `save_dir`: `scenario_prediction_index.csv` (returned), `counterfactual_metrics.csv`,
     and (for `fuel` scenarios) `fuel_edit_summary.csv` / `fuel_component_replacements.csv`,
-    or (for `weather` scenarios) `weather_edit_summary.csv`.
+    (for `weather` scenarios) `weather_edit_summary.csv`, or (for `fire_size`
+    scenarios) `fire_size_edit_summary.csv`.
 
     The baseline scenario is always evaluated regardless of `scenario_names`, since
     downstream plotting scripts diff each scenario against it.
@@ -189,6 +221,7 @@ def run_counterfactual_evaluation(
     summary_frames = []
     component_frames = []
     weather_summary_frames = []
+    fire_size_summary_frames = []
     # Cache one materialized run per scenario, model config, data root, and checkpoint.
     # Multiple logical endpoint names (e.g. "bp"/"fi"/"ros") can point at the exact same
     # multi-output checkpoint so that existing per-target plotting scripts keep working
@@ -239,6 +272,10 @@ def run_counterfactual_evaluation(
                     summary = cached["weather_summary"].copy()
                     summary["endpoint"] = endpoint.name
                     weather_summary_frames.append(summary)
+                if cached["fire_size_summary"] is not None:
+                    summary = cached["fire_size_summary"].copy()
+                    summary["endpoint"] = endpoint.name
+                    fire_size_summary_frames.append(summary)
                 continue
 
             prediction_dir = save_dir / "predictions" / scenario.name / endpoint.name
@@ -261,6 +298,7 @@ def run_counterfactual_evaluation(
             fuel_summary = None
             fuel_components = None
             weather_summary = None
+            fire_size_summary = None
             if scenario.kind == "fuel":
                 patch_transform = FuelCounterfactualTransform.from_metadata(
                     metadata=metadata,
@@ -298,6 +336,24 @@ def run_counterfactual_evaluation(
                 summary = weather_summary.copy()
                 summary.insert(0, "endpoint", endpoint.name)
                 weather_summary_frames.append(summary)
+            elif scenario.kind == "fire_size":
+                fire_size_params = _spatialized_fire_size_params(base_config)
+                baseline_fire_size_csv = data_root / str(fire_size_params.csv_name)
+                fire_size_result = materialize_fire_size_scenario(
+                    scenario=scenario,
+                    raw_data_dir=raw_data_dir,
+                    processed_fire_size_csv=baseline_fire_size_csv,
+                    recipient_hex_ids=sorted(hex_ids),
+                    prediction_dir=prediction_dir,
+                    feature_name=str(fire_size_params.feature_names_list[0]),
+                    zone_id_col=str(fire_size_params.fire_weather_zone_id_col),
+                    quantiles=list(fire_size_params.quantiles),
+                )
+                _override_spatialized_fire_size_lookup(run_config, fire_size_result)
+                fire_size_summary = fire_size_result.summary.copy()
+                summary = fire_size_summary.copy()
+                summary.insert(0, "endpoint", endpoint.name)
+                fire_size_summary_frames.append(summary)
 
             metrics = evaluate_hexels(
                 args=_evaluation_args(),
@@ -327,6 +383,7 @@ def run_counterfactual_evaluation(
                 "fuel_summary": fuel_summary,
                 "fuel_components": fuel_components,
                 "weather_summary": weather_summary,
+                "fire_size_summary": fire_size_summary,
             }
 
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -344,6 +401,10 @@ def run_counterfactual_evaluation(
     _write_optional_frame(
         pd.concat(weather_summary_frames, ignore_index=True) if weather_summary_frames else None,
         save_dir / "weather_edit_summary.csv",
+    )
+    _write_optional_frame(
+        pd.concat(fire_size_summary_frames, ignore_index=True) if fire_size_summary_frames else None,
+        save_dir / "fire_size_edit_summary.csv",
     )
     return index
 
