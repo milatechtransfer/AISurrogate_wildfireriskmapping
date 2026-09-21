@@ -39,10 +39,17 @@ def _write_fuel_raster(data: np.ndarray, profile: dict, path: Path) -> None:
     write_profile.update(dtype="int16", count=1, compress="lzw", nodata=FUEL_NODATA)
     values = np.asarray(data, dtype=np.float64)
     finite = np.isfinite(values)
-    if finite.any() and not np.equal(values[finite], np.rint(values[finite])).all():
+    finite_values = values[finite]
+    if finite_values.size and not np.equal(finite_values, np.rint(finite_values)).all():
         raise ValueError("Fuel rasters must contain integer-valued categorical fuel IDs.")
+    dtype_limits = np.iinfo(np.int16)
+    if finite_values.size and (finite_values.min() < dtype_limits.min or finite_values.max() > dtype_limits.max):
+        raise ValueError(
+            f"Fuel raster IDs must fit in the int16 range [{dtype_limits.min}, {dtype_limits.max}]; "
+            f"found finite values from {finite_values.min():g} to {finite_values.max():g}."
+        )
     write_values = np.full(values.shape, FUEL_NODATA, dtype=np.int16)
-    write_values[finite] = np.rint(values[finite]).astype(np.int16)
+    write_values[finite] = np.rint(finite_values).astype(np.int16)
     path.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(path, "w", **write_profile) as dst:
         dst.write(write_values, 1)

@@ -106,7 +106,7 @@ scenarios:
   | `nonfuel_to_burnable_fixed` | barrier removal | `nonfuel_ids`, `replacement_fuel_id` | Every non-fuel pixel is replaced by a single fixed fuel id. |
   | `burnable_to_nonfuel` | barrier insertion | `nonfuel_ids`, `insertion_mask` | Replaces burnable pixels under a caller-supplied mask with non-fuel. |
   | `burnable_components_to_nonfuel_random` | barrier insertion | `nonfuel_ids`, `replacement_nonfuel_id`, `target_burnable_area_fraction`, `seed` | Randomly samples whole burnable connected components (weighted by area) until their combined area reaches `target_burnable_area_fraction` of total burnable area, then replaces them with a fixed non-fuel id. |
-  | `burnable_to_burnable_fixed` | fuel-type substitution | `nonfuel_ids`, `replacement_fuel_id` | Every burnable pixel whose fuel id is in `source_fuel_ids` is replaced by a single fixed burnable fuel id. Omitting `source_fuel_ids` targets **all** burnable pixels (an empty list is rejected as a likely mistake); combine with `fire_polygons` to restrict the edit spatially. |
+  | `burnable_to_burnable_fixed` | fuel-type substitution | `nonfuel_ids`, `replacement_fuel_id` | Replaces burnable pixels with one fixed fuel ID. When `source_fuel_ids` is provided, only those IDs are replaced; when it is omitted, all burnable pixels are targeted. An empty list is rejected as a likely mistake. Combine with `fire_polygons` to restrict the edit spatially. |
 
   Adding a new scenario `mode` means adding a branch in `apply_fuel_edit` and a matching
   entry in this table.

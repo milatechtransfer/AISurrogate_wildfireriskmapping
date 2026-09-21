@@ -9,8 +9,30 @@ from rasterio.transform import from_origin
 from src.datasets.postprocessing.counterfactual.counterfactual_base import ScenarioConfig
 from src.datasets.postprocessing.counterfactual.fuel_counterfactual_transform import (
     FuelCounterfactualTransform,
+    _write_fuel_raster,
     fuel_intervention_raster_path,
 )
+
+
+@pytest.mark.parametrize("fuel_id", [-32769, 32768, 40000])
+def test_write_fuel_raster_rejects_ids_outside_int16_range(tmp_path: Path, fuel_id: int) -> None:
+    path = tmp_path / "fuel.tif"
+    profile = {
+        "driver": "GTiff",
+        "height": 1,
+        "width": 1,
+        "count": 1,
+        "dtype": "float32",
+        "crs": "EPSG:4326",
+        "transform": from_origin(0, 1, 1, 1),
+        "nodata": -9999,
+    }
+
+    with pytest.raises(ValueError, match="must fit in the int16 range") as error:
+        _write_fuel_raster(np.array([[fuel_id]], dtype=np.float64), profile, path)
+
+    assert str(fuel_id) in str(error.value)
+    assert not path.exists()
 
 
 def test_fuel_counterfactual_loads_raw_fuel_grid_and_writes_exact_intervention(
