@@ -13,25 +13,55 @@ the fuel curves and a manifest (see `bundle.py`). Prediction from a bundle needs
 python -m inference.export_bundle --checkpoint path/to/best.pth --out_dir nrcan-surrogate-bp-fi-ros-v1.0 \
     --name nrcan-surrogate-bp-fi-ros --version 1.0.0 \
     --hazard_denominator_json path/to/hazard_scale_denominator.json \
-    --fire_size_training_table path/to/df_fire_fru_25ha_1970_2023.csv
+    --fire_size_table path/to/df_fire_fru_25ha_1970_2023.csv \
+    --fire_size_table_note "Source/citation of the fire-size table"
+
+# Check a project's inputs before predicting (fast: seconds per hexel)
+python -m inference.check --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project
 
 # Predict every hexel of a project (CPU or GPU is picked automatically)
 python -m inference.predict --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
-    --fire_size_table path/to/fire_sizes.csv --output path/to/predictions
+    --output path/to/predictions
 ```
 
-Useful options: `--hex_ids 12 14`, `--device cpu|cuda|mps`, `--batch_size` (lower it if memory runs out),
-`--mask_scope buffer`, `--no_hazard`, `--overwrite`, `--keep_work_dir`. Run with `--help` for the full list.
+Useful options: `--hex_ids 12 14` (or `hex12`), `--device cpu|cuda|mps`, `--batch_size` (lower it if memory
+runs out), `--mask_scope buffer`, `--no_hazard`, `--overwrite`, `--keep_work_dir`, `--skip_check`. Run with
+`--help` for the full list.
 
 Project inputs per hexel (`hexNN/`): `spatial/hexNN_dem.tif` (100 m), `spatial/hexNN_fbp.tif`,
 `spatial/hexNN_firezones.tif`, `spatial/ignition_grids/hexNN_ignGrid_{H|N}_<season>.tif`,
 `spatial/mask_grids/hexNN_actual.shp`, and `tabular/hexNN_{DailyWeather,FireZones,IgnitionDistribution,GreenUp}.csv`.
-The fire-size table (columns `GRIDCODE`, `SIZE_HA`) is supplied separately; the bundle manifest records
-which table the model was trained with.
+
+### Fire-size table
+
+The bundle ships the national fire-size table the model was trained with (columns `GRIDCODE`, `SIZE_HA`;
+publicly available data) and `predict` uses it by default. Pass `--fire_size_table path/to/fire_sizes.csv`
+to use your own table (e.g. for a regional study). Both `check` and `predict` state which table is in use,
+and `run_manifest.json` records it under `fire_size_table.source` (`bundle` or `user`). Fire zones missing
+from the table get the distribution of the whole table.
+
+### Checking inputs
+
+`inference.check` validates a project against the bundle without predicting, and `predict` runs the same
+checks first (skip with `--skip_check`). It reports three levels:
+
+- **ERROR** – prediction would fail or be meaningless; `predict` stops before doing any work. Examples:
+  missing files, rasters without a CRS or not overlapping the mask, DEM not ~100 m, fuel codes the model
+  does not know, no weather rows for any of the hexel's fire zones, missing GreenUp seasons.
+- **WARNING** – prediction runs but some cells use a fallback; review these. Examples: fire zones without
+  weather rows (the hexel's average weather is used), zones missing from `FireZones.csv` or the fire-size
+  table, implausible weather values, low raster coverage inside the mask.
+- **NOTE** – information, e.g. which fire-size table is used.
+
+Exit codes: `0` ready to predict, `1` input errors, `2` the check could not run (e.g. bad bundle path).
+`--json report.json` also writes the report as JSON. `predict` also stores the errors and warnings in
+`run_manifest.json` under `input_check`.
+
+### Outputs
 
 Outputs in `--output`: `hexNN/hexNN_{bp,fi,ros}.tif` (probability, kW/m, m/min; nodata -9999),
 `hexNN/hexNN_hazard_{raw,scaled,class}.tif` (class 0 = nodata), `run_manifest.json` (bundle, inputs,
-options, software versions, timings) and `predict.log`.
+fire-size table, input check, options, software versions, timings) and `predict.log`.
 
 ## Legacy: predict from a training checkpoint
 

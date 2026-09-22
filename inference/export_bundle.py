@@ -8,11 +8,12 @@ Example (Mila cluster):
         --out_dir bundles/nrcan-surrogate-bp-fi-ros-v1.0 \
         --name nrcan-surrogate-bp-fi-ros --version 1.0.0 \
         --hazard_denominator_json experiments/hazard_eval_multi_output_spatial_weather_firesize_q3/seed_1337/hazard_scale_denominator.json \
-        --fire_size_training_table "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/df_fire_fru_25ha_1970_2023.csv" \
+        --fire_size_table "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/df_fire_fru_25ha_1970_2023.csv" \
         --selection_note "Seed 1337 of {42, 1337, 2024}: best mean validation hexel CCC over BP/FI/ROS."
 
 Normalization statistics and lookup tables are read from the checkpoint's training ``data.root_dir``
-unless ``--data_root`` or per-file overrides are given.
+unless ``--data_root`` or per-file overrides are given. The raw fire-size table used in training is
+copied into the bundle so ``predict`` works without extra inputs; users may still supply their own.
 """
 
 from __future__ import annotations
@@ -33,11 +34,13 @@ import yaml
 from inference.bundle import (
     BUNDLE_FORMAT_VERSION,
     CHECKSUMS_FILENAME,
+    FIRE_SIZE_SOURCE,
     MANIFEST_FILENAME,
     MODEL_CARD_FILENAME,
     RESOURCE_DATASET_NORM_STATS,
     RESOURCE_FEATURE_CHANNEL_MAP,
     RESOURCE_FIRE_SIZE_NORM_PARAMS,
+    RESOURCE_FIRE_SIZE_TABLE,
     RESOURCE_FUEL_CURVES,
     RESOURCE_WEATHER_NORM_PARAMS,
     WEIGHTS_FILENAME,
@@ -144,8 +147,8 @@ def _write_model_card(bundle_dir: Path, manifest: BundleManifest) -> None:
     table = manifest.inputs.fire_size_training_table
     if table is not None:
         lines.append(
-            f"- Fire-size table is **not included**; users provide their own (`{', '.join(table.columns)}`). "
-            f"Training used `{table.filename}` ({table.num_rows} rows). {table.note}"
+            f"- Fire-size table: the training table `{table.filename}` ({table.num_rows} rows, columns "
+            f"`{', '.join(table.columns)}`) is included and used by default; `--fire_size_table` replaces it. {table.note}".rstrip()
         )
     lines += ["", "## Training and selection", ""]
     prov = manifest.provenance
@@ -186,7 +189,8 @@ def export_bundle(
     fuel_curves_path: Path | None = None,
     feature_channel_map_path: Path | None = None,
     hazard_denominator_json: Path | None = None,
-    fire_size_training_table: Path | None = None,
+    fire_size_table: Path | None = None,
+    fire_size_table_note: str = "",
     metrics_dir: Path | None = None,
     selection_note: str = "",
     overwrite: bool = False,
@@ -230,6 +234,17 @@ def export_bundle(
     if "fuel_grid" in grid_params.feature_names_list and grid_params.fuel_feats_encoding in FUEL_CURVE_ENCODINGS:
         curves_src = fuel_curves_path or data_root / grid_params.fuel_curves_filename
         sources[RESOURCE_FUEL_CURVES] = (curves_src, f"lookups/{Path(curves_src).name}", "FBP fuel curves (fbp_code x SeasonState x ISI).")
+
+    if FIRE_SIZE_SOURCE in [source.name for source in config.data.input_sources]:
+        if fire_size_table is None:
+            raise BundleError(
+                "This model uses fire-size inputs: pass --fire_size_table with the raw table used in training (GRIDCODE, SIZE_HA)."
+            )
+        sources[RESOURCE_FIRE_SIZE_TABLE] = (
+            Path(fire_size_table),
+            f"lookups/{Path(fire_size_table).name}",
+            "Raw fire-size table used in training (GRIDCODE, SIZE_HA); default fire-size input for predict.",
+        )
 
     missing = [str(src) for src, _, _ in sources.values() if not Path(src).is_file()]
     if missing:
@@ -301,12 +316,7 @@ def export_bundle(
         inputs=InputSpecEntry(
             resolution_m=grid_params.terrain_cell_size_m,
             fire_size_training_table=(
-                _reference_table(
-                    Path(fire_size_training_table),
-                    note="Not redistributed for licensing reasons; supply an equivalent table for your study area.",
-                )
-                if fire_size_training_table is not None
-                else None
+                _reference_table(Path(fire_size_table), note=fire_size_table_note) if fire_size_table is not None else None
             ),
         ),
         weights=ResourceEntry(path=WEIGHTS_FILENAME, sha256=sha256_file(weights_path), description="Model weights (state_dict)."),
@@ -358,9 +368,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fuel_curves", type=Path, default=None, help="Override path to the fuel curves CSV.")
     parser.add_argument("--feature_channel_map", type=Path, default=None, help="Override path to feature_channel_map_<N>.json.")
     parser.add_argument("--hazard_denominator_json", type=Path, default=None, help="hazard_scale_denominator.json from evaluate_hazard.")
-    parser.add_argument(
-        "--fire_size_training_table", type=Path, default=None, help="Raw fire-size table used in training (recorded, not copied)."
-    )
+    parser.add_argument("--fire_size_table", type=Path, default=None, help="Raw fire-size table used in training (copied into the bundle).")
+    parser.add_argument("--fire_size_table_note", default="", help="Source/citation of the fire-size table for the model card.")
     parser.add_argument("--metrics_dir", type=Path, default=None, help="Dir with val_results.csv/test_metrics.csv (default: ckpt dir).")
     parser.add_argument("--selection_note", default="", help="How this checkpoint was selected (recorded in the model card).")
     parser.add_argument("--overwrite", action="store_true", help="Replace --out_dir if it exists.")
@@ -382,7 +391,8 @@ def main() -> None:
         fuel_curves_path=args.fuel_curves,
         feature_channel_map_path=args.feature_channel_map,
         hazard_denominator_json=args.hazard_denominator_json,
-        fire_size_training_table=args.fire_size_training_table,
+        fire_size_table=args.fire_size_table,
+        fire_size_table_note=args.fire_size_table_note,
         metrics_dir=args.metrics_dir,
         selection_note=args.selection_note,
         overwrite=args.overwrite,

@@ -9,10 +9,11 @@ import pandas as pd
 import pytest
 import rasterio
 import torch
+import yaml
 from rasterio.transform import from_origin
 from shapely.geometry import box
 
-from inference.bundle import RESOURCE_DATASET_NORM_STATS, RESOURCE_FUEL_CURVES, load_bundle
+from inference.bundle import MANIFEST_FILENAME, RESOURCE_DATASET_NORM_STATS, RESOURCE_FIRE_SIZE_TABLE, RESOURCE_FUEL_CURVES, load_bundle
 from inference.predict import RUN_MANIFEST_FILENAME, WORK_DIRNAME, PredictError, main, run_predict
 from src.config import Config
 from src.datasets.sources.grids import GridSource, GridSourceResources
@@ -46,8 +47,8 @@ def _write_full_weather_norm_params(data_root: Path) -> None:
     (data_root / "weather_norm_params.json").write_text(json.dumps(params))
 
 
-@pytest.fixture
-def bundle_dir(tmp_path: Path) -> Path:
+def make_test_bundle(tmp_path: Path) -> Path:
+    """Tiny bundle whose fuel table knows codes 1 (single season) and 13 (green/leafless); fire zones 21, 22."""
     data_root = tmp_path / "training" / "data_samples"
     _write_training_resources(data_root)
     _write_full_weather_norm_params(data_root)
@@ -60,6 +61,11 @@ def bundle_dir(tmp_path: Path) -> Path:
     denominator_json = tmp_path / "training" / "hazard_scale_denominator.json"
     denominator_json.write_text(json.dumps({"scale_denominator": 50.0, "scale_denominator_source": "test"}))
     return _export(checkpoint_path, tmp_path / "bundle", hazard_denominator_json=denominator_json)
+
+
+@pytest.fixture
+def bundle_dir(tmp_path: Path) -> Path:
+    return make_test_bundle(tmp_path)
 
 
 def _write_raster(path: Path, data: np.ndarray, nodata: float) -> None:
@@ -137,7 +143,8 @@ def _write_hexel(project: Path, hex_id: str = "01", green_up_s2: str = "Yes") ->
 
 
 def _write_fire_size_table(path: Path) -> Path:
-    pd.DataFrame({"GRIDCODE": [21, 21, 21, 22, 22, 22], "SIZE_HA": [30.0, 120.0, 900.0, 50.0, 400.0, 5000.0]}).to_csv(path, index=False)
+    """A user-supplied (regional) fire-size table, different from the bundle's training table."""
+    pd.DataFrame({"GRIDCODE": [21, 21, 22, 22], "SIZE_HA": [40.0, 700.0, 80.0, 3000.0]}).to_csv(path, index=False)
     return path
 
 
@@ -152,13 +159,7 @@ def test_predict_writes_georeferenced_outputs_without_burnp3_results(bundle_dir:
     output_dir = tmp_path / "out"
     assert not (project / "hex01" / "results").exists()
 
-    run = run_predict(
-        bundle_dir=bundle_dir,
-        project_dir=project,
-        output_dir=output_dir,
-        fire_size_table=_write_fire_size_table(tmp_path / "fire_sizes.csv"),
-        device="cpu",
-    )
+    run = run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=output_dir, device="cpu")
 
     assert [result.hex_id for result in run.hexels] == ["01"]
     expected = {"bp", "fi", "ros", "hazard_raw", "hazard_scaled", "hazard_class"}
@@ -189,15 +190,50 @@ def test_predict_writes_georeferenced_outputs_without_burnp3_results(bundle_dir:
     assert run_manifest["status"] == "success"
     assert run_manifest["bundle"]["name"] == "test-bundle"
     assert run_manifest["options"]["device"] == "cpu"
+    assert run_manifest["fire_size_table"]["source"] == "bundle"
+    assert run_manifest["fire_size_table"]["matches_training_table"] is True
+    assert run_manifest["input_check"] == {"errors": [], "warnings": []}
+    assert run.fire_size_note is not None
+    assert "national training table shipped with the model" in run.fire_size_note
+    assert "national training table shipped with the model" in (output_dir / "predict.log").read_text()
+
+
+def test_predict_cli_reports_which_fire_size_table_was_used(bundle_dir: Path, project: Path, tmp_path: Path, capsys):
+    table = _write_fire_size_table(tmp_path / "regional_fire_sizes.csv")
+    code = main(
+        ["--bundle", str(bundle_dir), "--project", str(project), "--output", str(tmp_path / "out"), "--fire_size_table", str(table)]
+        + ["--device", "cpu", "--no_hazard"]
+    )
+    assert code == 0
+    assert f"using your table {table}" in capsys.readouterr().out
+    run_manifest = json.loads((tmp_path / "out" / RUN_MANIFEST_FILENAME).read_text())
+    assert run_manifest["fire_size_table"]["source"] == "user"
     assert run_manifest["fire_size_table"]["matches_training_table"] is False
-    assert (output_dir / "predict.log").is_file()
 
 
-def test_predict_requires_fire_size_table(bundle_dir: Path, project: Path, tmp_path: Path):
+def test_predict_requires_a_fire_size_table_when_the_bundle_has_none(bundle_dir: Path, project: Path, tmp_path: Path):
+    manifest_path = bundle_dir / MANIFEST_FILENAME
+    manifest = yaml.safe_load(manifest_path.read_text())
+    del manifest["resources"][RESOURCE_FIRE_SIZE_TABLE]
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False))
+
     with pytest.raises(PredictError, match="fire_size_table"):
-        run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", fire_size_table=None, device="cpu")
+        run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu")
     run_manifest = json.loads((tmp_path / "out" / RUN_MANIFEST_FILENAME).read_text())
     assert run_manifest["status"] == "failed"
+
+
+def test_predict_stops_before_predicting_when_inputs_have_errors(bundle_dir: Path, project: Path, tmp_path: Path):
+    fuel = np.where(np.mgrid[0:HEIGHT, 0:WIDTH][1] < WIDTH // 2, 1, 999).astype(np.int16)
+    _write_raster(project / "hex01" / "spatial" / "hex01_fbp.tif", fuel, -9999)
+
+    with pytest.raises(PredictError, match=r"hex01/spatial/hex01_fbp.tif: Fuel code\(s\) the model has no fuel curve for: 999"):
+        run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu")
+    run_manifest = json.loads((tmp_path / "out" / RUN_MANIFEST_FILENAME).read_text())
+    assert run_manifest["status"] == "failed"
+    assert run_manifest["input_check"]["errors"][0]["hexel"] == "hex01"
+    assert run_manifest["hexels"] == []
+    assert not (tmp_path / "out" / "hex01").exists()
 
 
 def test_predict_refuses_non_empty_output_without_overwrite(bundle_dir: Path, project: Path, tmp_path: Path):
@@ -210,7 +246,7 @@ def test_predict_refuses_non_empty_output_without_overwrite(bundle_dir: Path, pr
 
 
 def test_predict_reports_unknown_hexel(bundle_dir: Path, project: Path, tmp_path: Path):
-    with pytest.raises(PredictError, match=r"\['07'\] not found"):
+    with pytest.raises(PredictError, match=r"\['hex07'\] not found"):
         run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", fire_size_table=None, hex_ids=["hex07"])
 
 

@@ -10,7 +10,7 @@ model on a new project without access to the original training filesystem:
     ├── MODEL_CARD.md
     ├── SHA256SUMS
     ├── norm/                    # normalization statistics fitted on the training split
-    └── lookups/                 # static lookup tables (fuel curves, training feature-channel layout)
+    └── lookups/                 # static lookup tables (fuel curves, fire sizes, training feature-channel layout)
 
 Bundles are created with ``python -m inference.export_bundle`` and loaded with :func:`load_bundle`.
 """
@@ -52,6 +52,11 @@ RESOURCE_WEATHER_NORM_PARAMS = "weather_norm_params"
 RESOURCE_FIRE_SIZE_NORM_PARAMS = "fire_size_norm_params"
 RESOURCE_FUEL_CURVES = "fuel_curves"
 RESOURCE_FEATURE_CHANNEL_MAP = "feature_channel_map"
+RESOURCE_FIRE_SIZE_TABLE = "fire_size_table"
+
+# Names of the zone-level (spatialized tabular) input sources built from project tables.
+WEATHER_SOURCE = "spatialized_weather"
+FIRE_SIZE_SOURCE = "spatialized_fire_size"
 
 
 class BundleError(RuntimeError):
@@ -103,7 +108,7 @@ class EvaluationEntry(BaseModel):
 
 
 class ReferenceTableEntry(BaseModel):
-    """Records a table the model was trained with but which is not shipped in the bundle."""
+    """Describes a raw table the model was trained with."""
 
     filename: str
     sha256: str
@@ -155,6 +160,9 @@ class BundleManifest(BaseModel):
 
     def grid_params(self) -> GridParams:
         return get_grid_params(self.data.input_sources)
+
+    def input_source_names(self) -> list[str]:
+        return [source.name for source in self.data.input_sources]
 
 
 def sha256_file(path: str | Path, chunk_size: int = 1 << 20) -> str:
@@ -293,6 +301,9 @@ class ModelBundle:
         if key not in self.manifest.resources:
             raise BundleError(f"Bundle {self.root} has no resource {key!r}. Available: {sorted(self.manifest.resources)}.")
         return self.root / self.manifest.resources[key].path
+
+    def optional_resource_path(self, key: str) -> Path | None:
+        return self.resource_path(key) if key in self.manifest.resources else None
 
     def read_json_resource(self, key: str) -> dict[str, Any]:
         with open(self.resource_path(key)) as handle:

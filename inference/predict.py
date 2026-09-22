@@ -2,15 +2,14 @@
 Predict burn probability, fire intensity and rate of spread for a BurnP3+ project from a model bundle.
 
 Only the project *inputs* are needed (fuel, DEM, fire zones, ignition grids, weather, ignition
-distribution, green-up, fire-size table); BurnP3+ outputs are not read. Every model-side resource
-(weights, normalization statistics, fuel curves, channel layout) comes from the bundle, so this runs
-without access to the training data.
+distribution, green-up); BurnP3+ outputs are not read. Every model-side resource (weights,
+normalization statistics, fuel curves, channel layout, the national fire-size table) comes from the
+bundle, so this runs without access to the training data.
 
 Example:
     python -m inference.predict \\
         --bundle nrcan-surrogate-bp-fi-ros-v1.0 \\
         --project path/to/project \\
-        --fire_size_table path/to/fire_sizes.csv \\
         --output predictions/
 
 Outputs (per hexel ``hexNN/``): ``hexNN_bp.tif``, ``hexNN_fi.tif``, ``hexNN_ros.tif`` in physical units and,
@@ -28,7 +27,7 @@ import shutil
 import sys
 import time
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -45,10 +44,13 @@ from data_preparation.process_hexels_into_grids import get_split_hexel_window
 from data_preparation.process_tabular_data import build_weather_table, process_fire_size_distribution_table
 from data_preparation.utils import find_hex_ids
 from inference.bundle import (
+    FIRE_SIZE_SOURCE,
     RESOURCE_DATASET_NORM_STATS,
     RESOURCE_FIRE_SIZE_NORM_PARAMS,
+    RESOURCE_FIRE_SIZE_TABLE,
     RESOURCE_FUEL_CURVES,
     RESOURCE_WEATHER_NORM_PARAMS,
+    WEATHER_SOURCE,
     BundleError,
     ModelBundle,
     load_bundle,
@@ -56,6 +58,7 @@ from inference.bundle import (
     sha256_file,
     utc_timestamp,
 )
+from inference.check import CheckReport, check_project, describe_fire_size_table, resolve_hex_ids
 from inference.predictor import BurnRiskPredictor
 from src.config import SpatializedTabularParams
 from src.datasets.dataset import MultiSourceDataset
@@ -74,10 +77,6 @@ PREDICT_MASK_SCOPES = ("actual", "buffer")
 OUTPUT_NODATA = -9999.0
 HAZARD_CLASS_NODATA = 0
 
-# Spatialized tabular sources prepared from project tables, keyed by data source name.
-WEATHER_SOURCE = "spatialized_weather"
-FIRE_SIZE_SOURCE = "spatialized_fire_size"
-
 
 class PredictError(RuntimeError):
     """A problem with the user's inputs or options, reported without a traceback."""
@@ -95,11 +94,32 @@ class HexelResult:
 class PredictRun:
     output_dir: Path
     hexels: list[HexelResult] = field(default_factory=list)
+    input_check: CheckReport | None = None
+    fire_size_note: str | None = None
 
 
-def normalize_requested_hex_id(value: str) -> str:
-    value = str(value).strip()
-    return value[3:] if value.lower().startswith("hex") else value
+def run_input_checks(
+    bundle: ModelBundle,
+    project_dir: Path,
+    hex_ids: list[str],
+    fire_size_table: Path | None,
+    mask_scope: str,
+    scenario_name: str | None,
+) -> CheckReport:
+    """Run the input checks and log their warnings."""
+    logger.info("Checking the project inputs")
+    report = check_project(
+        bundle, project_dir, hex_ids, fire_size_table=fire_size_table, mask_scope=mask_scope, scenario_name=scenario_name
+    )
+    for finding in report.warnings:
+        logger.warning("%s", finding.describe())
+    return report
+
+
+def raise_on_input_errors(report: CheckReport) -> None:
+    if not report.ok:
+        details = "\n".join(f"  - {finding.describe()}" for finding in report.errors)
+        raise PredictError(f"The project inputs have {len(report.errors)} error(s); nothing was predicted:\n{details}")
 
 
 def discover_hex_ids(project_dir: Path, requested: list[str] | None) -> list[str]:
@@ -108,11 +128,10 @@ def discover_hex_ids(project_dir: Path, requested: list[str] | None) -> list[str
         raise PredictError(f"No hexel folders (hexNN/) found in project {project_dir}.")
     if not requested:
         return available
-    wanted = [normalize_requested_hex_id(hex_id) for hex_id in requested]
-    missing = [hex_id for hex_id in wanted if hex_id not in available]
+    found, missing = resolve_hex_ids(requested, available)
     if missing:
         raise PredictError(f"Hexel(s) {missing} not found in {project_dir}. Available: {available}")
-    return wanted
+    return found
 
 
 def _spatialized_params(bundle: ModelBundle) -> dict[str, SpatializedTabularParams]:
@@ -138,7 +157,9 @@ def prepare_project_tables(bundle: ModelBundle, project_dir: Path, work_dir: Pat
         )
     if FIRE_SIZE_SOURCE in sources:
         if fire_size_table is None:
-            raise PredictError("This model needs a fire-size table: pass --fire_size_table (CSV with columns GRIDCODE, SIZE_HA).")
+            raise PredictError(
+                "This model needs a fire-size table and the bundle has none: pass --fire_size_table (CSV with columns GRIDCODE, SIZE_HA)."
+            )
         if not fire_size_table.is_file():
             raise PredictError(f"Fire-size table not found: {fire_size_table}")
         logger.info("Processing fire-size table %s", fire_size_table)
@@ -393,6 +414,13 @@ def _git_commit() -> str | None:
         return None
 
 
+def resolve_fire_size_table(bundle: ModelBundle, fire_size_table: str | Path | None) -> Path | None:
+    """The user's fire-size table if given, otherwise the training table shipped in the bundle (if any)."""
+    if fire_size_table is not None:
+        return Path(fire_size_table).expanduser().resolve()
+    return bundle.optional_resource_path(RESOURCE_FIRE_SIZE_TABLE)
+
+
 def _write_run_manifest(
     run: PredictRun,
     bundle: ModelBundle,
@@ -408,6 +436,7 @@ def _write_run_manifest(
         training_table = bundle.manifest.inputs.fire_size_training_table
         sha = sha256_file(fire_size_table)
         fire_size_info = {
+            "source": "bundle" if fire_size_table == bundle.optional_resource_path(RESOURCE_FIRE_SIZE_TABLE) else "user",
             "path": str(fire_size_table),
             "sha256": sha,
             "matches_training_table": bool(training_table and training_table.sha256 == sha),
@@ -434,6 +463,11 @@ def _write_run_manifest(
         },
         "units": {target.name: target.units for target in bundle.manifest.targets},
         "nodata": {"float_rasters": OUTPUT_NODATA, "hazard_class": HAZARD_CLASS_NODATA},
+        "input_check": (
+            {"errors": [asdict(f) for f in run.input_check.errors], "warnings": [asdict(f) for f in run.input_check.warnings]}
+            if run.input_check is not None
+            else None
+        ),
         "hexels": [result.__dict__ for result in run.hexels],
     }
     with open(run.output_dir / RUN_MANIFEST_FILENAME, "w") as handle:
@@ -444,7 +478,7 @@ def run_predict(
     bundle_dir: str | Path,
     project_dir: str | Path,
     output_dir: str | Path,
-    fire_size_table: str | Path | None,
+    fire_size_table: str | Path | None = None,
     hex_ids: list[str] | None = None,
     device: str = "auto",
     batch_size: int = 8,
@@ -455,16 +489,17 @@ def run_predict(
     keep_work_dir: bool = False,
     scenario_name: str | None = None,
     verify_checksums: bool = True,
+    check_inputs: bool = True,
 ) -> PredictRun:
     """Run the model bundle on every requested hexel of a project and write GeoTIFFs to ``output_dir``."""
     started_at = utc_timestamp()
     project_dir = Path(project_dir).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
-    fire_size_path = Path(fire_size_table).expanduser().resolve() if fire_size_table is not None else None
     if not project_dir.is_dir():
         raise PredictError(f"Project folder not found: {project_dir}")
 
     bundle = load_bundle(bundle_dir, verify_checksums=verify_checksums)
+    fire_size_path = resolve_fire_size_table(bundle, fire_size_table)
     scope = normalize_mask_scope(mask_scope or bundle.manifest.data_prep.mask_scope or "actual")
     if scope not in PREDICT_MASK_SCOPES:
         raise PredictError(f"mask_scope must be one of {PREDICT_MASK_SCOPES}, got {scope!r}.")
@@ -474,6 +509,11 @@ def run_predict(
     log_handler = logging.FileHandler(output_dir / LOG_FILENAME, mode="w", encoding="utf-8")
     log_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
     logging.getLogger().addHandler(log_handler)
+    # Record this package's progress messages in predict.log even when the caller did not configure logging.
+    package_logger = logging.getLogger("inference")
+    previous_package_level = package_logger.level
+    if package_logger.getEffectiveLevel() > logging.INFO:
+        package_logger.setLevel(logging.INFO)
 
     resolved_device = resolve_device(device)
     options = {
@@ -484,6 +524,7 @@ def run_predict(
         "mask_scope": scope,
         "hazard": hazard,
         "scenario_name": scenario_name,
+        "check_inputs": check_inputs,
     }
     run = PredictRun(output_dir=output_dir)
     work_dir = output_dir / WORK_DIRNAME
@@ -491,6 +532,12 @@ def run_predict(
         logger.info(
             "Bundle %s v%s | device %s | %d hexel(s)", bundle.manifest.name, bundle.manifest.version, resolved_device, len(selected_hex_ids)
         )
+        if FIRE_SIZE_SOURCE in bundle.manifest.input_source_names() and fire_size_path is not None:
+            run.fire_size_note = describe_fire_size_table(bundle, fire_size_path)
+            logger.info("%s", run.fire_size_note)
+        if check_inputs:
+            run.input_check = run_input_checks(bundle, project_dir, selected_hex_ids, fire_size_path, scope, scenario_name)
+            raise_on_input_errors(run.input_check)
         work_dir.mkdir(parents=True, exist_ok=True)
         (work_dir / "numpy_files").mkdir(exist_ok=True)
         prepare_project_tables(bundle, project_dir, work_dir, fire_size_path)
@@ -523,6 +570,7 @@ def run_predict(
             shutil.rmtree(work_dir, ignore_errors=True)
         logging.getLogger().removeHandler(log_handler)
         log_handler.close()
+        package_logger.setLevel(previous_package_level)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -533,7 +581,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bundle", required=True, help="Model bundle folder (contains manifest.yaml).")
     parser.add_argument("--project", required=True, help="Project folder containing hexNN/ input folders.")
     parser.add_argument("--output", required=True, help="Folder to write predictions to.")
-    parser.add_argument("--fire_size_table", default=None, help="Fire-size table CSV with columns GRIDCODE, SIZE_HA.")
+    parser.add_argument(
+        "--fire_size_table", default=None, help="Fire-size CSV (GRIDCODE, SIZE_HA) to use instead of the bundle's national table."
+    )
     parser.add_argument("--hex_ids", nargs="+", default=None, help="Hexels to predict, e.g. 12 or hex12 (default: all).")
     parser.add_argument("--device", default="auto", help="auto (default), cpu, cuda, cuda:1 or mps.")
     parser.add_argument("--batch_size", type=int, default=8, help="Patches per model call (lower it if memory runs out).")
@@ -544,19 +594,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--overwrite", action="store_true", help="Replace previous predictions in --output.")
     parser.add_argument("--keep_work_dir", action="store_true", help=f"Keep intermediate patches in <output>/{WORK_DIRNAME}.")
     parser.add_argument("--skip_checksums", action="store_true", help="Skip bundle checksum verification (faster start-up).")
+    parser.add_argument("--skip_check", action="store_true", help="Do not check the project inputs first (see inference.check).")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     root_logger = logging.getLogger()
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     previous_level = root_logger.level
+    # Some data_preparation modules call logging.basicConfig at import time; reuse that console handler.
+    has_console = any(type(handler) is logging.StreamHandler for handler in root_logger.handlers)
+    console_handler: logging.Handler = logging.NullHandler()
+    if not has_console:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     root_logger.addHandler(console_handler)
     root_logger.setLevel(logging.INFO)
     try:
-        run_predict(
+        run = run_predict(
             bundle_dir=args.bundle,
             project_dir=args.project,
             output_dir=args.output,
@@ -571,13 +626,21 @@ def main(argv: list[str] | None = None) -> int:
             keep_work_dir=args.keep_work_dir,
             scenario_name=args.scenario_name,
             verify_checksums=not args.skip_checksums,
+            check_inputs=not args.skip_check,
         )
     except (PredictError, BundleError, FileNotFoundError, ValueError, KeyError) as exc:
-        print(f"\nError: {exc}\n(Full details in {Path(args.output) / LOG_FILENAME})", file=sys.stderr)
+        log_path = Path(args.output) / LOG_FILENAME
+        details = f"\n(Full details in {log_path})" if log_path.is_file() else ""
+        print(f"\nError: {exc}{details}", file=sys.stderr)
         return 2
     finally:
         root_logger.removeHandler(console_handler)
         root_logger.setLevel(previous_level)
+    print(f"\nPredicted {len(run.hexels)} hexel(s) into {run.output_dir}")
+    if run.fire_size_note:
+        print(run.fire_size_note)
+    if run.input_check is not None and run.input_check.warnings:
+        print(f"{len(run.input_check.warnings)} input warning(s) were logged; see {run.output_dir / LOG_FILENAME}.")
     return 0
 
 

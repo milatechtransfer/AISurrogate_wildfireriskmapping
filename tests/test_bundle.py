@@ -8,6 +8,7 @@ import yaml
 
 from inference.bundle import (
     MANIFEST_FILENAME,
+    RESOURCE_FIRE_SIZE_TABLE,
     BundleError,
     compute_model_io_dims,
     load_bundle,
@@ -102,7 +103,14 @@ def training_checkpoint(tmp_path: Path) -> tuple[Path, torch.nn.Module]:
     return checkpoint_path, model
 
 
+def _write_training_fire_size_table(path: Path) -> Path:
+    pd.DataFrame({"GRIDCODE": [21, 21, 21, 22, 22, 22], "SIZE_HA": [30.0, 120.0, 900.0, 50.0, 400.0, 5000.0]}).to_csv(path, index=False)
+    return path
+
+
 def _export(checkpoint_path: Path, out_dir: Path, **kwargs) -> Path:
+    if "fire_size_table" not in kwargs:
+        kwargs["fire_size_table"] = _write_training_fire_size_table(checkpoint_path.parent / "df_fire_fru_training.csv")
     return export_bundle(checkpoint_path=checkpoint_path, out_dir=out_dir, name="test-bundle", version="0.0.1", **kwargs)
 
 
@@ -148,17 +156,28 @@ def test_export_and_load_round_trip_reproduces_model(training_checkpoint, tmp_pa
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
-def test_export_records_fire_size_training_table_without_copying(training_checkpoint, tmp_path: Path):
+def test_export_ships_the_training_fire_size_table(training_checkpoint, tmp_path: Path):
     checkpoint_path, _ = training_checkpoint
     table = tmp_path / "df_fire_fru_25ha.csv"
     pd.DataFrame({"SIZE_HA": [1.0, 2.0], "GRIDCODE": [1, 2]}).to_csv(table)
 
-    bundle = load_bundle(_export(checkpoint_path, tmp_path / "bundle", fire_size_training_table=table))
+    bundle = load_bundle(_export(checkpoint_path, tmp_path / "bundle", fire_size_table=table, fire_size_table_note="Public data."))
 
     recorded = bundle.manifest.inputs.fire_size_training_table
     assert recorded is not None
     assert (recorded.filename, recorded.num_rows, recorded.columns) == ("df_fire_fru_25ha.csv", 2, ["SIZE_HA", "GRIDCODE"])
-    assert not list(bundle.root.rglob("df_fire_fru_25ha.csv"))
+    shipped = bundle.resource_path(RESOURCE_FIRE_SIZE_TABLE)
+    assert shipped == bundle.root / "lookups" / "df_fire_fru_25ha.csv"
+    assert shipped.read_bytes() == table.read_bytes()
+    assert recorded.sha256 == bundle.manifest.resources[RESOURCE_FIRE_SIZE_TABLE].sha256
+    assert "Public data." in (bundle.root / "MODEL_CARD.md").read_text()
+
+
+def test_export_requires_fire_size_table_for_fire_size_models(training_checkpoint, tmp_path: Path):
+    checkpoint_path, _ = training_checkpoint
+    with pytest.raises(BundleError, match="--fire_size_table"):
+        _export(checkpoint_path, tmp_path / "bundle", fire_size_table=None)
+    assert not (tmp_path / "bundle").exists()
 
 
 def test_export_refuses_existing_output_without_overwrite(training_checkpoint, tmp_path: Path):
