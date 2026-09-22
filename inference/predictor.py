@@ -5,7 +5,7 @@ Wraps the PyTorch model and handles tensor-in, tensor-out operations.
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 
@@ -18,6 +18,9 @@ from src.datasets.targets import (
     split_target_predictions,
 )
 from src.models.factory import build_model
+
+if TYPE_CHECKING:
+    from inference.bundle import ModelBundle
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +111,17 @@ class BurnRiskPredictor:
 
         logger.info(f"Model loaded successfully on {device}")
         return cls(model=model, device=device, config=config)
+
+    @classmethod
+    def from_bundle(cls, bundle: "ModelBundle", device: str | torch.device = "auto") -> "BurnRiskPredictor":
+        """Create a predictor from a loaded model bundle (see ``inference.bundle.load_bundle``)."""
+        from inference.bundle import resolve_device
+
+        resolved_device = resolve_device(device)
+        model = bundle.build_model(device=resolved_device)
+        config = {"data": {"input_sources": [source.model_dump() for source in bundle.manifest.data.input_sources]}}
+        logger.info(f"Model bundle {bundle.manifest.name} v{bundle.manifest.version} loaded on {resolved_device}")
+        return cls(model=model, device=resolved_device, config=config)
 
     @staticmethod
     def _target_specs_from_config(config: dict[str, Any] | None) -> list[TargetSpec]:

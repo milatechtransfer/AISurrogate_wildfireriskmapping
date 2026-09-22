@@ -2,6 +2,41 @@
 
 End-to-end inference pipeline for wildfire risk prediction on hexels.
 
+## Predict from a model bundle (recommended)
+
+A model bundle is a self-contained folder with the weights, the training normalization statistics,
+the fuel curves and a manifest (see `bundle.py`). Prediction from a bundle needs only the project
+**inputs**; BurnP3+ outputs and the training data are not required.
+
+```bash
+# One-off (maintainers): turn a training checkpoint into a bundle
+python -m inference.export_bundle --checkpoint path/to/best.pth --out_dir nrcan-surrogate-bp-fi-ros-v1.0 \
+    --name nrcan-surrogate-bp-fi-ros --version 1.0.0 \
+    --hazard_denominator_json path/to/hazard_scale_denominator.json \
+    --fire_size_training_table path/to/df_fire_fru_25ha_1970_2023.csv
+
+# Predict every hexel of a project (CPU or GPU is picked automatically)
+python -m inference.predict --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
+    --fire_size_table path/to/fire_sizes.csv --output path/to/predictions
+```
+
+Useful options: `--hex_ids 12 14`, `--device cpu|cuda|mps`, `--batch_size` (lower it if memory runs out),
+`--mask_scope buffer`, `--no_hazard`, `--overwrite`, `--keep_work_dir`. Run with `--help` for the full list.
+
+Project inputs per hexel (`hexNN/`): `spatial/hexNN_dem.tif` (100 m), `spatial/hexNN_fbp.tif`,
+`spatial/hexNN_firezones.tif`, `spatial/ignition_grids/hexNN_ignGrid_{H|N}_<season>.tif`,
+`spatial/mask_grids/hexNN_actual.shp`, and `tabular/hexNN_{DailyWeather,FireZones,IgnitionDistribution,GreenUp}.csv`.
+The fire-size table (columns `GRIDCODE`, `SIZE_HA`) is supplied separately; the bundle manifest records
+which table the model was trained with.
+
+Outputs in `--output`: `hexNN/hexNN_{bp,fi,ros}.tif` (probability, kW/m, m/min; nodata -9999),
+`hexNN/hexNN_hazard_{raw,scaled,class}.tif` (class 0 = nodata), `run_manifest.json` (bundle, inputs,
+options, software versions, timings) and `predict.log`.
+
+## Legacy: predict from a training checkpoint
+
+The pipeline below reads normalization statistics and fuel curves from the training data folders
+referenced by the checkpoint and needs BurnP3+ outputs for every hexel. Prefer `inference.predict`.
 
 ## Quick Start
 
