@@ -28,11 +28,25 @@ An AI surrogate modelling framework that approximates wildfire burn probability,
 
 Install `uv`: https://docs.astral.sh/uv/getting-started/installation.
 
+The released checkpoints under `model_checkpoints/` (see [Trained model checkpoints](#trained-model-checkpoints)) are stored via [Git LFS](https://git-lfs.com). Install it **before** cloning, then run `git lfs install` once per machine:
+
+```bash
+git lfs install
+```
+
+Without this, `model_checkpoints/**/*.pth` files are checked out as small Git LFS pointer text files instead of the actual checkpoint weights, and `torch.load` will fail on them.
+
 Clone the repository:
 
 ```bash
 git clone https://github.com/milatechtransfer/nrcan_wildfireriskmapping.git
 cd nrcan_wildfireriskmapping
+```
+
+If you already cloned the repository before installing Git LFS, fetch the real checkpoint contents with:
+
+```bash
+git lfs pull
 ```
 
 Then, create/update the environment from the lockfile:
@@ -69,9 +83,11 @@ For all data preparation steps, refer to [`data_preparation/README.md`](data_pre
 
 Under `model_checkpoints/` we release the best model checkpoints for the multi-output models (spatial-only, and spatial + weather, spatial + weather + fire size (TODO)). The latest checkpoint, `model_checkpoints/multi_task_spatial_weather_firesize/best.pth`, is the one used for all analysis throughout the paper, corresponding to [`configs/multi_output_spatial_weather_firesize_q3.yaml`](configs/multi_output_spatial_weather_firesize_q3.yaml).
 
+These `.pth` files are stored via Git LFS (see [Installation & Setup](#️-installation--setup)). If `git lfs install` wasn't run before cloning, run `git lfs pull` to replace the LFS pointer files with the actual checkpoint weights before loading them.
+
 ## Model inference
 
-To run the standalone inference pipeline, refer to [inferece/README.md](inference/README.md)
+To run the standalone inference pipeline, refer to [inference/README.md](inference/README.md)
 
 ## Model Finetuning
 
