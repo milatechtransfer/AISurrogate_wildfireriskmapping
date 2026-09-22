@@ -170,7 +170,8 @@ def _write_model_card(bundle_dir: Path, manifest: BundleManifest) -> None:
         "",
         "- Emulates BurnP3+ outputs; it inherits BurnP3+ assumptions and does not replace validation against simulations.",
         "- Accuracy is lower for fuels, weather, or fire regimes not represented in the national training hexels.",
-        "- Fuel codes absent from the bundled fuel-curve table cannot be predicted.",
+        "- Fuel codes absent from the bundled fuel-curve table need a definition in the project's fuel tables "
+        "(FuelTypes/FuelCodeCrosswalk); fuel types absent from national training (C-6, M-3/M-4, S-1 to S-3) are not supported.",
         "",
     ]
     (bundle_dir / MODEL_CARD_FILENAME).write_text("\n".join(lines))

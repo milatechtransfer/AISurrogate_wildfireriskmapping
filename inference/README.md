@@ -73,7 +73,8 @@ checks first (skip with `--skip_check`). It reports three levels:
 
 - **ERROR** – prediction would fail or be meaningless; `predict` stops before doing any work. Examples:
   missing files, rasters without a CRS or not overlapping the mask, DEM not ~100 m, fuel codes the model
-  has no curve for and the project does not define (see "Fuel codes"), no weather rows for any of the hexel's fire zones, missing GreenUp seasons.
+  has no curve for and the project does not define (see "Fuel codes"), no weather rows for any of the
+  hexel's fire zones, missing GreenUp seasons.
 - **WARNING** – prediction runs but some cells use a fallback; review these. Examples: fire zones without
   weather rows (the hexel's average weather is used), zones missing from `FireZones.csv` or the fire-size
   table, implausible weather values, low raster coverage inside the mask.
@@ -90,7 +91,10 @@ Exit codes: `0` ready to predict, `1` input errors, `2` the check could not run 
 
 Outputs in `--output`: `hexNN/hexNN_{bp,fi,ros}.tif` (probability, kW/m, m/min; nodata -9999),
 `hexNN/hexNN_hazard_{raw,scaled,class}.tif` (class 0 = nodata), `run_manifest.json` (bundle, inputs,
-fire-size table, input check, options, software versions, timings) and `predict.log`.
+fire-size table, input check, options, software versions, timings) and `predict.log`. The rasters are on
+the grid the model works on: inputs are reprojected to the model's CRS (`ESRI:102002`, Canada Lambert
+Conformal Conic) as in training, so a project in another CRS gets outputs on a different grid than its
+inputs; reproject them if you need to overlay them cell by cell.
 
 ## Evaluate against BurnP3+
 
@@ -114,14 +118,13 @@ python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project p
 ```
 
 Useful options: `--hex_ids`, `--mask_scope buffer` (also reports the hexel and the buffer ring separately) or
-`none` (whole raster extent),
-`--by_firezone` (metrics per fire zone), `--metrics ccc mae` (a subset), `--no_plots`, `--overwrite`, and the
+`none` (whole raster extent), `--by_firezone` (metrics per fire zone), `--metrics ccc mae` (a subset), `--no_plots`, `--overwrite`, and the
 `predict` options (`--device`, `--batch_size`, `--fire_size_table`, ...). With `--predictions`, the mask scope
 of the predictions is used and evaluate warns if they were made with a different model. Re-running with
 `--overwrite` into the same folder replaces the metrics but keeps `predictions/`.
 
 Metrics follow the model's own evaluation: they are computed per hexel on the full 100 m rasters inside the
-hexel mask (cells where BurnP3+ has data; BurnP3+ nodata in burn probability counts as 0), then averaged
+hexel mask, or the whole raster with `--mask_scope none` (cells where BurnP3+ has data; BurnP3+ nodata in burn probability counts as 0), then averaged
 over hexels. On the test hexel 12 they reproduce the published values (within 0.1%; hazard classes exact).
 
 | Metric | Meaning (surrogate vs BurnP3+, per target) | Best |
