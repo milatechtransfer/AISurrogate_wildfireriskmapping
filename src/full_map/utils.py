@@ -253,3 +253,25 @@ def mosaic_predicted_hexels(
 
     ref_profile.update(count=1, dtype="float32", nodata=ref_nodata)
     return mosaic, ref_profile
+
+
+def backfill_mosaic_from_reference(mosaic: np.ndarray, nodata: float, reference_raster_path: str) -> np.ndarray:
+    """Fills remaining nodata pixels in `mosaic` (e.g. gaps left by per-hexel stitching, where no
+    single hexel's raw raster covered a pixel) from `reference_raster_path` -- a seamless,
+    already-merged raster sharing the same grid (CRS/transform/shape) as `mosaic`, so no
+    reprojection is needed. Only fills pixels that are nodata in `mosaic` *and* valid in the
+    reference; pixels already valid in `mosaic` are left untouched (per-hexel data stays
+    authoritative wherever it exists).
+    """
+    with rasterio.open(reference_raster_path) as ref_src:
+        reference = ref_src.read(1, out_dtype="float32")
+        ref_nodata = ref_src.nodata if ref_src.nodata is not None else nodata
+
+    fillable = ~valid_pixel_mask(mosaic, nodata) & valid_pixel_mask(reference, ref_nodata)
+    if not np.any(fillable):
+        return mosaic
+
+    filled = mosaic.copy()
+    filled[fillable] = reference[fillable]
+    print(f"Backfilled {int(fillable.sum())} px from {reference_raster_path} that were missing from per-hexel stitching.")
+    return filled

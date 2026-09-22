@@ -292,6 +292,39 @@ def test_generate_national_mosaics_with_file_maps_by_target_reuses_same_stitchin
     assert np.allclose(bp_mosaic, 0.7)
 
 
+def test_generate_national_mosaics_backfill_from_reference_fills_remaining_gaps(tmp_path):
+    """backfill_from_reference=True fills pixels left nodata after per-hexel stitching (e.g. a
+    hexel's raw raster only covering part of the national grid) from the seamless reference
+    raster, without overwriting pixels already pasted from per-hexel data."""
+    ref_path = tmp_path / "bp_gt.tif"
+    _write_tif(ref_path, np.full((4, 4), 5.0, dtype="float32"), from_origin(0, 4, 1, 1))
+
+    # Raw hexel raster only covers the top-left 2x2 quadrant of the 4x4 national grid.
+    gt_hex_path = tmp_path / "raw" / "hex12_bp.tif"
+    _write_tif(gt_hex_path, np.full((2, 2), 0.7, dtype="float32"), from_origin(0, 4, 1, 1))
+
+    shapefile_gdf_path = tmp_path / "hexels.shp"
+    gpd.GeoDataFrame({"hex_id": ["12"]}, geometry=[box(0, 2, 2, 4)], crs="EPSG:3978").to_file(shapefile_gdf_path)
+
+    output_dir = tmp_path / "national_gt_mosaics"
+    results = generate_national_mosaics(
+        shapefile_path=str(shapefile_gdf_path),
+        hexel_id_column="hex_id",
+        reference_raster_paths={"bp": str(ref_path)},
+        output_dir=str(output_dir),
+        file_maps_by_target={"bp": {12: gt_hex_path}},
+        output_filename_template="{target}_national_gt_map.tif",
+        backfill_from_reference=True,
+    )
+
+    bp_mosaic, _ = results["bp"]
+    # Per-hexel data stays authoritative in the top-left quadrant...
+    assert np.allclose(bp_mosaic[:2, :2], 0.7)
+    # ...and the remaining gaps are backfilled from the reference raster instead of staying nodata.
+    assert np.allclose(bp_mosaic[2:, :], 5.0)
+    assert np.allclose(bp_mosaic[:2, 2:], 5.0)
+
+
 def test_generate_national_mosaics_requires_exactly_one_source(tmp_path):
     ref_path = tmp_path / "bp_gt.tif"
     _write_tif(ref_path, np.full((2, 2), -9999.0, dtype="float32"), from_origin(0, 2, 1, 1))

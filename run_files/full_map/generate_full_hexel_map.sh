@@ -28,9 +28,12 @@ OUTPUT_DIR=${OUTPUT_DIR:-experiments/full_map}
 # Set GT_MODE=1 to mosaic ground-truth hexels (stitched from raw per-hexel rasters) instead of
 # predicted hexels, writing {target}_national_gt_map.tif instead of
 # {target}_national_predicted_map.tif. Only used with GT_MODE=1: RAW_DATA_DIR (defaults to
-# config.data.raw_data_dir if unset).
+# config.data.raw_data_dir if unset) and BACKFILL_FROM_REFERENCE=1 (fills any pixel still
+# nodata after per-hexel stitching from the seamless, already-merged
+# config.full_map.national_gt_raster_paths raster).
 GT_MODE=${GT_MODE:-0}
 RAW_DATA_DIR=${RAW_DATA_DIR:-}
+BACKFILL_FROM_REFERENCE=${BACKFILL_FROM_REFERENCE:-0}
 # Example: MOSAIC_ARGS="--save-plots --scale=log --title='Burn Probability'"
 # Resuming is automatic: existing output mosaic files are skipped by default. To force a full
 # recompute instead, use:
@@ -51,6 +54,9 @@ if [[ "$GT_MODE" == "1" ]]; then
     EXTRA_ARGS+=(--gt)
     if [[ -n "$RAW_DATA_DIR" ]]; then
         EXTRA_ARGS+=(--raw-data-dir="$RAW_DATA_DIR")
+    fi
+    if [[ "$BACKFILL_FROM_REFERENCE" == "1" ]]; then
+        EXTRA_ARGS+=(--backfill-from-reference)
     fi
 else
     echo "Mosaicking predicted hexels onto the national grid with config: $CONFIG_FILE"

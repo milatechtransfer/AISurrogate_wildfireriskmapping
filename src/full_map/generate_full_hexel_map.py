@@ -28,6 +28,7 @@ import yaml
 
 from src.config import Config
 from src.full_map.utils import (
+    backfill_mosaic_from_reference,
     build_raw_hexel_file_map,
     get_scale_settings,
     group_predicted_hexel_files_by_target,
@@ -83,6 +84,7 @@ def generate_national_mosaics(
     scale: str = "linear",
     save_plots: bool = False,
     skip_existing: bool = True,
+    backfill_from_reference: bool = False,
 ) -> dict[str, tuple[np.ndarray, dict]]:
     """
     Builds and saves one real-CRS national mosaic per target.
@@ -115,6 +117,12 @@ def generate_national_mosaics(
         skip_existing: If True, skip (re)building a target's mosaic when its output raster
             already exists in ``output_dir`` -- useful for resuming after a job was killed
             partway through the target loop, without re-mosaicking targets that already finished.
+        backfill_from_reference: If True, fills any pixel still nodata after per-hexel
+            stitching from ``reference_raster_paths[target]`` (e.g. a seamless, already-merged
+            national raster) -- useful when per-hexel source rasters (e.g. raw ground-truth
+            hexels via ``file_maps_by_target``) don't individually cover every pixel their
+            official merged counterpart does. Per-hexel data always takes priority; this only
+            fills gaps left after stitching, and only on freshly computed (non-skipped) mosaics.
 
     Returns:
         Mapping of target name -> (mosaic array, rasterio profile). Targets skipped via
@@ -161,6 +169,9 @@ def generate_national_mosaics(
             reference_raster_path=reference_raster_path,
         )
 
+        if backfill_from_reference:
+            mosaic = backfill_mosaic_from_reference(mosaic, profile["nodata"], reference_raster_path)
+
         with rasterio.open(output_tif_path, "w", **profile) as dst:
             dst.write(mosaic, 1)
         print(f"Saved {target_name!r} national mosaic to {output_tif_path}")
@@ -205,6 +216,14 @@ def main() -> None:
         help="Directory containing raw per-hexel data (hex{id}/...). Defaults to config.data.raw_data_dir. Only used with --gt.",
     )
     parser.add_argument(
+        "--backfill-from-reference",
+        action="store_true",
+        help="Only used with --gt. Fills any pixel still nodata after per-hexel stitching from "
+        "config.full_map.national_gt_raster_paths (the seamless, already-merged national raster) -- useful when "
+        "per-hexel raw rasters don't individually cover every pixel their official merged counterpart does. "
+        "Per-hexel data always takes priority; this only fills the remaining gaps.",
+    )
+    parser.add_argument(
         "--output-dir", type=str, default="experiments/full_map", help="Directory to write one national mosaic .tif per target into."
     )
     parser.add_argument("--save-plots", action="store_true", help="Also save a PNG plot of each target's mosaic.")
@@ -244,6 +263,7 @@ def main() -> None:
         generate_national_mosaics(
             file_maps_by_target=file_maps_by_target,
             output_filename_template="{target}_national_gt_map.tif",
+            backfill_from_reference=args.backfill_from_reference,
             **common_kwargs,
         )
     else:

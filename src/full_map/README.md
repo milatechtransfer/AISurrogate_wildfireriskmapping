@@ -136,8 +136,15 @@ python -m src.full_map.generate_full_hexel_map --config path/to/config.yaml \
 - Writes `{target}_national_gt_map.tif` (instead of `{target}_national_predicted_map.tif`) into
   `--output-dir`. Once built, update `config.full_map.national_gt_raster_paths` to point at
   these files -- no other pipeline step (steps 3-5) needs to change.
+- Per-hexel raw rasters may not individually cover every pixel that an official, already-merged
+  national product does (e.g. gaps between adjacent hexels' own extents that a province-wide
+  merge fills from overlapping simulations). Pass `--backfill-from-reference` to fill any pixel
+  still nodata after per-hexel stitching from `config.full_map.national_gt_raster_paths[target]`
+  itself (the seamless, already-merged raster, pixel-aligned by construction since it's also the
+  reference grid) -- per-hexel data always stays authoritative wherever it exists; this only
+  fills the leftover gaps, using real simulation data rather than a fabricated value.
 - Via SLURM: `GT_MODE=1 sbatch run_files/full_map/generate_full_hexel_map.sh configs/your_config.yaml`
-  (optionally with `RAW_DATA_DIR=...`).
+  (optionally with `RAW_DATA_DIR=...` and/or `BACKFILL_FROM_REFERENCE=1`).
 
 ## 3. Diff mosaics against ground truth
 
