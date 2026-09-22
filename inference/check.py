@@ -3,7 +3,9 @@ Check a project's input files against a model bundle before predicting.
 
 For every hexel folder it reports missing or unreadable files, rasters without a coordinate system,
 rasters that do not cover the prediction mask, cell sizes the model was not trained on, fuel codes the
-model does not know, fire zones without weather or fire-size data, and malformed tables.
+model has no fuel curve for, fire zones without weather or fire-size data, and malformed tables. Fuel codes
+missing from the model's fuel table are defined from the project's FuelTypes/FuelCodeCrosswalk tables when
+possible (see ``inference.fuels``).
 
 Errors stop (or would silently corrupt) a prediction and must be fixed. Warnings describe inputs the
 model can handle but whose results deserve a second look. ``predict`` runs these checks first.
@@ -32,20 +34,24 @@ from rasterio.features import geometry_mask
 from rasterio.mask import mask as mask_raster
 from rasterio.warp import calculate_default_transform
 
-from data_preparation.paths import MASK_SCOPE_CHOICES, Paths, normalize_mask_scope
+from data_preparation.paths import Paths
 from data_preparation.spatial.ignition import _IGN_GRID_PATTERN
 from data_preparation.spatial.utils import fire_cause_label_mapping, fire_cause_mapping
 from data_preparation.tabular.utils import check_weather_list, weather_column_aliases, weather_column_names
 from data_preparation.utils import FIRE_SIZE_COLUMN_ALIASES, FIRE_SIZE_FEATURE_COLS, find_hex_ids
 from inference.bundle import (
     FIRE_SIZE_SOURCE,
+    MASK_SCOPES,
+    NO_MASK_SCOPE,
     RESOURCE_FIRE_SIZE_TABLE,
     RESOURCE_FUEL_CURVES,
     WEATHER_SOURCE,
     BundleError,
     ModelBundle,
     load_bundle,
+    resolve_mask_scope,
 )
+from inference.fuels import CODE_COL, describe_codes, read_project_fuel_codes, resolve_fuel_curves
 from src.datasets.fuel_utils import _FEATURE_COLUMN, FUEL_CURVE_ENCODINGS, read_curves
 from src.datasets.targets import get_target_spec
 
@@ -216,6 +222,8 @@ class ModelRequirements:
     known_fuel_codes: frozenset[int] | None  # None: the model accepts any fuel code
     multi_season_fuel_codes: frozenset[int]
     targets: tuple[str, ...] = ()
+    fuel_curves: pd.DataFrame | None = field(default=None, compare=False, repr=False)  # the model's fuel curve table
+    fuel_feature_col: str = "ROS"
 
     @classmethod
     def from_bundle(cls, bundle: ModelBundle) -> ModelRequirements:
@@ -223,11 +231,15 @@ class ModelRequirements:
         grid = manifest.grid_params()
         known_codes: frozenset[int] | None = None
         multi_season: frozenset[int] = frozenset()
+        curve_table: pd.DataFrame | None = None
+        feature_col = "ROS"
         curves_path = bundle.optional_resource_path(RESOURCE_FUEL_CURVES)
         if "fuel_grid" in grid.feature_names_list and grid.fuel_feats_encoding in FUEL_CURVE_ENCODINGS and curves_path is not None:
-            curves = read_curves(ros_csv_path=curves_path, feature_col=_FEATURE_COLUMN[grid.fuel_feats_encoding])
+            feature_col = _FEATURE_COLUMN[grid.fuel_feats_encoding]
+            curves = read_curves(ros_csv_path=curves_path, feature_col=feature_col)
             known_codes = frozenset(int(code) for code in curves)
             multi_season = frozenset(int(code) for code, states in curves.items() if len(states) > 1)
+            curve_table = pd.read_csv(curves_path)
         sources = manifest.input_source_names()
         return cls(
             crs=manifest.inputs.crs,
@@ -238,6 +250,8 @@ class ModelRequirements:
             known_fuel_codes=known_codes,
             multi_season_fuel_codes=multi_season,
             targets=tuple(manifest.target_names),
+            fuel_curves=curve_table,
+            fuel_feature_col=feature_col,
         )
 
 
@@ -366,9 +380,15 @@ class _HexelCheck:
     # --- spatial -----------------------------------------------------------------------------
 
     def _load_mask(self) -> gpd.GeoDataFrame | None:
+        if self.mask_scope == NO_MASK_SCOPE:
+            return None
         path = self.paths.mask_grid(self.hex_id, mask_scope=self.mask_scope)
         if not path.is_file():
-            self.out.error(f"Missing the {self.mask_scope!r} mask shapefile (defines the area to predict).", path)
+            self.out.error(
+                f"Missing the {self.mask_scope!r} mask shapefile (defines the area to predict). For a study area without "
+                f"a hexel mask, use --mask_scope {NO_MASK_SCOPE} (the whole raster extent).",
+                path,
+            )
             return None
         missing_parts = [path.with_suffix(ext).name for ext in (".shx", ".dbf", ".prj") if not path.with_suffix(ext).is_file()]
         if missing_parts:
@@ -400,6 +420,8 @@ class _HexelCheck:
                 transform, _, _ = calculate_default_transform(src.crs, self.requirements.crs, src.width, src.height, *src.bounds)
                 raster = _Raster(path=path, crs=src.crs, res_m=float(abs(transform.a)), data=None)
                 if mask is None:
+                    if self.mask_scope == NO_MASK_SCOPE and read:
+                        return self._read_whole_raster(src, raster, what)
                     return raster
                 shapes = list(mask.to_crs(src.crs).geometry)
                 if not read:
@@ -428,6 +450,17 @@ class _HexelCheck:
         raster.data = np.ma.masked_array(data.data, mask=~valid)
         return raster
 
+    def _read_whole_raster(self, src: rasterio.io.DatasetReader, raster: _Raster, what: str) -> _Raster | None:
+        data = src.read(1, masked=True)
+        valid = ~np.ma.getmaskarray(data)
+        if np.issubdtype(data.dtype, np.floating):
+            valid &= np.isfinite(data.data)
+        if not valid.any():
+            self.out.error(f"{what[0].upper()}{what[1:]} has no valid data.", raster.path)
+            return None
+        raster.data = np.ma.masked_array(data.data, mask=~valid)
+        return raster
+
     def _check_resolution(self, dem: _Raster) -> None:
         expected = self.requirements.resolution_m
         deviation = abs(dem.res_m - expected) / expected
@@ -450,7 +483,8 @@ class _HexelCheck:
             )
 
     def _integer_values(self, raster: _Raster, what: str, path: Path) -> np.ndarray | None:
-        assert raster.data is not None
+        if raster.data is None:  # not read, e.g. the mask could not be loaded (already reported)
+            return None
         values = raster.data.compressed()
         if np.issubdtype(values.dtype, np.floating) and not np.allclose(values, np.rint(values), atol=1e-3):
             self.out.error(f"{what[0].upper()}{what[1:]} must hold integer codes; found non-integer values.", path)
@@ -463,15 +497,51 @@ class _HexelCheck:
         if values is None:
             return
         codes, counts = np.unique(values, return_counts=True)
+        cells = {int(code): int(count) for code, count in zip(codes, counts, strict=True)}
+        curves = self.requirements.fuel_curves
         known = self.requirements.known_fuel_codes
-        if known is not None:
-            unknown = [(int(code), int(count)) for code, count in zip(codes, counts, strict=True) if int(code) not in known]
-            if unknown:
-                self.out.error(
-                    f"Fuel code(s) the model has no fuel curve for: {_listing(f'{code} ({count:,} cells)' for code, count in unknown)}. "
-                    f"Known FBP codes: {_listing(sorted(known), limit=len(known))}. Recode these cells or declare them nodata.",
-                    path,
-                )
+        if curves is None or known is None:
+            return
+        tables = self.paths.fuel_crosswalk_table(self.hex_id)
+        try:
+            project_codes = read_project_fuel_codes(self.paths, self.hex_id)
+        except (OSError, ValueError, pd.errors.ParserError) as exc:
+            self.out.error(f"Could not read the fuel tables: {exc}", self.paths.fuel_table(self.hex_id))
+            project_codes = None
+        resolution = resolve_fuel_curves(
+            curves,
+            project_codes,
+            codes=cells,
+            feature_col=self.requirements.fuel_feature_col,
+            project_tables=f"hex{self.hex_id}_FuelTypes.csv / hex{self.hex_id}_FuelCodeCrosswalk.csv",
+        )
+        if resolution.unresolved:
+            listing = "; ".join(f"{code} ({cells[code]:,} cells): {reason}" for code, reason in sorted(resolution.unresolved.items()))
+            known_codes = sorted(int(code) for code in curves[CODE_COL].unique())
+            self.out.error(
+                f"Fuel code(s) the model has no fuel curve for: {listing}. "
+                f"Known FBP codes: {_listing(known_codes, limit=len(known_codes))}. Recode these cells, declare them nodata, "
+                "or define them in the project's fuel tables.",
+                path,
+            )
+        if resolution.derived:
+            self.out.note(
+                f"Fuel code(s) not in the model's fuel table, with curves computed from the project's fuel tables "
+                f"and the FBP equations: {describe_codes(resolution.derived, cells)}.",
+                tables,
+            )
+        if resolution.unverified:
+            self.out.warning(
+                "Fuel code(s) the project defines as a fuel whose curve cannot be computed here, so the model's curve "
+                f"for the code is used; check that the fuel raster uses the model's codes: {describe_codes(resolution.unverified, cells)}.",
+                tables,
+            )
+        if resolution.replaced:
+            self.out.warning(
+                f"Fuel code(s) the project defines differently from the model's fuel table; the project's definition "
+                f"is used: {describe_codes(resolution.replaced, cells)}. Check that the fuel raster uses the same codes.",
+                tables,
+            )
 
     def _fire_zones(self, zones_raster: _Raster) -> Counter[int] | None:
         path = self.paths.firezones_grid(self.hex_id)
@@ -706,7 +776,7 @@ def check_project(
     ``inputs`` checks the files the model reads; ``outputs`` checks the BurnP3+ result rasters used by evaluate.
     """
     project_dir = Path(project_dir).expanduser().resolve()
-    scope = normalize_mask_scope(mask_scope or bundle.manifest.data_prep.mask_scope or "actual")
+    scope = resolve_mask_scope(mask_scope, bundle)
     report = CheckReport(
         project_dir=str(project_dir),
         bundle=f"{bundle.manifest.name} v{bundle.manifest.version}",
@@ -753,7 +823,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project", required=True, help="Project folder containing hexNN/ input folders.")
     parser.add_argument("--hex_ids", nargs="+", default=None, help="Hexels to check, e.g. 12 or hex12 (default: all).")
     parser.add_argument("--fire_size_table", default=None, help="Fire-size CSV to use instead of the bundle's national table.")
-    parser.add_argument("--mask_scope", choices=[s for s in MASK_SCOPE_CHOICES if s != "buffer_only"], default=None)
+    parser.add_argument(
+        "--mask_scope",
+        choices=MASK_SCOPES,
+        default=None,
+        help="Area to check: the hexel mask (actual, default), the buffered mask, or none (whole raster extent).",
+    )
     parser.add_argument("--scenario_name", default=None, help="Check fuel raster hexNN_fbp_<scenario_name>.tif instead of hexNN_fbp.tif.")
     parser.add_argument(
         "--outputs", action="store_true", help="Also check the BurnP3+ output rasters (results/) that inference.evaluate compares against."

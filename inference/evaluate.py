@@ -43,9 +43,18 @@ import pandas as pd
 import rasterio
 import torch
 
-from data_preparation.paths import Paths, normalize_mask_scope
+from data_preparation.paths import Paths
 from data_preparation.utils import find_hex_ids
-from inference.bundle import BundleError, ModelBundle, load_bundle, resolve_device, utc_timestamp
+from inference.bundle import (
+    NO_MASK_SCOPE,
+    BundleError,
+    ModelBundle,
+    data_mask_scope,
+    load_bundle,
+    resolve_device,
+    resolve_mask_scope,
+    utc_timestamp,
+)
 from inference.check import CheckReport, check_project, resolve_hex_ids
 from inference.predict import (
     PREDICT_MASK_SCOPES,
@@ -314,12 +323,12 @@ def evaluate_hexel(
             target=spec,
             pred_grid=pred,
             profile=profile,
-            mask_scope=scope,
+            mask_scope=data_mask_scope(scope),
             hex_id=hex_id,
             bp_nodata_as_zero=manifest.evaluation.bp_nodata_as_zero,
             scenario_name=scenario_name,
         )
-        actual_support = _actual_area_mask(paths.mask_grid_actual(hex_id=hex_id), profile, pred.shape)
+        actual_support = _actual_area_mask(paths.mask_grid_actual(hex_id=hex_id), profile, pred.shape) if scope != NO_MASK_SCOPE else None
         buffer_support = (
             _actual_area_mask(paths.mask_grid(hex_id=hex_id, mask_scope=scope), profile, pred.shape) if scope == "buffer" else None
         )
@@ -445,6 +454,13 @@ def _write_manifest(
         json.dump(manifest, handle, indent=2, default=str)
 
 
+def _resolve_scope(requested: str | None, bundle: ModelBundle) -> str:
+    try:
+        return resolve_mask_scope(requested, bundle)
+    except (BundleError, ValueError) as exc:
+        raise EvaluateError(str(exc)) from exc
+
+
 def run_evaluate(
     bundle_dir: str | Path,
     project_dir: str | Path,
@@ -482,7 +498,7 @@ def run_evaluate(
             raise EvaluateError(f"Predictions folder not found: {pred_dir}")
         predictions_manifest = _read_predictions_manifest(pred_dir)
         predicted_scope = (predictions_manifest or {}).get("options", {}).get("mask_scope")
-        scope = normalize_mask_scope(mask_scope or predicted_scope or bundle.manifest.data_prep.mask_scope or "actual")
+        scope = _resolve_scope(mask_scope or predicted_scope, bundle)
         if predicted_scope and scope != predicted_scope:
             raise EvaluateError(f"The predictions cover the {predicted_scope!r} area; evaluate them with --mask_scope {predicted_scope}.")
         available = _hexels_with_predictions(pred_dir, bundle)
@@ -499,13 +515,11 @@ def run_evaluate(
             raise EvaluateError(f"Hexel(s) {['hex' + h for h in missing]} have predictions but no folder in the project {project_dir}.")
     else:
         pred_dir = output_dir / PREDICTIONS_DIRNAME
-        scope = normalize_mask_scope(mask_scope or bundle.manifest.data_prep.mask_scope or "actual")
+        scope = _resolve_scope(mask_scope, bundle)
         try:
             selected = discover_hex_ids(project_dir, hex_ids)
         except PredictError as exc:
             raise EvaluateError(str(exc)) from exc
-    if scope not in PREDICT_MASK_SCOPES:
-        raise EvaluateError(f"mask_scope must be one of {PREDICT_MASK_SCOPES}, got {scope!r}.")
 
     _prepare_output_dir(output_dir, overwrite, keep=pred_dir if reuse else None)
     resolved_device = resolve_device(device)
@@ -664,7 +678,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--metrics", nargs="+", default=None, help=f"Metrics to compute (default: {' '.join(DEFAULT_METRICS)}).", metavar="METRIC"
     )
-    parser.add_argument("--mask_scope", choices=PREDICT_MASK_SCOPES, default=None, help="Area to evaluate (default: actual hexel mask).")
+    parser.add_argument(
+        "--mask_scope",
+        choices=PREDICT_MASK_SCOPES,
+        default=None,
+        help="Area to evaluate: actual hexel mask (default), buffer, or none (whole raster extent).",
+    )
     parser.add_argument("--by_firezone", action="store_true", help="Also write metrics per fire zone (slower).")
     parser.add_argument("--no_plots", action="store_true", help="Skip the per-hexel plots (faster).")
     parser.add_argument(

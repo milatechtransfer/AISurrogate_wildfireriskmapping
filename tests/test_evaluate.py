@@ -240,3 +240,25 @@ def test_evaluate_cli_prints_summary_and_plain_errors(bundle_dir: Path, bundle: 
 
     assert main([*args, "--output", str(tmp_path / "evaluation")]) == 2
     assert "is not empty" in capsys.readouterr().err
+
+
+def test_evaluate_without_mask_scores_the_whole_raster(bundle_dir: Path, project: Path, tmp_path: Path):
+    _write_burnp3_results(project)
+    for path in (project / "hex01" / "spatial" / "mask_grids").iterdir():
+        path.unlink()
+
+    run = run_evaluate(bundle_dir, project, tmp_path / "evaluation", device="cpu", plots=False, mask_scope="none", metrics=["mae"])
+
+    assert (run.metrics["area"] == "none").all()
+    assert (run.metrics["n_pixels"] == HEIGHT * WIDTH).all()
+    rescored = run_evaluate(
+        bundle_dir,
+        project,
+        tmp_path / "evaluation",
+        predictions_dir=tmp_path / "evaluation" / PREDICTIONS_DIRNAME,
+        device="cpu",
+        plots=False,
+        metrics=["mae"],
+        overwrite=True,
+    )
+    assert (rescored.metrics["area"] == "none").all()

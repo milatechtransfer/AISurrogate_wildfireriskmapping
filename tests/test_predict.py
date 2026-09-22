@@ -198,6 +198,30 @@ def test_predict_writes_georeferenced_outputs_without_burnp3_results(bundle_dir:
     assert "national training table shipped with the model" in (output_dir / "predict.log").read_text()
 
 
+def test_predict_derives_curves_for_fuel_codes_defined_in_the_project(bundle_dir: Path, project: Path, tmp_path: Path):
+    from tests.test_fuels import write_project_fuel_tables
+
+    rows, cols = np.mgrid[0:HEIGHT, 0:WIDTH]
+    fuel = np.where(cols < WIDTH // 2, np.where(rows < HEIGHT // 2, 1, 425), 13)
+    _write_raster(project / "hex01" / "spatial" / "hex01_fbp.tif", fuel.astype(np.int16), -9999)
+    write_project_fuel_tables(
+        project,
+        "01",
+        {425: ("Mixedwood - Leafless (25% Conifer)", "M-1 (25 PC)")},
+    )
+
+    run = run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu", keep_work_dir=True)
+
+    assert run.hexels[0].fuel_curves == {"derived": {"425": "M-1 (25 PC)"}, "replaced": {}}
+    run_manifest = json.loads((tmp_path / "out" / RUN_MANIFEST_FILENAME).read_text())
+    assert run_manifest["hexels"][0]["fuel_curves"]["derived"] == {"425": "M-1 (25 PC)"}
+    curves = pd.read_csv(tmp_path / "out" / WORK_DIRNAME / "fuel_curves_hex01.csv")
+    assert set(curves.fbp_code) == {1, 13, 425}
+    with rasterio.open(tmp_path / "out" / "hex01" / "hex01_bp.tif") as src:
+        bp = src.read(1, masked=True)
+    assert bp.count() == (MASK_ROWS[1] - MASK_ROWS[0]) * (MASK_COLS[1] - MASK_COLS[0])
+
+
 def test_predict_cli_reports_which_fire_size_table_was_used(bundle_dir: Path, project: Path, tmp_path: Path, capsys):
     table = _write_fire_size_table(tmp_path / "regional_fire_sizes.csv")
     code = main(
@@ -318,3 +342,16 @@ def test_grid_source_resources_reject_hexel_without_season_weights(bundle_dir: P
     patch[..., 0] = 13.0
     with pytest.raises(ValueError, match="no season weights"):
         source.get_sample({"data": patch, "hex_id": 2})
+
+
+def test_predict_without_mask_covers_the_whole_raster(bundle_dir: Path, project: Path, tmp_path: Path):
+    for path in (project / "hex01" / "spatial" / "mask_grids").iterdir():
+        path.unlink()
+
+    run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu", mask_scope="none")
+
+    with rasterio.open(tmp_path / "out" / "hex01" / "hex01_bp.tif") as src:
+        assert (src.height, src.width) == (HEIGHT, WIDTH)
+        assert (src.transform.c, src.transform.f) == (ORIGIN_X, ORIGIN_Y)
+        assert src.read(1, masked=True).count() == HEIGHT * WIDTH
+    assert json.loads((tmp_path / "out" / RUN_MANIFEST_FILENAME).read_text())["options"]["mask_scope"] == "none"

@@ -28,6 +28,7 @@ import torch
 import yaml
 from pydantic import BaseModel, Field, ValidationError
 
+from data_preparation.paths import normalize_mask_scope
 from src.config import DataPrepConfig, DataSourceConfig, GridParams, ModelConfig, SpatializedTabularParams
 from src.datasets.fuel_utils import _FEATURE_COLUMN, FUEL_CURVE_ENCODINGS, read_curves
 from src.datasets.targets import get_target_spec
@@ -51,6 +52,11 @@ RESOURCE_DATASET_NORM_STATS = "dataset_norm_stats"
 RESOURCE_WEATHER_NORM_PARAMS = "weather_norm_params"
 RESOURCE_FIRE_SIZE_NORM_PARAMS = "fire_size_norm_params"
 RESOURCE_FUEL_CURVES = "fuel_curves"
+
+# Area to predict/evaluate: the hexel mask, the buffered mask, or no mask (the whole raster extent,
+# e.g. a regional study area without a hexel shapefile).
+NO_MASK_SCOPE = "none"
+MASK_SCOPES = ("actual", "buffer", NO_MASK_SCOPE)
 RESOURCE_FEATURE_CHANNEL_MAP = "feature_channel_map"
 RESOURCE_FIRE_SIZE_TABLE = "fire_size_table"
 
@@ -380,3 +386,19 @@ def load_bundle(bundle_dir: str | Path, verify_checksums: bool = True) -> ModelB
 
 def utc_timestamp() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def resolve_mask_scope(requested: str | None, bundle: ModelBundle) -> str:
+    """The area to use: ``requested``, else the bundle's training patch scope, else the actual hexel mask."""
+    scope = requested or bundle.manifest.data_prep.mask_scope or "actual"
+    if scope == NO_MASK_SCOPE:
+        return scope
+    scope = normalize_mask_scope(scope)
+    if scope not in MASK_SCOPES:
+        raise BundleError(f"mask_scope must be one of {MASK_SCOPES}, got {scope!r}.")
+    return scope
+
+
+def data_mask_scope(scope: str) -> str | None:
+    """The mask scope understood by data_preparation/src (None = no mask)."""
+    return None if scope == NO_MASK_SCOPE else scope

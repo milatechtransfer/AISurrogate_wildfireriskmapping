@@ -41,12 +41,14 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from data_preparation.hexel_loader import load_spatial_features_per_hexel
-from data_preparation.paths import normalize_mask_scope
+from data_preparation.paths import Paths
 from data_preparation.process_hexels_into_grids import get_split_hexel_window
 from data_preparation.process_tabular_data import build_weather_table, process_fire_size_distribution_table
 from data_preparation.utils import find_hex_ids
 from inference.bundle import (
     FIRE_SIZE_SOURCE,
+    MASK_SCOPES,
+    NO_MASK_SCOPE,
     RESOURCE_DATASET_NORM_STATS,
     RESOURCE_FIRE_SIZE_NORM_PARAMS,
     RESOURCE_FIRE_SIZE_TABLE,
@@ -55,15 +57,19 @@ from inference.bundle import (
     WEATHER_SOURCE,
     BundleError,
     ModelBundle,
+    data_mask_scope,
     load_bundle,
     resolve_device,
+    resolve_mask_scope,
     sha256_file,
     utc_timestamp,
 )
 from inference.check import CheckReport, check_project, describe_fire_size_table, resolve_hex_ids
+from inference.fuels import FuelCurveResolution, read_project_fuel_codes, resolve_fuel_curves
 from inference.predictor import BurnRiskPredictor
 from src.config import SpatializedTabularParams
 from src.datasets.dataset import MultiSourceDataset
+from src.datasets.fuel_utils import _FEATURE_COLUMN, FUEL_CURVE_ENCODINGS
 from src.datasets.postprocessing.hazard import bin_scaled_hazard, compute_raw_hazard, scale_hazard
 from src.datasets.postprocessing.utils import get_predicted_hexel, get_prediction_mask_channel_indices
 from src.datasets.sources.grids import GridSourceResources
@@ -75,7 +81,7 @@ logger = logging.getLogger("inference.predict")
 WORK_DIRNAME = "_work"
 RUN_MANIFEST_FILENAME = "run_manifest.json"
 LOG_FILENAME = "predict.log"
-PREDICT_MASK_SCOPES = ("actual", "buffer")
+PREDICT_MASK_SCOPES = MASK_SCOPES
 OUTPUT_NODATA = -9999.0
 HAZARD_CLASS_NODATA = 0
 
@@ -90,6 +96,7 @@ class HexelResult:
     outputs: dict[str, str]
     num_patches: int
     seconds: float
+    fuel_curves: dict[str, dict[str, str]] | None = None  # fuel codes whose curves came from the project's fuel tables
 
 
 @dataclass
@@ -188,7 +195,7 @@ def prepare_hexel_patches(
         hex_id=hex_id,
         feature_channel_map_path=str(feature_channel_map_path),
         modelling_approach=prep.modelling_approach,
-        mask_scope=mask_scope,
+        mask_scope=data_mask_scope(mask_scope),
         ignition_weighting=prep.ignition_weighting,
         fuel_representation=prep.fuel_representation,
         scenario_name=scenario_name,
@@ -215,15 +222,49 @@ def prepare_hexel_patches(
         win_h=prep.win_h,
         win_w=prep.win_w,
         overlap_ratio=prep.overlap_ratio,
-        mask_scope=mask_scope,
+        mask_scope=data_mask_scope(mask_scope),
     )
     metadata = pd.read_csv(work_dir / f"meta_hex_{hex_id}.csv")
     return int((metadata["valid_ratio"] > bundle.manifest.data.valid_mask_threshold).sum()) if not metadata.empty else 0
 
 
-def build_dataset(bundle: ModelBundle, project_dir: Path, hex_id: str, work_dir: Path) -> MultiSourceDataset:
-    """Build the dataset for one prepared hexel, taking every model-side resource from the bundle."""
+def resolve_hexel_fuel_curves(
+    bundle: ModelBundle, project_dir: Path, hex_id: str, work_dir: Path, scenario_name: str | None = None
+) -> tuple[Path | None, FuelCurveResolution | None]:
+    """Fuel curve table for one hexel: the bundle's, plus curves for its other fuel codes from the project's fuel tables.
+
+    Returns the table to use (the bundle's own file when nothing had to be added) and how the codes were resolved.
+    """
+    if RESOURCE_FUEL_CURVES not in bundle.manifest.resources:
+        return None, None
+    model_path = bundle.resource_path(RESOURCE_FUEL_CURVES)
+    encoding = bundle.manifest.grid_params().fuel_feats_encoding
+    if encoding not in FUEL_CURVE_ENCODINGS:
+        return model_path, None
+    paths = Paths(hex_id=hex_id, root_dir=project_dir)
+    with rasterio.open(paths.fuel_grid(hex_id, scenario_name=scenario_name)) as src:
+        values = src.read(1, masked=True).compressed()
+    codes = {int(code) for code in np.unique(values[np.isfinite(values)]).astype(np.int64)}
+    resolution = resolve_fuel_curves(
+        pd.read_csv(model_path), read_project_fuel_codes(paths, hex_id), codes=codes, feature_col=_FEATURE_COLUMN[encoding]
+    )
+    if not resolution.changed:
+        return model_path, resolution
+    path = work_dir / f"fuel_curves_hex{hex_id}.csv"
+    resolution.curves.to_csv(path, index=False)
+    return path, resolution
+
+
+def build_dataset(
+    bundle: ModelBundle, project_dir: Path, hex_id: str, work_dir: Path, fuel_curves_path: Path | None = None
+) -> MultiSourceDataset:
+    """Build the dataset for one prepared hexel, taking every model-side resource from the bundle.
+
+    ``fuel_curves_path`` replaces the bundle's fuel curve table (see ``resolve_hexel_fuel_curves``).
+    """
     manifest = bundle.manifest
+    if fuel_curves_path is None and RESOURCE_FUEL_CURVES in manifest.resources:
+        fuel_curves_path = bundle.resource_path(RESOURCE_FUEL_CURVES)
     sources = {}
     for source in manifest.data.input_sources:
         source_kwargs: dict[str, Any] = {"root_dir": str(work_dir), "params": source.params}
@@ -231,7 +272,7 @@ def build_dataset(bundle: ModelBundle, project_dir: Path, hex_id: str, work_dir:
             source_kwargs["resources"] = GridSourceResources(
                 norm_stats=bundle.read_json_resource(RESOURCE_DATASET_NORM_STATS),
                 channel_feature_map=manifest.model_io.feature_channel_map,
-                fuel_curves_path=bundle.resource_path(RESOURCE_FUEL_CURVES) if RESOURCE_FUEL_CURVES in manifest.resources else None,
+                fuel_curves_path=fuel_curves_path,
                 season_data_dir=project_dir,
                 hex_ids=[hex_id],
             )
@@ -306,7 +347,7 @@ def stitch_predictions(
             target_log_std=target.log_std,
             target_channel_index=manifest.model_io.feature_channel_map[spec.channel_key][0],
             prediction_mask_channel_indices=mask_channel_indices,
-            mask_scope=mask_scope,
+            mask_scope=data_mask_scope(mask_scope),
         )
     return grids, dict(profile)
 
@@ -383,8 +424,12 @@ def predict_hexel(
     logger.info("hex%s: preparing input patches", hex_id)
     num_patches = prepare_hexel_patches(bundle, project_dir, hex_id, work_dir, mask_scope, scenario_name=scenario_name)
     if num_patches == 0:
-        raise PredictError(f"hex{hex_id} has no valid input pixels inside the {mask_scope!r} mask; check the rasters and the mask.")
-    dataset = build_dataset(bundle, project_dir, hex_id, work_dir)
+        area = "rasters" if mask_scope == NO_MASK_SCOPE else f"{mask_scope!r} mask"
+        raise PredictError(f"hex{hex_id} has no valid input pixels inside the {area}; check the rasters and the mask.")
+    fuel_curves_path, fuel_resolution = resolve_hexel_fuel_curves(bundle, project_dir, hex_id, work_dir, scenario_name=scenario_name)
+    if fuel_resolution is not None and fuel_resolution.derived:
+        logger.info("hex%s: fuel curves computed from the project's fuel tables for code(s) %s", hex_id, sorted(fuel_resolution.derived))
+    dataset = build_dataset(bundle, project_dir, hex_id, work_dir, fuel_curves_path=fuel_curves_path)
     logger.info("hex%s: running the model on %d patches", hex_id, len(dataset))
     predictions = run_model(predictor, dataset, batch_size=batch_size, num_workers=num_workers)
     grids, profile = stitch_predictions(bundle, project_dir, hex_id, work_dir, dataset, predictions, mask_scope)
@@ -392,7 +437,13 @@ def predict_hexel(
     outputs = write_hexel_outputs(bundle, hex_id, grids, hazard_grids, profile, output_dir)
     seconds = time.perf_counter() - start
     logger.info("hex%s: done in %.1f s -> %s", hex_id, seconds, output_dir / f"hex{hex_id}")
-    return HexelResult(hex_id=hex_id, outputs=outputs, num_patches=len(dataset), seconds=round(seconds, 2))
+    return HexelResult(
+        hex_id=hex_id,
+        outputs=outputs,
+        num_patches=len(dataset),
+        seconds=round(seconds, 2),
+        fuel_curves=fuel_resolution.summary() if fuel_resolution is not None and fuel_resolution.changed else None,
+    )
 
 
 def _prepare_output_dir(output_dir: Path, overwrite: bool) -> None:
@@ -541,9 +592,10 @@ def run_predict(
 
     bundle = load_bundle(bundle_dir, verify_checksums=verify_checksums)
     fire_size_path = resolve_fire_size_table(bundle, fire_size_table)
-    scope = normalize_mask_scope(mask_scope or bundle.manifest.data_prep.mask_scope or "actual")
-    if scope not in PREDICT_MASK_SCOPES:
-        raise PredictError(f"mask_scope must be one of {PREDICT_MASK_SCOPES}, got {scope!r}.")
+    try:
+        scope = resolve_mask_scope(mask_scope, bundle)
+    except (BundleError, ValueError) as exc:
+        raise PredictError(str(exc)) from exc
     selected_hex_ids = discover_hex_ids(project_dir, hex_ids)
 
     _prepare_output_dir(output_dir, overwrite)
@@ -655,7 +707,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="auto", help="auto (default), cpu, cuda, cuda:1 or mps.")
     parser.add_argument("--batch_size", type=int, default=8, help="Patches per model call (lower it if memory runs out).")
     parser.add_argument("--num_workers", type=int, default=0, help="Data-loading worker processes (0 is safest on Windows/macOS).")
-    parser.add_argument("--mask_scope", choices=PREDICT_MASK_SCOPES, default=None, help="Area to predict (default: actual hexel mask).")
+    parser.add_argument(
+        "--mask_scope",
+        choices=PREDICT_MASK_SCOPES,
+        default=None,
+        help="Area to predict: actual hexel mask (default), buffer, or none (whole raster extent, e.g. a regional study area).",
+    )
     parser.add_argument("--no_hazard", action="store_true", help="Do not write hazard rasters.")
     parser.add_argument("--scenario_name", default=None, help="Use fuel raster hexNN_fbp_<scenario_name>.tif instead of hexNN_fbp.tif.")
     parser.add_argument("--overwrite", action="store_true", help="Replace previous predictions in --output.")

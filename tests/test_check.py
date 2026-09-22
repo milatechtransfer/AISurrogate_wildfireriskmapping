@@ -13,6 +13,7 @@ from shapely.geometry import box
 
 from inference.bundle import ModelBundle, load_bundle
 from inference.check import CheckReport, check_project, main, resolve_hex_ids
+from tests.test_fuels import write_project_fuel_tables
 from tests.test_predict import CRS, HEIGHT, MASK_COLS, MASK_ROWS, ORIGIN_X, ORIGIN_Y, WIDTH, _write_hexel, _write_raster, make_test_bundle
 
 
@@ -75,9 +76,38 @@ def test_unknown_fuel_codes_are_listed_with_cell_counts(bundle: ModelBundle, pro
 
     cells_inside_mask = (MASK_ROWS[1] - MASK_ROWS[0]) * (MASK_COLS[1] - WIDTH // 2)
     assert _messages(report, "error") == [
-        f"hex01/spatial/hex01_fbp.tif: Fuel code(s) the model has no fuel curve for: 999 ({cells_inside_mask:,} cells). "
-        "Known FBP codes: 1, 13. Recode these cells or declare them nodata."
+        f"hex01/spatial/hex01_fbp.tif: Fuel code(s) the model has no fuel curve for: 999 ({cells_inside_mask:,} cells): "
+        "not in the model's fuel table and no hex01_FuelTypes.csv / hex01_FuelCodeCrosswalk.csv to define it. "
+        "Known FBP codes: 1, 13. Recode these cells, declare them nodata, or define them in the project's fuel tables."
     ]
+
+
+def test_fuel_codes_defined_in_the_project_fuel_tables_get_derived_curves(bundle: ModelBundle, project: Path):
+    rows, cols = np.mgrid[0:HEIGHT, 0:WIDTH]
+    fuel = np.where(cols < WIDTH // 2, np.where(rows < HEIGHT // 2, 1, 425), np.where(rows < HEIGHT // 2, 13, 21))
+    _write_raster(project / "hex01" / "spatial" / "hex01_fbp.tif", fuel.astype(np.int16), -9999)
+    write_project_fuel_tables(
+        project,
+        "01",
+        {
+            425: ("Boreal Mixedwood - Leafless (25% Conifer)", "M-1 (25 PC)"),
+            21: ("Jack or Lodgepole Pine Slash", "S-1"),
+        },
+    )
+
+    report = check_project(bundle, project)
+
+    quarter = (HEIGHT // 2 - MASK_ROWS[0]) * (WIDTH // 2 - MASK_COLS[0])
+    assert _messages(report, "error") == [
+        f"hex01/spatial/hex01_fbp.tif: Fuel code(s) the model has no fuel curve for: 21 ({quarter:,} cells): "
+        "S-1: fuel type S-1 needs curves from the R script. "
+        "Known FBP codes: 1, 13. Recode these cells, declare them nodata, or define them in the project's fuel tables."
+    ]
+    assert (
+        "hex01/tabular/hex01_FuelCodeCrosswalk.csv: Fuel code(s) not in the model's fuel table, with curves computed from "
+        f"the project's fuel tables and the FBP equations: 425 = M-1 (25 PC) ({quarter:,} cells)."
+    ) in _messages(report, "note")
+    assert _messages(report, "warning") == []
 
 
 def test_missing_files_are_all_reported(bundle: ModelBundle, project: Path):
@@ -232,3 +262,43 @@ def test_outputs_mode_checks_the_burnp3_results_for_evaluation(bundle: ModelBund
     assert report.ok
     assert report.notes == []  # the fire-size table is an input
     assert "ready to evaluate, no problems found" in report.format()
+
+
+def test_known_fuel_codes_defined_as_another_fuel_are_flagged(bundle: ModelBundle, project: Path):
+    # The test bundle's curves are synthetic, so a real C-1 definition of code 1 differs from the model's curve.
+    write_project_fuel_tables(project, "01", {1: ("Spruce-Lichen Woodland", "C-1"), 13: ("Plantation", "C-6")})
+
+    report = check_project(bundle, project)
+
+    assert report.ok
+    assert _messages(report, "warning") == [
+        "hex01/tabular/hex01_FuelCodeCrosswalk.csv: Fuel code(s) the project defines as a fuel whose curve cannot be "
+        "computed here, so the model's curve for the code is used; check that the fuel raster uses the model's codes: "
+        f"13 = C-6: fuel type C-6 needs curves from the R script ({(MASK_ROWS[1] - MASK_ROWS[0]) * (MASK_COLS[1] - WIDTH // 2):,} cells).",
+        "hex01/tabular/hex01_FuelCodeCrosswalk.csv: Fuel code(s) the project defines differently from the model's fuel "
+        f"table; the project's definition is used: 1 = C-1 ({(MASK_ROWS[1] - MASK_ROWS[0]) * (WIDTH // 2 - MASK_COLS[0]):,} cells). "
+        "Check that the fuel raster uses the same codes.",
+    ]
+
+
+def test_missing_mask_is_an_error_that_points_to_mask_scope_none(bundle: ModelBundle, project: Path):
+    for path in (project / "hex01" / "spatial" / "mask_grids").iterdir():
+        path.unlink()
+
+    report = check_project(bundle, project)
+
+    errors = _messages(report, "error")
+    assert len(errors) == 1
+    assert errors[0].startswith("hex01/spatial/mask_grids/hex01_actual.shp: Missing the 'actual' mask shapefile")
+    assert "--mask_scope none" in errors[0]
+
+
+def test_regional_study_area_without_mask_checks_the_whole_raster(bundle: ModelBundle, project: Path):
+    for path in (project / "hex01" / "spatial" / "mask_grids").iterdir():
+        path.unlink()
+
+    report = check_project(bundle, project, mask_scope="none")
+
+    assert _messages(report, "error") == []
+    assert _messages(report, "warning") == []
+    assert report.mask_scope == "none"

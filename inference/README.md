@@ -29,12 +29,34 @@ python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project p
 ```
 
 Useful options: `--hex_ids 12 14` (or `hex12`), `--device cpu|cuda|mps`, `--batch_size` (lower it if memory
-runs out), `--mask_scope buffer`, `--no_hazard`, `--overwrite`, `--keep_work_dir`, `--skip_check`. Run with
-`--help` for the full list.
+runs out), `--mask_scope buffer|none`, `--scenario_name NAME`, `--no_hazard`, `--overwrite`, `--keep_work_dir`,
+`--skip_check`. Run with `--help` for the full list.
+
+**Study areas without a hexel mask** (e.g. a regional project): pass `--mask_scope none` to `check`,
+`predict` and `evaluate`; the whole extent of the rasters is then used and `mask_grids/` is not needed.
 
 Project inputs per hexel (`hexNN/`): `spatial/hexNN_dem.tif` (100 m), `spatial/hexNN_fbp.tif`,
 `spatial/hexNN_firezones.tif`, `spatial/ignition_grids/hexNN_ignGrid_{H|N}_<season>.tif`,
-`spatial/mask_grids/hexNN_actual.shp`, and `tabular/hexNN_{DailyWeather,FireZones,IgnitionDistribution,GreenUp}.csv`.
+`spatial/mask_grids/hexNN_actual.shp` (not needed with `--mask_scope none`), and
+`tabular/hexNN_{DailyWeather,FireZones,IgnitionDistribution,GreenUp}.csv`. Optional:
+`tabular/hexNN_{FuelTypes,FuelCodeCrosswalk}.csv` (see "Fuel codes").
+
+### Fuel codes
+
+The model does not see fuel codes directly: each code is turned into its FBP rate-of-spread curve (ROS vs
+ISI) from the fuel table shipped in the bundle, which covers the fuel codes of the national training data.
+A project may use other codes, e.g. a regional fuel grid with new mixedwood percentages:
+
+- If the project has the BurnP3+ fuel tables `tabular/hexNN_FuelTypes.csv` (`Name`, `ID`) and
+  `tabular/hexNN_FuelCodeCrosswalk.csv` (`FuelType`, `Code`, e.g. `M-1/M-2 (25 PC)`), the curves of codes
+  missing from the bundle are computed with the FBP equations, the same way the training curves were made
+  (C-1 to C-5, C-7, D-1/D-2, M-1/M-2 with any percent conifer, O-1a/O-1b, non-fuel). `check` lists them as
+  NOTEs and `predict` records them in `run_manifest.json`.
+- Fuel types absent from the national training data (C-6, M-3/M-4, S-1 to S-3) are an ERROR: the model has
+  never seen them. Recode those cells or declare them nodata.
+- Codes without a definition in the project tables are an ERROR. If the project defines a known code as a
+  different fuel than the model's table, `check` warns; the project's definition is used when it can be computed,
+  otherwise the model's curve is kept.
 
 ### Fire-size table
 
@@ -51,11 +73,11 @@ checks first (skip with `--skip_check`). It reports three levels:
 
 - **ERROR** – prediction would fail or be meaningless; `predict` stops before doing any work. Examples:
   missing files, rasters without a CRS or not overlapping the mask, DEM not ~100 m, fuel codes the model
-  does not know, no weather rows for any of the hexel's fire zones, missing GreenUp seasons.
+  has no curve for and the project does not define (see "Fuel codes"), no weather rows for any of the hexel's fire zones, missing GreenUp seasons.
 - **WARNING** – prediction runs but some cells use a fallback; review these. Examples: fire zones without
   weather rows (the hexel's average weather is used), zones missing from `FireZones.csv` or the fire-size
   table, implausible weather values, low raster coverage inside the mask.
-- **NOTE** – information, e.g. which fire-size table is used.
+- **NOTE** – information, e.g. which fire-size table is used, fuel codes whose curves were computed.
 
 With `--outputs` it also checks the BurnP3+ result rasters that `inference.evaluate` compares against
 (`evaluate` runs this check first).
@@ -91,7 +113,8 @@ python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project p
     --predictions path/to/predictions --output path/to/evaluation
 ```
 
-Useful options: `--hex_ids`, `--mask_scope buffer` (also reports the hexel and the buffer ring separately),
+Useful options: `--hex_ids`, `--mask_scope buffer` (also reports the hexel and the buffer ring separately) or
+`none` (whole raster extent),
 `--by_firezone` (metrics per fire zone), `--metrics ccc mae` (a subset), `--no_plots`, `--overwrite`, and the
 `predict` options (`--device`, `--batch_size`, `--fire_size_table`, ...). With `--predictions`, the mask scope
 of the predictions is used and evaluate warns if they were made with a different model. Re-running with
