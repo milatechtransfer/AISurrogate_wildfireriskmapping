@@ -12,7 +12,8 @@ An AI surrogate modelling framework that approximates wildfire burn probability,
   - [🛠️ Installation \& Setup](#️-installation--setup)
   - [📂 Data preparation](#-data-preparation)
   - [Trained model checkpoints](#trained-model-checkpoints)
-  - [Inference](#inference)
+  - [Model inference](#model-inference)
+  - [Model Finetuning](#model-finetuning)
   - [Hazard evaluation](#hazard-evaluation)
   - [Counterfactual analysis](#counterfactual-analysis)
   - [🤖 Training](#-training)
@@ -68,13 +69,33 @@ For all data preparation steps, refer to [`data_preparation/README.md`](data_pre
 
 Under `model_checkpoints/` we release the best model checkpoints for the multi-output models (spatial-only, and spatial + weather — the best model). The latter checkpoint, `model_checkpoints/multi_task_spatial_weather/best.pth`, is the one used for all analysis throughout the paper, corresponding to [`configs/multi_output_spatial_weather.yaml`](configs/multi_output_spatial_weather.yaml).
 
-## Inference
+## Model inference
 
-To visualize predictions and/or save visualizations, add the optional flags `--visualize_predictions` and/or `--save_visualizations`, respectively.
+To run the standalone inference pipeline, refer to [inferece/README.md](inference/README.md)
+
+## Model Finetuning
+
+To prepare new regional dataset, refer to [`data_preparation/README_regional.md`](data_preparation/README.md).
+
+Fine-tuning adapts an already-trained multi-output checkpoint (BP/FI/ROS) to a new, typically smaller, regional/scenario-specific dataset instead of training from scratch. The skeleton config [`configs/model_finetune.yaml`](configs/model_finetune.yaml) is a ready-to-edit template for this — fill in its `<PLACEHOLDER>` values (data paths, splits, experiment/run names, etc.) for your fine-tuning dataset. It is based on [`configs/multi_output_spatial_weather.yaml`](configs/multi_output_spatial_weather.yaml), with the same overrides used by the NWT example, [`configs/NWT_data/multi_output_NWT_eval_scenario_FireExcludeSpotting_finetune.yaml`](configs/NWT_data/multi_output_NWT_eval_scenario_FireExcludeSpotting_finetune.yaml):
+
+- Sets `training.warm_start_checkpoint` to the base checkpoint, renamed `best_base.pth` and placed under the fine-tune run's own `save_dir`. Only `model_state` is loaded from this checkpoint — the optimizer, LR scheduler, epoch counter, and best-metric baseline all start fresh, so the run behaves like fine-tuning rather than resuming.
+- Lowers the optimizer learning rate (`optimizer.lr: 5.0e-5` vs `7.0e-4` in the base config) and reduces `training.max_epochs` (`20` vs `25`) to avoid overfitting the much smaller fine-tuning dataset.
+- Reduces `data.batch_size` (`16` vs `64`) to fit smaller fine-tuning datasets.
+- Sets `evaluation.checkpoint_filename: "best.pth"` so the fine-tuned checkpoint is saved separately from `best_base.pth`.
+- Optionally, `training.freeze_modules` (commented out by default, e.g. `["encoder", "bottleneck"]`) can freeze those submodules — excluding them from the optimizer and keeping them in `eval()` mode — so fine-tuning only updates the remaining layers (e.g. task heads).
+
+To fine-tune:
+
+1. Edit [`configs/model_finetune.yaml`](configs/model_finetune.yaml), filling in `save_dir`, `data.root_dir`/`raw_data_dir`/splits, and `logger`/experiment names for your fine-tuning dataset.
+2. Copy/rename the base checkpoint to warm-start from (e.g. `model_checkpoints/multi_task_spatial_weather/best.pth`) to `<save_dir>/best_base.pth` (the path set in `training.warm_start_checkpoint`).
+3. Run:
 
 ```bash
-python -m src.evaluate_hexels --config=configs/multi_output_spatial_weather.yaml
+python -m src.train --config=configs/model_finetune.yaml
 ```
+
+The fine-tuned checkpoint is written to `<save_dir>/best.pth`, and can be evaluated the same way as any other multi-output checkpoint (see [Model inference](#model-inference) and [Hazard evaluation](#hazard-evaluation)).
 
 ## Hazard evaluation
 
