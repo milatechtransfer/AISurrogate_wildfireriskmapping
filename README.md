@@ -67,7 +67,7 @@ For all data preparation steps, refer to [`data_preparation/README.md`](data_pre
 
 ## Trained model checkpoints
 
-Under `model_checkpoints/` we release the best model checkpoints for the multi-output models (spatial-only, and spatial + weather — the best model). The latter checkpoint, `model_checkpoints/multi_task_spatial_weather/best.pth`, is the one used for all analysis throughout the paper, corresponding to [`configs/multi_output_spatial_weather.yaml`](configs/multi_output_spatial_weather.yaml).
+Under `model_checkpoints/` we release the best model checkpoints for the multi-output models (spatial-only, and spatial + weather, spatial + weather + fire size (TODO)). The latest checkpoint, `model_checkpoints/multi_task_spatial_weather_firesize/best.pth`, is the one used for all analysis throughout the paper, corresponding to [`configs/multi_output_spatial_weather_firesize_q3.yaml`](configs/multi_output_spatial_weather_firesize_q3.yaml).
 
 ## Model inference
 
