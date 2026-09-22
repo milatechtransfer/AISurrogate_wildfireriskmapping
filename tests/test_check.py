@@ -210,3 +210,25 @@ def test_cli_exit_codes_and_json_report(bundle: ModelBundle, project: Path, tmp_
 
     assert main(["--bundle", str(tmp_path / "no-bundle"), "--project", str(project)]) == 2
     assert "Model bundle directory not found" in capsys.readouterr().err
+
+
+def test_outputs_mode_checks_the_burnp3_results_for_evaluation(bundle: ModelBundle, project: Path):
+    from tests.test_evaluate import _write_burnp3_results
+
+    report = check_project(bundle, project, outputs=True)
+
+    assert not report.ok
+    assert _messages(report, "error") == [
+        "hex01/results/burnP3Plus_OutputBurnProbability/burnProbability-sn2.tif: Missing BurnP3+ burn probability output.",
+        "hex01/results/burnP3Plus_OutputFireIntensitySummaryMap/fbpSummary-FireIntensity-Average.tif: "
+        "Missing BurnP3+ fire intensity output.",
+        "hex01/results/burnP3Plus_OutputRateOfSpreadSummaryMap/fbpSummary-RateOfSpread-Average.tif: Missing BurnP3+ rate of spread output.",
+    ]
+    assert "Fix the errors before evaluating." in report.format()
+
+    _write_burnp3_results(project)
+    report = check_project(bundle, project, outputs=True, inputs=False)
+
+    assert report.ok
+    assert report.notes == []  # the fire-size table is an input
+    assert "ready to evaluate, no problems found" in report.format()

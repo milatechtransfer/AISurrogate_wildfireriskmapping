@@ -27,6 +27,8 @@ import shutil
 import sys
 import time
 import traceback
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -403,7 +405,46 @@ def _prepare_output_dir(output_dir: Path, overwrite: bool) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
 
-def _git_commit() -> str | None:
+@contextmanager
+def log_to_file(path: Path) -> Iterator[logging.FileHandler]:
+    """Copy every log message of the run to ``path``, even when the caller did not configure logging."""
+    handler = logging.FileHandler(path, mode="w", encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
+    package_logger = logging.getLogger("inference")
+    previous_level = package_logger.level
+    if package_logger.getEffectiveLevel() > logging.INFO:
+        package_logger.setLevel(logging.INFO)
+    try:
+        yield handler
+    finally:
+        root_logger.removeHandler(handler)
+        handler.close()
+        package_logger.setLevel(previous_level)
+
+
+@contextmanager
+def console_logging() -> Iterator[None]:
+    """Show INFO messages on the console for the duration of a CLI command."""
+    root_logger = logging.getLogger()
+    previous_level = root_logger.level
+    # Some data_preparation modules call logging.basicConfig at import time; reuse that console handler.
+    has_console = any(type(handler) is logging.StreamHandler for handler in root_logger.handlers)
+    console_handler: logging.Handler = logging.NullHandler()
+    if not has_console:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    root_logger.addHandler(console_handler)
+    root_logger.setLevel(logging.INFO)
+    try:
+        yield
+    finally:
+        root_logger.removeHandler(console_handler)
+        root_logger.setLevel(previous_level)
+
+
+def git_commit() -> str | None:
     import subprocess
 
     try:
@@ -456,7 +497,7 @@ def _write_run_manifest(
         "fire_size_table": fire_size_info,
         "options": options,
         "software": {
-            "git_commit": _git_commit(),
+            "git_commit": git_commit(),
             "python": platform.python_version(),
             "torch": torch.__version__,
             "platform": platform.platform(),
@@ -506,15 +547,44 @@ def run_predict(
     selected_hex_ids = discover_hex_ids(project_dir, hex_ids)
 
     _prepare_output_dir(output_dir, overwrite)
-    log_handler = logging.FileHandler(output_dir / LOG_FILENAME, mode="w", encoding="utf-8")
-    log_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s"))
-    logging.getLogger().addHandler(log_handler)
-    # Record this package's progress messages in predict.log even when the caller did not configure logging.
-    package_logger = logging.getLogger("inference")
-    previous_package_level = package_logger.level
-    if package_logger.getEffectiveLevel() > logging.INFO:
-        package_logger.setLevel(logging.INFO)
+    with log_to_file(output_dir / LOG_FILENAME) as log_handler:
+        return _run_predict(
+            bundle,
+            project_dir,
+            output_dir,
+            fire_size_path,
+            selected_hex_ids,
+            scope,
+            log_handler,
+            started_at,
+            device=device,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            hazard=hazard,
+            keep_work_dir=keep_work_dir,
+            scenario_name=scenario_name,
+            check_inputs=check_inputs,
+        )
 
+
+def _run_predict(
+    bundle: ModelBundle,
+    project_dir: Path,
+    output_dir: Path,
+    fire_size_path: Path | None,
+    selected_hex_ids: list[str],
+    scope: str,
+    log_handler: logging.FileHandler,
+    started_at: str,
+    *,
+    device: str,
+    batch_size: int,
+    num_workers: int,
+    hazard: bool,
+    keep_work_dir: bool,
+    scenario_name: str | None,
+    check_inputs: bool,
+) -> PredictRun:
     resolved_device = resolve_device(device)
     options = {
         "hex_ids": selected_hex_ids,
@@ -568,9 +638,6 @@ def run_predict(
     finally:
         if not keep_work_dir:
             shutil.rmtree(work_dir, ignore_errors=True)
-        logging.getLogger().removeHandler(log_handler)
-        log_handler.close()
-        package_logger.setLevel(previous_package_level)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -600,42 +667,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    root_logger = logging.getLogger()
-    previous_level = root_logger.level
-    # Some data_preparation modules call logging.basicConfig at import time; reuse that console handler.
-    has_console = any(type(handler) is logging.StreamHandler for handler in root_logger.handlers)
-    console_handler: logging.Handler = logging.NullHandler()
-    if not has_console:
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-    root_logger.addHandler(console_handler)
-    root_logger.setLevel(logging.INFO)
     try:
-        run = run_predict(
-            bundle_dir=args.bundle,
-            project_dir=args.project,
-            output_dir=args.output,
-            fire_size_table=args.fire_size_table,
-            hex_ids=args.hex_ids,
-            device=args.device,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-            mask_scope=args.mask_scope,
-            hazard=not args.no_hazard,
-            overwrite=args.overwrite,
-            keep_work_dir=args.keep_work_dir,
-            scenario_name=args.scenario_name,
-            verify_checksums=not args.skip_checksums,
-            check_inputs=not args.skip_check,
-        )
+        with console_logging():
+            run = run_predict(
+                bundle_dir=args.bundle,
+                project_dir=args.project,
+                output_dir=args.output,
+                fire_size_table=args.fire_size_table,
+                hex_ids=args.hex_ids,
+                device=args.device,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                mask_scope=args.mask_scope,
+                hazard=not args.no_hazard,
+                overwrite=args.overwrite,
+                keep_work_dir=args.keep_work_dir,
+                scenario_name=args.scenario_name,
+                verify_checksums=not args.skip_checksums,
+                check_inputs=not args.skip_check,
+            )
     except (PredictError, BundleError, FileNotFoundError, ValueError, KeyError) as exc:
         log_path = Path(args.output) / LOG_FILENAME
         details = f"\n(Full details in {log_path})" if log_path.is_file() else ""
         print(f"\nError: {exc}{details}", file=sys.stderr)
         return 2
-    finally:
-        root_logger.removeHandler(console_handler)
-        root_logger.setLevel(previous_level)
     print(f"\nPredicted {len(run.hexels)} hexel(s) into {run.output_dir}")
     if run.fire_size_note:
         print(run.fire_size_note)

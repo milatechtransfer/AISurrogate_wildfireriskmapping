@@ -22,6 +22,10 @@ python -m inference.check --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path
 # Predict every hexel of a project (CPU or GPU is picked automatically)
 python -m inference.predict --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
     --output path/to/predictions
+
+# Compare the model with BurnP3+ where BurnP3+ outputs exist (see "Evaluate against BurnP3+")
+python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
+    --output path/to/evaluation
 ```
 
 Useful options: `--hex_ids 12 14` (or `hex12`), `--device cpu|cuda|mps`, `--batch_size` (lower it if memory
@@ -53,6 +57,9 @@ checks first (skip with `--skip_check`). It reports three levels:
   table, implausible weather values, low raster coverage inside the mask.
 - **NOTE** – information, e.g. which fire-size table is used.
 
+With `--outputs` it also checks the BurnP3+ result rasters that `inference.evaluate` compares against
+(`evaluate` runs this check first).
+
 Exit codes: `0` ready to predict, `1` input errors, `2` the check could not run (e.g. bad bundle path).
 `--json report.json` also writes the report as JSON. `predict` also stores the errors and warnings in
 `run_manifest.json` under `input_check`.
@@ -62,6 +69,71 @@ Exit codes: `0` ready to predict, `1` input errors, `2` the check could not run 
 Outputs in `--output`: `hexNN/hexNN_{bp,fi,ros}.tif` (probability, kW/m, m/min; nodata -9999),
 `hexNN/hexNN_hazard_{raw,scaled,class}.tif` (class 0 = nodata), `run_manifest.json` (bundle, inputs,
 fire-size table, input check, options, software versions, timings) and `predict.log`.
+
+## Evaluate against BurnP3+
+
+`inference.evaluate` measures how close the model is to BurnP3+ on hexels where BurnP3+ has been run. It
+needs the project inputs **and** the BurnP3+ outputs of each hexel:
+
+- national layout: `hexNN/results/burnP3Plus_OutputBurnProbability/burnProbability-sn2.tif`,
+  `.../burnP3Plus_OutputFireIntensitySummaryMap/fbpSummary-FireIntensity-Average.tif` and
+  `.../burnP3Plus_OutputRateOfSpreadSummaryMap/fbpSummary-RateOfSpread-Average.tif`;
+- with `--scenario_name NAME`: `hexNN/results/NAME/burnP3Plus_Output..._NAME_{All|Average}.tif`
+  (and `spatial/hexNN_fbp_NAME.tif` as the fuel input).
+
+```bash
+# Predict and evaluate (predictions are kept in path/to/evaluation/predictions/)
+python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
+    --output path/to/evaluation
+
+# Only score predictions made earlier with inference.predict (the model is not run again)
+python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
+    --predictions path/to/predictions --output path/to/evaluation
+```
+
+Useful options: `--hex_ids`, `--mask_scope buffer` (also reports the hexel and the buffer ring separately),
+`--by_firezone` (metrics per fire zone), `--metrics ccc mae` (a subset), `--no_plots`, `--overwrite`, and the
+`predict` options (`--device`, `--batch_size`, `--fire_size_table`, ...). With `--predictions`, the mask scope
+of the predictions is used and evaluate warns if they were made with a different model. Re-running with
+`--overwrite` into the same folder replaces the metrics but keeps `predictions/`.
+
+Metrics follow the model's own evaluation: they are computed per hexel on the full 100 m rasters inside the
+hexel mask (cells where BurnP3+ has data; BurnP3+ nodata in burn probability counts as 0), then averaged
+over hexels. On the test hexel 12 they reproduce the published values (within 0.1%; hazard classes exact).
+
+| Metric | Meaning (surrogate vs BurnP3+, per target) | Best |
+|---|---|---|
+| `ccc` | Lin's concordance correlation: agreement in value, not just ranking | 1 |
+| `spearman` | Rank correlation: are the same places ranked high and low | 1 |
+| `mae`, `mse` | Mean absolute / squared error, in the target's units | 0 |
+| `normalized_mae` | MAE divided by the mean BurnP3+ value | 0 |
+| `bias`, `normalized_bias` | Mean (surrogate − BurnP3+), raw and divided by the mean BurnP3+ value; negative = under-prediction | 0 |
+| `mae_topXX` | MAE over cells in the top XX% of either map (`01` = top 1%) | 0 |
+| `iou_topXX` | Overlap (intersection over union) of the top XX% cells of both maps (`005` = top 0.5%) | 1 |
+| `auc_iou_top10`, `auc_iou_full` | Mean top-K IoU over K = 1–10% and 1–99% | 1 |
+
+Rows with target `hazard` score the continuous raw hazard, BP × min(FI, 10 000 kW/m). Hazard **classes**
+(13 classes, from that hazard scaled with the national denominator stored in the bundle, so hexels and
+studies are comparable) are compared in `hazard_metrics_*.csv`: `exact_accuracy`,
+`within_1_accuracy` / `within_2_accuracy` (off by at most 1 or 2 classes), `mean_absolute_class_error`,
+`macro_iou`, `macro_f1` and per-class IoU/F1.
+
+Outputs in `--output`:
+
+| File | Content |
+|---|---|
+| `metrics_summary.csv` | Mean of each metric over hexels, per target (and area with `--mask_scope buffer`) |
+| `metrics_per_hexel.csv` | One row per hexel × target (× area), with `n_pixels` |
+| `metrics_per_firezone.csv` | With `--by_firezone`: one row per hexel × fire zone × target |
+| `hazard_metrics_summary.csv`, `hazard_metrics_per_hexel.csv` | Hazard-class agreement |
+| `hazard_confusion_matrix.{csv,png}` | Hazard classes, BurnP3+ (rows) vs surrogate (columns), all hexels |
+| `plots/hexNN/hexNN_<target>_{maps,scatter,histogram}.png` | Surrogate, BurnP3+ and difference maps; value distributions |
+| `predictions/` | The `predict` output, when evaluate ran the model |
+| `evaluation_manifest.json`, `evaluate.log` | Bundle, options, input check, warnings, summary, software versions |
+
+Resources: scoring a national hexel (~18 M cells) takes about 7 minutes and 6 GB of memory on one CPU core,
+including plots; running the model first adds the `predict` time (about 15 minutes per hexel on one core).
+Exit codes: `0` success, `2` error (nothing was evaluated if the check found errors).
 
 ## Legacy: predict from a training checkpoint
 

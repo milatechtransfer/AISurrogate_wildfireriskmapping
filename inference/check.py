@@ -7,9 +7,10 @@ model does not know, fire zones without weather or fire-size data, and malformed
 
 Errors stop (or would silently corrupt) a prediction and must be fixed. Warnings describe inputs the
 model can handle but whose results deserve a second look. ``predict`` runs these checks first.
+With ``--outputs`` it also checks the BurnP3+ output rasters that ``evaluate`` compares against.
 
 Example:
-    python -m inference.check --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project
+    python -m inference.check --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project [--outputs]
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ from inference.bundle import (
     load_bundle,
 )
 from src.datasets.fuel_utils import _FEATURE_COLUMN, FUEL_CURVE_ENCODINGS, read_curves
+from src.datasets.targets import get_target_spec
 
 # error: must be fixed; warning: worth reviewing; note: information the user should be aware of.
 Level = Literal["error", "warning", "note"]
@@ -54,6 +56,8 @@ Level = Literal["error", "warning", "note"]
 # Training DEMs were 98.6-101.5 m after reprojection to ESRI:102002.
 RESOLUTION_ERROR_TOLERANCE = 0.10
 RESOLUTION_WARNING_TOLERANCE = 0.03
+_GERUNDS = {"predict": "predicting", "evaluate": "evaluating"}
+
 # Warn when less than this fraction of the mask has valid data in a raster.
 MIN_VALID_COVERAGE = 0.9
 # Zone-level synthetic row appended to every fire-size table by process_fire_size_df.
@@ -99,6 +103,7 @@ class CheckReport:
     mask_scope: str
     hexels: list[str] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
+    action: str = "predict"  # what the checked project is being prepared for, used in the summary line
 
     @property
     def errors(self) -> list[Finding]:
@@ -136,12 +141,13 @@ class CheckReport:
         lines.append("")
         if self.errors:
             lines.append(
-                f"Result: {_plural(len(self.errors), 'error')}, {_plural(len(self.warnings), 'warning')}. Fix the errors before predicting."
+                f"Result: {_plural(len(self.errors), 'error')}, {_plural(len(self.warnings), 'warning')}. "
+                f"Fix the errors before {_GERUNDS[self.action]}."
             )
         elif self.warnings:
-            lines.append(f"Result: ready to predict, with {_plural(len(self.warnings), 'warning')} worth reviewing.")
+            lines.append(f"Result: ready to {self.action}, with {_plural(len(self.warnings), 'warning')} worth reviewing.")
         else:
-            lines.append("Result: ready to predict, no problems found.")
+            lines.append(f"Result: ready to {self.action}, no problems found.")
         return "\n".join(lines)
 
 
@@ -209,6 +215,7 @@ class ModelRequirements:
     uses_ignition_distribution: bool
     known_fuel_codes: frozenset[int] | None  # None: the model accepts any fuel code
     multi_season_fuel_codes: frozenset[int]
+    targets: tuple[str, ...] = ()
 
     @classmethod
     def from_bundle(cls, bundle: ModelBundle) -> ModelRequirements:
@@ -230,6 +237,7 @@ class ModelRequirements:
             uses_ignition_distribution=manifest.data_prep.ignition_weighting == "distribution",
             known_fuel_codes=known_codes,
             multi_season_fuel_codes=multi_season,
+            targets=tuple(manifest.target_names),
         )
 
 
@@ -294,6 +302,8 @@ class _HexelCheck:
         mask_scope: str,
         scenario_name: str | None,
         fire_size_zones: set[int] | None,
+        inputs: bool = True,
+        outputs: bool = False,
     ) -> None:
         self.hex_id = hex_id
         self.out = _Collector(report, project_dir, hexel=f"hex{hex_id}")
@@ -302,12 +312,20 @@ class _HexelCheck:
         self.mask_scope = mask_scope
         self.scenario_name = scenario_name
         self.fire_size_zones = fire_size_zones
+        self.inputs = inputs
+        self.outputs = outputs
 
     def run(self) -> None:
         if not self.hex_id.isdigit():
             self.out.error("Hexel folders must be named 'hex' followed by digits, e.g. hex07.", self.paths.base_dir)
             return
         mask = self._load_mask()
+        if self.inputs:
+            self._check_inputs(mask)
+        if self.outputs:
+            self._check_outputs(mask)
+
+    def _check_inputs(self, mask: gpd.GeoDataFrame | None) -> None:
         dem = self._check_raster(self.paths.elevation_grid(self.hex_id), "DEM", mask)
         if dem is not None:
             self._check_resolution(dem)
@@ -337,6 +355,13 @@ class _HexelCheck:
                     "fire-size distribution of the whole table there.",
                     self.paths.firezones_grid(self.hex_id),
                 )
+
+    def _check_outputs(self, mask: gpd.GeoDataFrame | None) -> None:
+        """BurnP3+ result rasters that evaluate compares the predictions with."""
+        for name in self.requirements.targets:
+            spec = get_target_spec(name)
+            path = getattr(self.paths, spec.path_method)(scenario_name=self.scenario_name)
+            self._check_raster(path, f"BurnP3+ {spec.label.lower()} output", mask, read=False)
 
     # --- spatial -----------------------------------------------------------------------------
 
@@ -673,14 +698,20 @@ def check_project(
     fire_size_table: str | Path | None = None,
     mask_scope: str | None = None,
     scenario_name: str | None = None,
+    inputs: bool = True,
+    outputs: bool = False,
 ) -> CheckReport:
-    """Check every requested hexel of ``project_dir`` against ``bundle``; never raises for bad inputs."""
+    """Check every requested hexel of ``project_dir`` against ``bundle``; never raises for bad inputs.
+
+    ``inputs`` checks the files the model reads; ``outputs`` checks the BurnP3+ result rasters used by evaluate.
+    """
     project_dir = Path(project_dir).expanduser().resolve()
     scope = normalize_mask_scope(mask_scope or bundle.manifest.data_prep.mask_scope or "actual")
     report = CheckReport(
         project_dir=str(project_dir),
         bundle=f"{bundle.manifest.name} v{bundle.manifest.version}",
         mask_scope=scope,
+        action="evaluate" if outputs else "predict",
     )
     out = _Collector(report, project_dir)
     if not project_dir.is_dir():
@@ -699,7 +730,7 @@ def check_project(
             out.error(f"Hexel(s) {unknown} not found. Available: {_listing(available)}.")
 
     fire_size_zones = None
-    if requirements.uses_fire_size:
+    if inputs and requirements.uses_fire_size:
         table = Path(fire_size_table).expanduser().resolve() if fire_size_table else bundle.optional_resource_path(RESOURCE_FIRE_SIZE_TABLE)
         if table is None:
             out.error("This model needs a fire-size table and the bundle has none: pass --fire_size_table (GRIDCODE, SIZE_HA).")
@@ -709,7 +740,7 @@ def check_project(
 
     for hex_id in selected:
         report.hexels.append(f"hex{hex_id}")
-        _HexelCheck(report, project_dir, hex_id, requirements, scope, scenario_name, fire_size_zones).run()
+        _HexelCheck(report, project_dir, hex_id, requirements, scope, scenario_name, fire_size_zones, inputs, outputs).run()
     return report
 
 
@@ -724,6 +755,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fire_size_table", default=None, help="Fire-size CSV to use instead of the bundle's national table.")
     parser.add_argument("--mask_scope", choices=[s for s in MASK_SCOPE_CHOICES if s != "buffer_only"], default=None)
     parser.add_argument("--scenario_name", default=None, help="Check fuel raster hexNN_fbp_<scenario_name>.tif instead of hexNN_fbp.tif.")
+    parser.add_argument(
+        "--outputs", action="store_true", help="Also check the BurnP3+ output rasters (results/) that inference.evaluate compares against."
+    )
     parser.add_argument("--json", default=None, help="Also write the report as JSON to this file.")
     parser.add_argument("--skip_checksums", action="store_true", help="Skip bundle checksum verification (faster start-up).")
     return parser
@@ -741,6 +775,7 @@ def main(argv: list[str] | None = None) -> int:
             fire_size_table=args.fire_size_table,
             mask_scope=args.mask_scope,
             scenario_name=args.scenario_name,
+            outputs=args.outputs,
         )
     except (BundleError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
