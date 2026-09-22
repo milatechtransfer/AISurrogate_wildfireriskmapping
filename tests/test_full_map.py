@@ -13,7 +13,12 @@ from shapely.geometry import box
 from src.full_map.generate_full_hexel_diff_map import compute_national_diff, generate_national_diffs
 from src.full_map.generate_full_hexel_map import generate_national_mosaics
 from src.full_map.generate_predictions import reshape_hexel_metrics_to_wide
-from src.full_map.utils import group_predicted_hexel_files_by_target, load_hexel_shapefile, mosaic_predicted_hexels
+from src.full_map.utils import (
+    build_raw_hexel_file_map,
+    group_predicted_hexel_files_by_target,
+    load_hexel_shapefile,
+    mosaic_predicted_hexels,
+)
 from src.full_map.visualize_mosaic import plot_raster
 
 
@@ -258,6 +263,71 @@ def test_mosaic_predicted_hexels_raises_when_no_files_found(tmp_path):
             reference_raster_paths={"bp": str(ref_path)},
             output_dir=str(tmp_path / "out"),
         )
+
+
+def test_generate_national_mosaics_with_file_maps_by_target_reuses_same_stitching(tmp_path):
+    """Ground truth (or any other source) can reuse generate_national_mosaics by passing an
+    already-built file_maps_by_target directly, instead of pred_root/pattern."""
+    ref_path = tmp_path / "bp_gt.tif"
+    _write_tif(ref_path, np.full((2, 2), -9999.0, dtype="float32"), from_origin(0, 2, 1, 1))
+
+    gt_hex_path = tmp_path / "raw" / "hex12_bp.tif"
+    _write_tif(gt_hex_path, np.full((2, 2), 0.7, dtype="float32"), from_origin(0, 2, 1, 1))
+
+    shapefile_gdf_path = tmp_path / "hexels.shp"
+    gpd.GeoDataFrame({"hex_id": ["12"]}, geometry=[box(0, 0, 2, 2)], crs="EPSG:3978").to_file(shapefile_gdf_path)
+
+    output_dir = tmp_path / "national_gt_mosaics"
+    results = generate_national_mosaics(
+        shapefile_path=str(shapefile_gdf_path),
+        hexel_id_column="hex_id",
+        reference_raster_paths={"bp": str(ref_path)},
+        output_dir=str(output_dir),
+        file_maps_by_target={"bp": {12: gt_hex_path}},
+        output_filename_template="{target}_national_gt_map.tif",
+    )
+
+    assert (output_dir / "bp_national_gt_map.tif").exists()
+    bp_mosaic, _ = results["bp"]
+    assert np.allclose(bp_mosaic, 0.7)
+
+
+def test_generate_national_mosaics_requires_exactly_one_source(tmp_path):
+    ref_path = tmp_path / "bp_gt.tif"
+    _write_tif(ref_path, np.full((2, 2), -9999.0, dtype="float32"), from_origin(0, 2, 1, 1))
+    shapefile_gdf_path = tmp_path / "hexels.shp"
+    gpd.GeoDataFrame({"hex_id": ["1"]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:3978").to_file(shapefile_gdf_path)
+
+    common_kwargs = dict(
+        shapefile_path=str(shapefile_gdf_path),
+        hexel_id_column="hex_id",
+        reference_raster_paths={"bp": str(ref_path)},
+        output_dir=str(tmp_path / "out"),
+    )
+    with pytest.raises(ValueError, match="exactly one"):
+        generate_national_mosaics(**common_kwargs)  # neither source given
+    with pytest.raises(ValueError, match="exactly one"):
+        generate_national_mosaics(pred_root=str(tmp_path), pattern="*.tif", file_maps_by_target={"bp": {}}, **common_kwargs)
+
+
+def test_build_raw_hexel_file_map_finds_raw_hexel_rasters(tmp_path):
+    raw_data_dir = tmp_path / "raw"
+    bp_path = raw_data_dir / "hex12" / "results" / "burnP3Plus_OutputBurnProbability" / "burnProbability-sn2.tif"
+    _write_tif(bp_path, np.full((2, 2), 0.4, dtype="float32"), from_origin(0, 2, 1, 1))
+
+    file_map = build_raw_hexel_file_map(str(raw_data_dir), "bp")
+
+    assert file_map == {12: bp_path}
+
+
+def test_build_raw_hexel_file_map_warns_and_skips_missing_rasters(tmp_path, capsys):
+    raw_data_dir = tmp_path / "raw"
+    (raw_data_dir / "hex7").mkdir(parents=True)  # hex exists but has no bp raster
+
+    file_map = build_raw_hexel_file_map(str(raw_data_dir), "bp")
+
+    assert file_map == {}
+    assert "not found" in capsys.readouterr().out
 
 
 def test_compute_national_diff_computes_pixelwise_error_over_valid_region(tmp_path):

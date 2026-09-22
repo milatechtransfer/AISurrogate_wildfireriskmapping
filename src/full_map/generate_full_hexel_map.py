@@ -1,13 +1,20 @@
 """
-Mosaics per-hexel predicted rasters (from ``generate_predictions.py``) into one true national
-raster per target, using each hexel's real geographic footprint.
+Mosaics per-hexel rasters into one true national raster per target, using each hexel's real
+geographic footprint.
 
 Unlike the previous schematic version of this script (which arranged a hand-picked subset of
-hexels on a fake ``(row, col)`` grid with no real coordinates), this reprojects every predicted
-hexel onto the same grid (CRS/transform/shape) as that target's configured national
+hexels on a fake ``(row, col)`` grid with no real coordinates), this reprojects every hexel
+raster onto the same grid (CRS/transform/shape) as that target's configured national
 ground-truth raster (``config.full_map.national_gt_raster_paths[target]``), so the resulting
 mosaic is directly comparable to that GT raster (see ``generate_full_hexel_diff_map.py``). The
 model here predicts multiple targets (e.g. bp/fi/ros), so one mosaic is produced per target.
+
+By default this mosaics *predicted* hexels (from ``generate_predictions.py``). Pass ``--gt`` to
+mosaic *ground-truth* hexels instead -- stitching each hexel's raw GT raster
+(``data_preparation.paths.Paths``) the same way, so the national GT raster is built exactly like
+the predicted one instead of read directly from an already-stitched file. Once built, point
+``config.full_map.national_gt_raster_paths`` at the produced ``{target}_national_gt_map.tif``
+files -- no other pipeline step needs to change.
 """
 
 import argparse
@@ -21,6 +28,7 @@ import yaml
 
 from src.config import Config
 from src.full_map.utils import (
+    build_raw_hexel_file_map,
     get_scale_settings,
     group_predicted_hexel_files_by_target,
     load_hexel_shapefile,
@@ -63,67 +71,86 @@ def _plot_mosaic(mosaic: np.ndarray, profile: dict, reference_raster_path: str, 
 
 
 def generate_national_mosaics(
-    pred_root: str,
-    pattern: str,
     shapefile_path: str,
     hexel_id_column: str,
     reference_raster_paths: dict[str, str],
     output_dir: str,
+    pred_root: str | None = None,
+    pattern: str | None = None,
+    file_maps_by_target: dict[str, dict[int, Path]] | None = None,
+    output_filename_template: str = "{target}_national_predicted_map.tif",
     title: str | None = None,
     scale: str = "linear",
     save_plots: bool = False,
     skip_existing: bool = True,
 ) -> dict[str, tuple[np.ndarray, dict]]:
     """
-    Builds and saves one real-CRS national predicted-hexel mosaic per target.
+    Builds and saves one real-CRS national mosaic per target.
+
+    Either pass ``pred_root``/``pattern`` (mosaics predicted hexels, scanned from disk -- the
+    default/original behavior), or pass an already-built ``file_maps_by_target`` directly (e.g.
+    via ``build_raw_hexel_file_map`` for ground-truth hexels) -- exactly one of the two must be
+    given.
 
     Args:
-        pred_root: Directory containing per-split predicted hexels (e.g. ``config.save_dir``,
-            with predictions under ``<split>/predicted_hexels/``).
-        pattern: Glob pattern (relative to ``pred_root``) matching predicted hexel rasters,
-            e.g. ``"*/predicted_hexels/hexel_*_predicted.tif"``.
         shapefile_path: Path to the national hexel-polygon shapefile.
         hexel_id_column: Column in the shapefile holding each polygon's hex_id.
         reference_raster_paths: Mapping of target name -> already-stitched national GT raster
             path; each defines the output grid (CRS/transform/shape) for that target's mosaic.
-        output_dir: Directory to write ``{target}_national_predicted_map.tif`` (and, if
-            ``save_plots``, ``{target}_national_predicted_map.png``) into.
+        output_dir: Directory to write ``output_filename_template``-named rasters (and, if
+            ``save_plots``, the matching ``.png``) into.
+        pred_root: Directory containing per-split predicted hexels (e.g. ``config.save_dir``,
+            with predictions under ``<split>/predicted_hexels/``). Mutually exclusive with
+            ``file_maps_by_target``.
+        pattern: Glob pattern (relative to ``pred_root``) matching predicted hexel rasters,
+            e.g. ``"*/predicted_hexels/hexel_*_predicted.tif"``. Required with ``pred_root``.
+        file_maps_by_target: Mapping of target name -> {hex_id: path}, already built by the
+            caller (e.g. ``build_raw_hexel_file_map`` per target for ground truth). Mutually
+            exclusive with ``pred_root``/``pattern``.
+        output_filename_template: Filename template (formatted with ``target=...``) for each
+            target's output raster, e.g. ``"{target}_national_gt_map.tif"`` for ground truth.
         title: Optional plot title (per target name is appended automatically).
         scale: 'linear' or 'log' color scaling for the optional plots.
         save_plots: If True, also saves a real-coordinate PNG plot per target.
-        skip_existing: If True, skip (re)building a target's mosaic when
-            ``{target}_national_predicted_map.tif`` already exists in ``output_dir`` -- useful
-            for resuming after a job was killed partway through the target loop, without
-            re-mosaicking targets that already finished.
+        skip_existing: If True, skip (re)building a target's mosaic when its output raster
+            already exists in ``output_dir`` -- useful for resuming after a job was killed
+            partway through the target loop, without re-mosaicking targets that already finished.
 
     Returns:
         Mapping of target name -> (mosaic array, rasterio profile). Targets skipped via
         ``skip_existing`` are read back from their existing ``.tif`` so callers still get a
         complete result set.
     """
-    pred_folder = Path(pred_root)
-    if not pred_folder.exists():
-        raise FileNotFoundError(f"Prediction root directory not found: {pred_folder}")
+    if (pred_root is not None or pattern is not None) == (file_maps_by_target is not None):
+        raise ValueError("Pass exactly one of (pred_root and pattern) or file_maps_by_target.")
 
     shapefile_gdf = load_hexel_shapefile(shapefile_path, hexel_id_column)
-    files_by_target = group_predicted_hexel_files_by_target(pred_folder, pattern)
-    if not files_by_target:
-        raise FileNotFoundError(f"No predicted hexel rasters found under {pred_folder} matching pattern {pattern!r}.")
+    if file_maps_by_target is None:
+        pred_folder = Path(pred_root)  # type: ignore[arg-type]
+        if not pred_folder.exists():
+            raise FileNotFoundError(f"Prediction root directory not found: {pred_folder}")
+        file_maps_by_target = group_predicted_hexel_files_by_target(pred_folder, pattern)  # type: ignore[arg-type]
+        if not file_maps_by_target:
+            raise FileNotFoundError(f"No predicted hexel rasters found under {pred_folder} matching pattern {pattern!r}.")
 
     results: dict[str, tuple[np.ndarray, dict]] = {}
     output_folder = Path(output_dir)
     output_folder.mkdir(parents=True, exist_ok=True)
 
-    for target_name, file_map in files_by_target.items():
+    for target_name, file_map in file_maps_by_target.items():
         if target_name not in reference_raster_paths:
             print(f"Warning: no reference/GT raster configured for target {target_name!r}; skipping its mosaic.")
             continue
 
-        output_tif_path = output_folder / f"{target_name}_national_predicted_map.tif"
+        output_tif_path = output_folder / output_filename_template.format(target=target_name)
         if skip_existing and output_tif_path.exists():
             print(f"Skipping {target_name!r}: {output_tif_path} already exists (--skip-existing).")
             with rasterio.open(output_tif_path) as existing_src:
                 results[target_name] = (existing_src.read(1), existing_src.profile.copy())
+            continue
+
+        if not file_map:
+            print(f"Warning: no hexel rasters found for target {target_name!r}; skipping its mosaic.")
             continue
 
         reference_raster_path = reference_raster_paths[target_name]
@@ -136,11 +163,11 @@ def generate_national_mosaics(
 
         with rasterio.open(output_tif_path, "w", **profile) as dst:
             dst.write(mosaic, 1)
-        print(f"Saved {target_name!r} national predicted mosaic to {output_tif_path}")
+        print(f"Saved {target_name!r} national mosaic to {output_tif_path}")
 
         if save_plots:
             plot_title = f"{title} ({target_name})" if title else target_name
-            plot_path = output_folder / f"{target_name}_national_predicted_map.png"
+            plot_path = output_tif_path.with_suffix(".png")
             _plot_mosaic(mosaic, profile, reference_raster_path, str(plot_path), plot_title, scale)
 
         results[target_name] = (mosaic, profile)
@@ -149,16 +176,33 @@ def generate_national_mosaics(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Mosaic predicted hexel rasters onto the real national grid, per target.")
+    parser = argparse.ArgumentParser(
+        description="Mosaic predicted (or, with --gt, ground-truth) hexel rasters onto the real national grid."
+    )
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config file (reads config.full_map.*).")
     parser.add_argument(
-        "--pred-root", type=str, default=None, help="Directory containing per-split predicted hexels. Defaults to config.save_dir."
+        "--gt",
+        action="store_true",
+        help="Mosaic ground-truth hexels (stitched from raw per-hexel rasters under --raw-data-dir) instead of "
+        "predicted hexels. Writes {target}_national_gt_map.tif instead of {target}_national_predicted_map.tif.",
+    )
+    parser.add_argument(
+        "--pred-root",
+        type=str,
+        default=None,
+        help="Directory containing per-split predicted hexels. Defaults to config.save_dir. Ignored with --gt.",
     )
     parser.add_argument(
         "--pattern",
         type=str,
         default="*/predicted_hexels/hexel_*_predicted.tif",
-        help="Glob pattern (relative to --pred-root) matching predicted hexel rasters.",
+        help="Glob pattern (relative to --pred-root) matching predicted hexel rasters. Ignored with --gt.",
+    )
+    parser.add_argument(
+        "--raw-data-dir",
+        type=str,
+        default=None,
+        help="Directory containing raw per-hexel data (hex{id}/...). Defaults to config.data.raw_data_dir. Only used with --gt.",
     )
     parser.add_argument(
         "--output-dir", type=str, default="experiments/full_map", help="Directory to write one national mosaic .tif per target into."
@@ -169,20 +213,18 @@ def main() -> None:
     parser.add_argument(
         "--force-recompute",
         action="store_true",
-        help="Recompute every target's mosaic even if {target}_national_predicted_map.tif already exists "
-        "in --output-dir. By default, existing mosaics are skipped and read back instead (resume behavior).",
+        help="Recompute every target's mosaic even if its output raster already exists in --output-dir. By "
+        "default, existing mosaics are skipped and read back instead (resume behavior).",
     )
     args = parser.parse_args()
 
     config = load_config(args.config)
     if not config.full_map.national_shapefile_path:
-        raise ValueError("config.full_map.national_shapefile_path must be set to mosaic predictions.")
+        raise ValueError("config.full_map.national_shapefile_path must be set to mosaic hexels.")
     if not config.full_map.national_gt_raster_paths:
         raise ValueError("config.full_map.national_gt_raster_paths must be set (one entry per target) as each mosaic's reference grid.")
 
-    generate_national_mosaics(
-        pred_root=args.pred_root or config.save_dir,
-        pattern=args.pattern,
+    common_kwargs = dict(
         shapefile_path=config.full_map.national_shapefile_path,
         hexel_id_column=config.full_map.hexel_id_column,
         reference_raster_paths=config.full_map.national_gt_raster_paths,
@@ -192,6 +234,24 @@ def main() -> None:
         save_plots=args.save_plots,
         skip_existing=not args.force_recompute,
     )
+
+    if args.gt:
+        raw_data_dir = args.raw_data_dir or config.data.raw_data_dir
+        file_maps_by_target = {
+            target: build_raw_hexel_file_map(raw_data_dir, target, config.data_prep.scenario_name)
+            for target in config.full_map.national_gt_raster_paths
+        }
+        generate_national_mosaics(
+            file_maps_by_target=file_maps_by_target,
+            output_filename_template="{target}_national_gt_map.tif",
+            **common_kwargs,
+        )
+    else:
+        generate_national_mosaics(
+            pred_root=args.pred_root or config.save_dir,
+            pattern=args.pattern,
+            **common_kwargs,
+        )
 
 
 if __name__ == "__main__":

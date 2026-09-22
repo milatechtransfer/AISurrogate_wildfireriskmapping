@@ -25,9 +25,15 @@ CONFIG_FILE=${1:-configs/bp_common_input_pipeline.yaml}
 # Directory containing per-split predicted hexels (defaults to config.save_dir if unset).
 PRED_ROOT=${PRED_ROOT:-}
 OUTPUT_DIR=${OUTPUT_DIR:-experiments/full_map}
+# Set GT_MODE=1 to mosaic ground-truth hexels (stitched from raw per-hexel rasters) instead of
+# predicted hexels, writing {target}_national_gt_map.tif instead of
+# {target}_national_predicted_map.tif. Only used with GT_MODE=1: RAW_DATA_DIR (defaults to
+# config.data.raw_data_dir if unset).
+GT_MODE=${GT_MODE:-0}
+RAW_DATA_DIR=${RAW_DATA_DIR:-}
 # Example: MOSAIC_ARGS="--save-plots --scale=log --title='Burn Probability'"
-# Resuming is automatic: existing {target}_national_predicted_map.tif files are skipped by
-# default. To force a full recompute instead, use:
+# Resuming is automatic: existing output mosaic files are skipped by default. To force a full
+# recompute instead, use:
 #   MOSAIC_ARGS="--force-recompute"
 MOSAIC_ARGS=${MOSAIC_ARGS:-}
 
@@ -38,14 +44,22 @@ source .venv/bin/activate
 # preempted before Python's internal buffers would otherwise flush.
 export PYTHONUNBUFFERED=1
 
-echo "Mosaicking predicted hexels onto the national grid with config: $CONFIG_FILE"
 read -r -a MOSAIC_ARG_ARRAY <<< "$MOSAIC_ARGS"
-PRED_ROOT_ARGS=()
-if [[ -n "$PRED_ROOT" ]]; then
-    PRED_ROOT_ARGS=(--pred-root="$PRED_ROOT")
+EXTRA_ARGS=()
+if [[ "$GT_MODE" == "1" ]]; then
+    echo "Mosaicking ground-truth hexels onto the national grid with config: $CONFIG_FILE"
+    EXTRA_ARGS+=(--gt)
+    if [[ -n "$RAW_DATA_DIR" ]]; then
+        EXTRA_ARGS+=(--raw-data-dir="$RAW_DATA_DIR")
+    fi
+else
+    echo "Mosaicking predicted hexels onto the national grid with config: $CONFIG_FILE"
+    if [[ -n "$PRED_ROOT" ]]; then
+        EXTRA_ARGS+=(--pred-root="$PRED_ROOT")
+    fi
 fi
 python -m src.full_map.generate_full_hexel_map \
     --config="$CONFIG_FILE" \
     --output-dir="$OUTPUT_DIR" \
-    "${PRED_ROOT_ARGS[@]}" \
+    "${EXTRA_ARGS[@]}" \
     "${MOSAIC_ARG_ARRAY[@]}"

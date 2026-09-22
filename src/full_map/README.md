@@ -11,6 +11,7 @@ Pipeline (each step reads its config via `--config`):
 
 1. `generate_predictions.py` — inference + per-hexel `.tif` predictions + per-split metrics CSV
 2. `generate_full_hexel_map.py` — mosaics predicted hexels into one national raster per target
+   (or, with `--gt`, mosaics raw per-hexel ground-truth rasters instead)
 3. `generate_full_hexel_diff_map.py` — diffs each national mosaic against its GT raster
 
 ## Config
@@ -20,7 +21,7 @@ Add a `full_map:` section to your YAML config:
 ```yaml
 full_map:
   national_shapefile_path: /path/to/national_hexel_polygons.shp
-  hexel_id_column: hex_id  # default; column in the shapefile holding each polygon's hex_id
+  hexel_id_column: hexid  # default; column in the shapefile holding each polygon's hex_id
   national_gt_raster_paths:
     bp: /path/to/national_bp_ground_truth.tif
     fi: /path/to/national_fi_ground_truth.tif
@@ -115,6 +116,29 @@ reference raster (check with
 At 100m resolution and a full Canada-wide extent (~55,000 x 46,000 px), that's ~10GB, so the
 default 48Gb has comfortable headroom; a smaller/regional reference raster needs much less.
 
+### 2b. Mosaic ground truth onto the national grid (instead of using an already-stitched raster)
+
+`config.full_map.national_gt_raster_paths` is normally pointed at an already-stitched national
+GT raster, used both as a data source (steps 3-4) and, always, as each mosaic's reference grid
+(CRS/transform/shape). Pass `--gt` to `generate_full_hexel_map.py` to instead build that
+national GT raster the exact same way predictions are mosaicked in step 2: by stitching each
+hexel's raw per-hexel GT raster (`data_preparation.paths.Paths.output_burn_prob`/
+`output_fire_intensity`, found via `config.data.raw_data_dir` / `--raw-data-dir`) onto the same
+grid, rather than reading an already-stitched file directly.
+
+```
+python -m src.full_map.generate_full_hexel_map --config path/to/config.yaml \
+    --gt --output-dir experiments/full_map
+```
+
+- `config.full_map.national_gt_raster_paths` is still required and used purely as the
+  reference grid (its content is irrelevant to `--gt` mode -- only its CRS/transform/shape).
+- Writes `{target}_national_gt_map.tif` (instead of `{target}_national_predicted_map.tif`) into
+  `--output-dir`. Once built, update `config.full_map.national_gt_raster_paths` to point at
+  these files -- no other pipeline step (steps 3-5) needs to change.
+- Via SLURM: `GT_MODE=1 sbatch run_files/full_map/generate_full_hexel_map.sh configs/your_config.yaml`
+  (optionally with `RAW_DATA_DIR=...`).
+
 ## 3. Diff mosaics against ground truth
 
 ```
@@ -146,8 +170,9 @@ sbatch run_files/full_map/generate_full_hexel_diff_map.sh configs/your_config.ya
 
 Hazard (`hazard = BP x min(FI, fi_cap)`, scaled and binned into NRCan-style hazard classes,
 see `src/datasets/postprocessing/hazard.py`) is computed directly from the already-mosaicked
-national `bp`/`fi` rasters -- both the step-2 predicted mosaics and the configured GT rasters --
-so no separate per-hexel/all-split hazard reconstruction pipeline is needed. (Hexel-level BP/FI
+national `bp`/`fi` rasters -- both the step-2 predicted mosaics and the configured GT rasters
+(either an already-stitched national GT raster, or one built via step 2b's `--gt` mode) -- so
+no separate per-hexel/all-split hazard reconstruction pipeline is needed. (Hexel-level BP/FI
 hazard diagnostics for the test split, if you want those separately, are still available via
 `src/evaluate_hazard.py`.)
 

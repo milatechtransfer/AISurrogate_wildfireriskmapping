@@ -8,6 +8,10 @@ from matplotlib.colors import LogNorm, Normalize
 from rasterio.warp import Resampling, reproject, transform_bounds
 from rasterio.windows import Window, from_bounds
 
+from data_preparation.paths import Paths
+from data_preparation.utils import find_hex_ids
+from src.datasets.targets import get_target_spec
+
 
 def valid_pixel_mask(array: np.ndarray, nodata: float | None) -> np.ndarray:
     """Boolean mask of "valid" (non-nodata) pixels in `array`.
@@ -78,6 +82,24 @@ def group_predicted_hexel_files_by_target(folder: Path, pattern: str) -> dict[st
         grouped.setdefault(target_name, {})[hex_id] = f
 
     return grouped
+
+
+def build_raw_hexel_file_map(raw_data_dir: str, target_name: str, scenario_name: str | None = None) -> dict[int, Path]:
+    """Scans ``raw_data_dir`` for per-hexel raw ground-truth rasters for one target (e.g.
+    ``"bp"``, ``"fi"``), returning ``{hex_id: path}`` -- the same shape of file map that
+    ``group_predicted_hexel_files_by_target`` returns per target -- so ground-truth hexels can
+    be stitched onto the national grid with the exact same ``mosaic_predicted_hexels(...)`` used
+    for predicted hexels, instead of relying on an already-stitched national GT raster.
+    """
+    spec = get_target_spec(target_name)
+    file_map: dict[int, Path] = {}
+    for hex_id in find_hex_ids(raw_data_dir):
+        path = Path(getattr(Paths(hex_id=hex_id, root_dir=raw_data_dir), spec.path_method)(scenario_name=scenario_name))
+        if path.exists():
+            file_map[int(hex_id)] = path
+        else:
+            print(f"Warning: raw {target_name!r} raster not found for hex_id={hex_id}: {path}")
+    return file_map
 
 
 def calculate_global_stats(file_map: dict[int, Path]) -> tuple[float, float]:
