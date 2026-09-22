@@ -1,323 +1,345 @@
-# Inference Module
+# 🔥 Wildfire Surrogate: Inference
 
-End-to-end inference pipeline for wildfire risk prediction on hexels.
+![python](https://img.shields.io/badge/python-3.12%2B-blue)
+![package manager](https://img.shields.io/badge/package%20manager-uv-de5fe9)
+![hardware](https://img.shields.io/badge/runs%20on-CPU%20%7C%20CUDA%20%7C%20Apple%20MPS-green)
+![os](https://img.shields.io/badge/OS-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
-## Predict from a model bundle (recommended)
+Produce **burn probability (BP)**, **fire intensity (FI)**, **rate of spread (ROS)** and **wildfire hazard**
+maps for a BurnP3+ project in minutes, using the trained AI surrogate instead of running BurnP3+
+simulations. Where BurnP3+ has already been run, compare the surrogate against it with one command.
 
-A model bundle is a self-contained folder with the weights, the training normalization statistics,
-the fuel curves and a manifest (see `bundle.py`). Prediction from a bundle needs only the project
-**inputs**; BurnP3+ outputs and the training data are not required.
+You only need the model **bundle** (one folder) and your BurnP3+ project **inputs**. No training data,
+GPU or BurnP3+ outputs are required to predict.
+
+## Table of contents
+
+- [🔥 Wildfire Surrogate: Inference](#-wildfire-surrogate-inference)
+  - [Table of contents](#table-of-contents)
+  - [🛠️ Installation](#️-installation)
+  - [🚀 Quick start](#-quick-start)
+  - [📦 The model bundle](#-the-model-bundle)
+  - [📂 Preparing your project](#-preparing-your-project)
+    - [Fuel codes](#fuel-codes)
+    - [Fire-size table](#fire-size-table)
+  - [✅ Check your inputs](#-check-your-inputs)
+  - [🗺️ Predict](#️-predict)
+  - [📊 Evaluate against BurnP3+](#-evaluate-against-burnp3)
+    - [Metrics](#metrics)
+  - [🌲 Regional studies](#-regional-studies)
+  - [🐍 Using it from Python](#-using-it-from-python)
+  - [⚙️ Performance](#️-performance)
+  - [🩺 Troubleshooting](#-troubleshooting)
+  - [🔧 For maintainers: exporting a bundle](#-for-maintainers-exporting-a-bundle)
+
+## 🛠️ Installation
+
+Install `uv`: https://docs.astral.sh/uv/getting-started/installation.
+
+Clone the repository and create the environment from the lockfile:
 
 ```bash
-# One-off (maintainers): turn a training checkpoint into a bundle
-python -m inference.export_bundle --checkpoint path/to/best.pth --out_dir nrcan-surrogate-bp-fi-ros-v1.0 \
-    --name nrcan-surrogate-bp-fi-ros --version 1.0.0 \
-    --hazard_denominator_json path/to/hazard_scale_denominator.json \
-    --fire_size_table path/to/df_fire_fru_25ha_1970_2023.csv \
-    --fire_size_table_note "Source/citation of the fire-size table"
+uv sync
+```
 
-# Check a project's inputs before predicting (fast: seconds per hexel)
+Activate the environment:
+
+```bash
+source .venv/bin/activate      # Linux / macOS
+.venv\Scripts\activate         # Windows
+```
+
+All commands below are run from the repository root. Instead of activating, you can also prefix them with
+`uv run`, e.g. `uv run python -m inference.predict --help`.
+
+## 🚀 Quick start
+
+```bash
+# 1. Check that the project has everything the model needs (seconds per hexel)
 python -m inference.check --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project
 
-# Predict every hexel of a project (CPU or GPU is picked automatically)
+# 2. Predict BP, FI, ROS and hazard for every hexel
 python -m inference.predict --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
     --output path/to/predictions
 
-# Compare the model with BurnP3+ where BurnP3+ outputs exist (see "Evaluate against BurnP3+")
+# 3. (Optional) Where BurnP3+ outputs exist, measure how close the surrogate is to BurnP3+
 python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
     --output path/to/evaluation
 ```
 
-Useful options: `--hex_ids 12 14` (or `hex12`), `--device cpu|cuda|mps`, `--batch_size` (lower it if memory
-runs out), `--mask_scope buffer|none`, `--scenario_name NAME`, `--no_hazard`, `--overwrite`, `--keep_work_dir`,
-`--skip_check`. Run with `--help` for the full list.
+Every command has `--help`. The device (CUDA GPU, Apple MPS or CPU) is picked automatically; force one
+with `--device cpu`.
 
-**Study areas without a hexel mask** (e.g. a regional project): pass `--mask_scope none` to `check`,
-`predict` and `evaluate`; the whole extent of the rasters is then used and `mask_grids/` is not needed.
+## 📦 The model bundle
 
-Project inputs per hexel (`hexNN/`): `spatial/hexNN_dem.tif` (100 m), `spatial/hexNN_fbp.tif`,
-`spatial/hexNN_firezones.tif`, `spatial/ignition_grids/hexNN_ignGrid_{H|N}_<season>.tif`,
-`spatial/mask_grids/hexNN_actual.shp` (not needed with `--mask_scope none`), and
-`tabular/hexNN_{DailyWeather,FireZones,IgnitionDistribution,GreenUp}.csv`. Optional:
-`tabular/hexNN_{FuelTypes,FuelCodeCrosswalk}.csv` (see "Fuel codes").
+The model is shipped as a self-contained folder, e.g. `nrcan-surrogate-bp-fi-ros-v1.0/`:
+
+| File | Content |
+|---|---|
+| `MODEL_CARD.md` | What the model predicts, how it was trained and selected, its metrics and limitations. **Read this first.** |
+| `manifest.yaml` | Everything needed to rebuild the model and prepare inputs exactly as in training |
+| `model.pt` | Model weights |
+| `norm/` | Normalization statistics from the national training data |
+| `lookups/` | FBP fuel curves, the national fire-size table (CNFDB, public data) and the input channel layout |
+| `SHA256SUMS` | Checksums, verified at start-up (skip with `--skip_checksums`) |
+
+Do not edit files inside the bundle; pass your own tables with command-line options instead.
+
+## 📂 Preparing your project
+
+A project is a folder of BurnP3+ hexels, laid out as BurnP3+ writes them:
+
+```text
+path/to/project/
+└── hex12/
+    ├── spatial/
+    │   ├── hex12_dem.tif                     # elevation, ~100 m cells
+    │   ├── hex12_fbp.tif                     # FBP fuel codes (or hex12_fbp_<scenario>.tif)
+    │   ├── hex12_firezones.tif               # fire-zone IDs
+    │   ├── ignition_grids/
+    │   │   └── hex12_ignGrid_{H|N}_<season>.tif   # human / lightning ignition, per season
+    │   └── mask_grids/
+    │       └── hex12_actual.shp              # area to predict (optional, see Regional studies)
+    ├── tabular/
+    │   ├── hex12_DailyWeather.csv
+    │   ├── hex12_FireZones.csv
+    │   ├── hex12_IgnitionDistribution.csv
+    │   ├── hex12_GreenUp.csv
+    │   ├── hex12_FuelTypes.csv               # optional, see Fuel codes
+    │   └── hex12_FuelCodeCrosswalk.csv       # optional, see Fuel codes
+    └── results/                              # BurnP3+ outputs: only needed by evaluate
+```
+
+Rasters may be in any projected CRS; they are reprojected to the model's grid (`ESRI:102002`, Canada Lambert
+Conformal Conic, ~100 m) as in training.
 
 ### Fuel codes
 
-The model does not see fuel codes directly: each code is turned into its FBP rate-of-spread curve (ROS vs
-ISI) from the fuel table shipped in the bundle, which covers the fuel codes of the national training data.
-A project may use other codes, e.g. a regional fuel grid with new mixedwood percentages:
+The model describes each fuel code by its FBP rate-of-spread curve. The bundle has the curves of all codes in
+the national training data. If your fuel grid uses other codes (e.g. a regional grid with new mixedwood
+percentages), add the BurnP3+ fuel tables to `tabular/`:
 
-- If the project has the BurnP3+ fuel tables `tabular/hexNN_FuelTypes.csv` (`Name`, `ID`) and
-  `tabular/hexNN_FuelCodeCrosswalk.csv` (`FuelType`, `Code`, e.g. `M-1/M-2 (25 PC)`), the curves of codes
-  missing from the bundle are computed with the FBP equations, the same way the training curves were made
-  (C-1 to C-5, C-7, D-1/D-2, M-1/M-2 with any percent conifer, O-1a/O-1b, non-fuel). `check` lists them as
-  NOTEs and `predict` records them in `run_manifest.json`.
-- Fuel types absent from the national training data (C-6, M-3/M-4, S-1 to S-3) are an ERROR: the model has
-  never seen them. Recode those cells or declare them nodata.
-- Codes without a definition in the project tables are an ERROR. If the project defines a known code as a
-  different fuel than the model's table, `check` warns; the project's definition is used when it can be computed,
-  otherwise the model's curve is kept.
+- `hexNN_FuelTypes.csv` with columns `Name`, `ID`
+- `hexNN_FuelCodeCrosswalk.csv` with columns `FuelType`, `Code` (e.g. `M-1/M-2 (25 PC)`)
+
+The curves of new codes are then computed from the FBP equations, the same way as for training. Supported:
+**C-1 to C-5, C-7, D-1/D-2, M-1/M-2 at any percent conifer, O-1a/O-1b and non-fuel**. Fuel types absent from
+the national training data (**C-6, M-3/M-4, S-1 to S-3**) are refused: the model has never seen them, so
+recode those cells or set them to nodata.
 
 ### Fire-size table
 
-The bundle ships the national fire-size table the model was trained with (columns `GRIDCODE`, `SIZE_HA`;
-publicly available data) and `predict` uses it by default. Pass `--fire_size_table path/to/fire_sizes.csv`
-to use your own table (e.g. for a regional study). Both `check` and `predict` state which table is in use,
-and `run_manifest.json` records it under `fire_size_table.source` (`bundle` or `user`). Fire zones missing
-from the table get the distribution of the whole table.
+The bundle includes the national fire-size table the model was trained with, and it is used by default.
+To use your own (e.g. regional fire sizes), pass `--fire_size_table my_fires.csv` with one row per fire and
+columns `GRIDCODE` (fire-zone ID) and `SIZE_HA` (BurnP3+ `FRU` / `Fsize` columns are accepted too). Fire zones
+missing from your table use the distribution of the whole table. Every command states which table it used.
 
-### Checking inputs
+## ✅ Check your inputs
 
-`inference.check` validates a project against the bundle without predicting, and `predict` runs the same
-checks first (skip with `--skip_check`). It reports three levels:
+`inference.check` reads the project and reports every problem at once, without running the model.
+`predict` and `evaluate` run the same check first and stop on errors.
 
-- **ERROR** – prediction would fail or be meaningless; `predict` stops before doing any work. Examples:
-  missing files, rasters without a CRS or not overlapping the mask, DEM not ~100 m, fuel codes the model
-  has no curve for and the project does not define (see "Fuel codes"), no weather rows for any of the
-  hexel's fire zones, missing GreenUp seasons.
-- **WARNING** – prediction runs but some cells use a fallback; review these. Examples: fire zones without
-  weather rows (the hexel's average weather is used), zones missing from `FireZones.csv` or the fire-size
-  table, implausible weather values, low raster coverage inside the mask.
-- **NOTE** – information, e.g. which fire-size table is used, fuel codes whose curves were computed.
+```text
+$ python -m inference.check --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project NWT_data \
+      --scenario_name FireExcludeSpotting --mask_scope none
 
-With `--outputs` it also checks the BurnP3+ result rasters that `inference.evaluate` compares against
-(`evaluate` runs this check first).
+Checked 1 hexel(s) in NWT_data for model nrcan-surrogate-bp-fi-ros v1.0.0 (mask: none)
 
-Exit codes: `0` ready to predict, `1` input errors, `2` the check could not run (e.g. bad bundle path).
-`--json report.json` also writes the report as JSON. `predict` also stores the errors and warnings in
-`run_manifest.json` under `input_check`.
+Project
+  NOTE     Fire sizes: using the national training table shipped with the model (...)
+hex100: OK
+  NOTE     hex100/tabular/hex100_FuelCodeCrosswalk.csv: Fuel code(s) not in the model's fuel table, with curves
+           computed from the project's fuel tables and the FBP equations: 425 = M-1 (25 PC) (161,615 cells), ...
 
-### Outputs
+Result: ready to predict, no problems found.
+```
 
-Outputs in `--output`: `hexNN/hexNN_{bp,fi,ros}.tif` (probability, kW/m, m/min; nodata -9999),
-`hexNN/hexNN_hazard_{raw,scaled,class}.tif` (class 0 = nodata), `run_manifest.json` (bundle, inputs,
-fire-size table, input check, options, software versions, timings) and `predict.log`. The rasters are on
-the grid the model works on: inputs are reprojected to the model's CRS (`ESRI:102002`, Canada Lambert
-Conformal Conic) as in training, so a project in another CRS gets outputs on a different grid than its
-inputs; reproject them if you need to overlay them cell by cell.
+| Level | Meaning | Examples |
+|---|---|---|
+| 🔴 **ERROR** | Prediction would fail or be meaningless; nothing is run | Missing files, raster without a CRS, DEM not ~100 m, undefined or unsupported fuel codes, no weather for the hexel's fire zones |
+| 🟡 **WARNING** | Prediction runs, but some cells use a fallback; review these | Fire zones without weather (hexel average used), zones missing from the fire-size table, implausible weather values |
+| ⚪ **NOTE** | Information | Which fire-size table is used, fuel codes whose curves were computed |
 
-## Evaluate against BurnP3+
+Options: `--hex_ids 12 14`, `--scenario_name NAME`, `--mask_scope`, `--fire_size_table`, `--outputs` (also check
+the BurnP3+ results used by `evaluate`) and `--json report.json`. Exit code `0` = ready, `1` = input errors,
+`2` = the check could not run.
 
-`inference.evaluate` measures how close the model is to BurnP3+ on hexels where BurnP3+ has been run. It
-needs the project inputs **and** the BurnP3+ outputs of each hexel:
+## 🗺️ Predict
 
-- national layout: `hexNN/results/burnP3Plus_OutputBurnProbability/burnProbability-sn2.tif`,
-  `.../burnP3Plus_OutputFireIntensitySummaryMap/fbpSummary-FireIntensity-Average.tif` and
-  `.../burnP3Plus_OutputRateOfSpreadSummaryMap/fbpSummary-RateOfSpread-Average.tif`;
-- with `--scenario_name NAME`: `hexNN/results/NAME/burnP3Plus_Output..._NAME_{All|Average}.tif`
-  (and `spatial/hexNN_fbp_NAME.tif` as the fuel input).
+```bash
+python -m inference.predict --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
+    --output path/to/predictions
+```
+
+Outputs, one folder per hexel (GeoTIFF, nodata `-9999`):
+
+| File | Content |
+|---|---|
+| `hexNN/hexNN_bp.tif` | Burn probability (0–1) |
+| `hexNN/hexNN_fi.tif` | Fire intensity (kW/m) |
+| `hexNN/hexNN_ros.tif` | Rate of spread (m/min) |
+| `hexNN/hexNN_hazard_raw.tif` | Hazard = BP × min(FI, 10 000 kW/m) |
+| `hexNN/hexNN_hazard_scaled.tif` | Hazard scaled 0–100 with the national reference, comparable across studies |
+| `hexNN/hexNN_hazard_class.tif` | 13 hazard classes (1 = lowest; 0 = nodata) |
+| `run_manifest.json` | Model, inputs, fire-size table, input check, options and software versions, for reproducibility |
+| `predict.log` | Run log |
+
+Outputs are on the model's grid (`ESRI:102002`, ~100 m). If your inputs are in another CRS, reproject the
+outputs before overlaying them cell by cell.
+
+| Option | Use |
+|---|---|
+| `--hex_ids 12 14` | Only these hexels (`12` or `hex12`) |
+| `--scenario_name NAME` | Use `hexNN_fbp_NAME.tif` as the fuel grid |
+| `--mask_scope actual\|buffer\|none` | Area to predict: hexel mask (default), buffered mask, or the whole raster |
+| `--fire_size_table FILE` | Your own fire sizes instead of the national table |
+| `--device auto\|cpu\|cuda\|mps` | Hardware to run on |
+| `--batch_size N` | Patches per model call; lower it if memory runs out |
+| `--no_hazard` | Skip the hazard rasters |
+| `--overwrite` | Replace earlier predictions in `--output` |
+
+## 📊 Evaluate against BurnP3+
+
+Where BurnP3+ has been run, `inference.evaluate` predicts (or reuses predictions) and scores the surrogate
+against the BurnP3+ outputs in each hexel's `results/` folder:
+
+- national layout: `results/burnP3Plus_OutputBurnProbability/burnProbability-sn2.tif`,
+  `results/burnP3Plus_OutputFireIntensitySummaryMap/fbpSummary-FireIntensity-Average.tif` and
+  `results/burnP3Plus_OutputRateOfSpreadSummaryMap/fbpSummary-RateOfSpread-Average.tif`;
+- with `--scenario_name NAME`: `results/NAME/burnP3Plus_Output..._NAME_{All|Average}.tif`.
 
 ```bash
 # Predict and evaluate (predictions are kept in path/to/evaluation/predictions/)
 python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
     --output path/to/evaluation
 
-# Only score predictions made earlier with inference.predict (the model is not run again)
+# Score predictions made earlier with inference.predict (the model is not run again)
 python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
     --predictions path/to/predictions --output path/to/evaluation
 ```
 
-Useful options: `--hex_ids`, `--mask_scope buffer` (also reports the hexel and the buffer ring separately) or
-`none` (whole raster extent), `--by_firezone` (metrics per fire zone), `--metrics ccc mae` (a subset), `--no_plots`, `--overwrite`, and the
-`predict` options (`--device`, `--batch_size`, `--fire_size_table`, ...). With `--predictions`, the mask scope
-of the predictions is used and evaluate warns if they were made with a different model. Re-running with
-`--overwrite` into the same folder replaces the metrics but keeps `predictions/`.
+A summary is printed at the end, e.g. for the national test hexel 12:
 
-Metrics follow the model's own evaluation: they are computed per hexel on the full 100 m rasters inside the
-hexel mask, or the whole raster with `--mask_scope none` (cells where BurnP3+ has data; BurnP3+ nodata in burn probability counts as 0), then averaged
-over hexels. On the test hexel 12 they reproduce the published values (within 0.1%; hazard classes exact).
-
-| Metric | Meaning (surrogate vs BurnP3+, per target) | Best |
-|---|---|---|
-| `ccc` | Lin's concordance correlation: agreement in value, not just ranking | 1 |
-| `spearman` | Rank correlation: are the same places ranked high and low | 1 |
-| `mae`, `mse` | Mean absolute / squared error, in the target's units | 0 |
-| `normalized_mae` | MAE divided by the mean BurnP3+ value | 0 |
-| `bias`, `normalized_bias` | Mean (surrogate − BurnP3+), raw and divided by the mean BurnP3+ value; negative = under-prediction | 0 |
-| `mae_topXX` | MAE over cells in the top XX% of either map (`01` = top 1%) | 0 |
-| `iou_topXX` | Overlap (intersection over union) of the top XX% cells of both maps (`005` = top 0.5%) | 1 |
-| `auc_iou_top10`, `auc_iou_full` | Mean top-K IoU over K = 1–10% and 1–99% | 1 |
-
-Rows with target `hazard` score the continuous raw hazard, BP × min(FI, 10 000 kW/m). Hazard **classes**
-(13 classes, from that hazard scaled with the national denominator stored in the bundle, so hexels and
-studies are comparable) are compared in `hazard_metrics_*.csv`: `exact_accuracy`,
-`within_1_accuracy` / `within_2_accuracy` (off by at most 1 or 2 classes), `mean_absolute_class_error`,
-`macro_iou`, `macro_f1` and per-class IoU/F1.
-
-Outputs in `--output`:
+```text
+Evaluated 1 hexel(s) against BurnP3+ (area: actual). Mean over hexels:
+  target           ccc    spearman         mae        bias
+  bp              0.85        0.90       0.001     -0.0005
+  fi              0.79        0.86        1210      -187.9
+  ros             0.71        0.78       1.323     -0.3188
+```
 
 | File | Content |
 |---|---|
-| `metrics_summary.csv` | Mean of each metric over hexels, per target (and area with `--mask_scope buffer`) |
-| `metrics_per_hexel.csv` | One row per hexel × target (× area), with `n_pixels` |
+| `metrics_summary.csv` | Mean of each metric over hexels, per target |
+| `metrics_per_hexel.csv` | One row per hexel × target, with the number of cells scored |
 | `metrics_per_firezone.csv` | With `--by_firezone`: one row per hexel × fire zone × target |
-| `hazard_metrics_summary.csv`, `hazard_metrics_per_hexel.csv` | Hazard-class agreement |
-| `hazard_confusion_matrix.{csv,png}` | Hazard classes, BurnP3+ (rows) vs surrogate (columns), all hexels |
-| `plots/hexNN/hexNN_<target>_{maps,scatter,histogram}.png` | Surrogate, BurnP3+ and difference maps; value distributions |
-| `predictions/` | The `predict` output, when evaluate ran the model |
-| `evaluation_manifest.json`, `evaluate.log` | Bundle, options, input check, warnings, summary, software versions |
+| `hazard_metrics_summary.csv`, `hazard_metrics_per_hexel.csv` | Agreement of the hazard classes |
+| `hazard_confusion_matrix.{csv,png}` | Hazard classes, BurnP3+ (rows) vs surrogate (columns) |
+| `plots/hexNN/` | Surrogate, BurnP3+ and difference maps; scatter plots and histograms |
+| `predictions/` | The predictions, when evaluate ran the model |
+| `evaluation_manifest.json`, `evaluate.log` | Model, options, input check, warnings and summary |
 
-Resources: scoring a national hexel (~18 M cells) takes about 7 minutes and 6 GB of memory on one CPU core,
-including plots; running the model first adds the `predict` time (about 15 minutes per hexel on one core).
-Exit codes: `0` success, `2` error (nothing was evaluated if the check found errors).
+Extra options: `--by_firezone`, `--metrics ccc mae` (a subset), `--no_plots` (faster),
+`--mask_scope buffer` (also scores the hexel and its buffer ring separately), plus the `predict` options.
+When reusing predictions, evaluate warns if they were made with another model.
 
-## Legacy: predict from a training checkpoint
+### Metrics
 
-The pipeline below reads normalization statistics and fuel curves from the training data folders
-referenced by the checkpoint and needs BurnP3+ outputs for every hexel. Prefer `inference.predict`.
+Metrics are computed per hexel on the 100 m cells where BurnP3+ has data (BurnP3+ nodata in burn probability
+counts as 0), then averaged over hexels, exactly as in the model's own evaluation.
 
-## Quick Start
+| Metric | Meaning (surrogate vs BurnP3+) | Best |
+|---|---|---|
+| `ccc` | Concordance correlation: agreement in value, not just ranking | 1 |
+| `spearman` | Rank correlation: are the same places ranked high and low | 1 |
+| `mae`, `mse` | Mean absolute / squared error, in the target's units | 0 |
+| `normalized_mae` | MAE divided by the mean BurnP3+ value | 0 |
+| `bias`, `normalized_bias` | Mean (surrogate − BurnP3+); negative = under-prediction | 0 |
+| `mae_topXX` | MAE over the top XX% cells of either map (`01` = top 1%) | 0 |
+| `iou_topXX` | Overlap of the top XX% cells of both maps (`005` = top 0.5%) | 1 |
+| `auc_iou_top10`, `auc_iou_full` | Mean top-K overlap over K = 1–10% and 1–99% | 1 |
 
-### Command Line
+Rows with target `hazard` score the continuous raw hazard. The hazard **class** files report
+`exact_accuracy`, `within_1_accuracy` / `within_2_accuracy` (off by at most 1 or 2 classes),
+`mean_absolute_class_error`, `macro_iou`, `macro_f1` and per-class IoU/F1.
 
-Please run this from the root of the repository to ensure correct paths to data and checkpoints. The CLI accepts arguments that override values in `config.yaml` for flexibility. Below are example commands for different use cases:
+## 🌲 Regional studies
+
+For a study area that is not a national hexel (e.g. a region prepared as a single `hexNN` folder):
+
+1. **No mask?** Pass `--mask_scope none` to all commands: the whole raster extent is used and
+   `mask_grids/` is not needed.
+2. **Scenarios?** Pass `--scenario_name NAME` to use `hexNN_fbp_NAME.tif` and `results/NAME/`.
+3. **New fuel codes?** Add the fuel tables (see [Fuel codes](#fuel-codes)).
+4. **Regional fire sizes?** Pass `--fire_size_table`.
 
 ```bash
-# Option 1: Run inference using values from config.yaml
-python -m inference.run_ai_surrogate_model_hexel_inference
-
-# Option 2: Override hexel ID and data preparation
-python -m inference.run_ai_surrogate_model_hexel_inference --hex_id="05" --prepare_data=False
-
-# Option 3: Run inference on all hexels
-python -m inference.run_ai_surrogate_model_hexel_inference --hex_id="all" --prepare_data=True
-
-# Option 4: Run inference using all CLI commands
-python -m inference.run_ai_surrogate_model_hexel_inference --data_dir=/path/to/hexel/data --checkpoint_path=/path/to/model/best.pth --save_dir=/path/to/output/ --hex_id="all" --batch_size=64 --num_workers=8 --prepare_data=True
-```
-**CLI Arguments**
-
-Note: All arguments follow values from `config.yaml` but if CLI arguments are provided, they will override the config values.
-
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `--config` | Path to YAML config file | `inference/config.yaml` |
-| `--data_dir` | Directory containing hexel data | From config |
-| `--checkpoint_path` | Path to model checkpoint | From config |
-| `--save_dir` | Directory to save predictions and visualizations | From config |
-| `--hex_id` | (str) Hexel ID (str) to process | From config |
-| `--prepare_data` | Run data preparation step | `True` |
-| `--batch_size` | Batch size for inference | From config |
-| `--num_workers` | DataLoader workers | From config |
-
-
-
-## Output
-
-We assume `save_dir` is set to `outputs/` for the following paths. For each hexel, all the outputs are saved under corresponding subdirectories in `outputs/` with the hexel ID in the filename. For example, for hexel "02", the predicted patches will be saved as `outputs/predicted_patches/hexel_02.npy`.
-
-````
-inference/
-└── outputs/
-    ├── predicted_hexels/                    # Reconstructed hexel grid of predicted target values and geospatial profile from ground truth as GeoTIFF files
-    ├── predicted_hexels_plot/               # Visualizations comparing ground truth vs predictions for each hexel
-    └── predicted_patches/                   # Normalized patch predictions (N, C, H, W) as .npy files
-````
-
-## Configuration
-
-Edit `config.yaml`:
-
-```yaml
-# Paths
-data_dir: "/path/to/hexel/data"
-checkpoint_path: "/path/to/model/best.pth"
-save_dir: "/path/to/output/"  # Predictions saved as predictions_hexel_{hex_id}.npy
-
-# Hexel configuration
-hex_id: "02"
-
-# Data preparation settings
-prepare_data: True      # Set true to run data prep
-
-# Inference settings
-batch_size: 32
-num_workers: 4
+python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/NWT_data \
+    --scenario_name FireExcludeSpotting --mask_scope none --output path/to/evaluation
 ```
 
-## Data Requirements
+> [!IMPORTANT]
+> The model was trained on national BurnP3+ runs. In a region whose fire regime differs from the national
+> data, the **spatial pattern** of burn probability usually transfers well (high Spearman), but its
+> **absolute level** may not (low CCC, large bias); FI and ROS transfer better. Run `evaluate` on a
+> BurnP3+ run of your region before relying on absolute burn probabilities.
 
-The `data_dir` should contain:
-- `hex{hex_id}/` - Raw hexel data directory
-- `df_fire_fru.csv` - Fire size distribution
-
-If `prepare_data=True`, the pipeline will:
-
-1. Build weather tables
-2. Process fire size distributions
-3. Split hexel into patches
-4. Generate metadata CSV
-
-Note: The data preparation has to be done at least once before running inference, as it creates the necessary datasets for the prediction loop. If you have already prepared the data, you can set `prepare_data=False` to skip this step in subsequent runs. If you add more hexels later, you can run with `prepare_data=True` with the `hex_id` set to the new hexel to prepare just that hexel's data.
-
-## Folder Structure
-
-```
-inference/
-├── data_dir/                                 # Hexel data directory (raw hexel data, fire size distribution)
-├── outputs/                                  # Output directory for predictions, visualizations, and logs (appears after running)
-├── predictor.py                              # Pure ML engine (tensor-in, tensor-out)
-├── run_ai_surrogate_model_hexel_inference.py # Orchestration (data prep, dataset, prediction loop, post-processing)
-├── config.yaml                               # Configuration file
-└── run_hexel_inference.log                   # Output logs
-```
-## Components
-
-The module is split into two components:
-
-### 1. BurnRiskPredictor (`predictor.py`)
-Pure inference class that wraps the PyTorch model. Handles only tensor operations - no data loading or hexel-specific logic.
-
-### 2. run_ai_surrogate_model_hexel_inference (`run_ai_surrogate_model_hexel_inference.py`)
-Orchestrates the full pipeline:
-1. Data preparation (patch splitting, tabular data processing)
-2. Dataset creation from checkpoint config
-3. Prediction loop using `BurnRiskPredictor`
-4. Post-processing and visualization
-5. Saving results with log file output.
-
-
-### Programmatic Usage
+## 🐍 Using it from Python
 
 ```python
-from inference import BurnRiskPredictor, run_pipeline
+from inference.bundle import load_bundle
+from inference.check import check_project
+from inference.evaluate import run_evaluate
+from inference.predict import run_predict
 
-# Option 1: Full end-to-end pipeline
-predicted_hexel_grid, grid_profile = run_pipeline(
-    checkpoint_path="experiments/best_model/best.pth",
-    data_dir="data/",
-    hex_id="02",
-    prepare_data=True,
-    save_dir="outputs/",  # Saves as predictions_hexel_02.npy
-)
+report = check_project(load_bundle("nrcan-surrogate-bp-fi-ros-v1.0"), "path/to/project")
+print(report.format())
 
-# Option 2: Just the predictor (for custom pipelines or serving)
-predictor = BurnRiskPredictor.from_checkpoint(
-    checkpoint_path="experiments/best_model/best.pth",
-    spatial_channels=10,
-    auxiliary_input_dims={"tabular_weather": 7, "tabular_fire_size": 5},
-)
-predicted_hexel_grid, grid_profile = predictor(spatial_batch, auxiliary_batch)
+run = run_predict("nrcan-surrogate-bp-fi-ros-v1.0", "path/to/project", "path/to/predictions", device="cpu")
+print(run.hexels[0].outputs["bp"])  # path to the BP GeoTIFF of the first hexel
+
+evaluation = run_evaluate("nrcan-surrogate-bp-fi-ros-v1.0", "path/to/project", "path/to/evaluation", plots=False)
+print(evaluation.summary)           # pandas DataFrame
 ```
 
-# Generating the full Canada map of hexels
+The keyword arguments mirror the command-line options (`hex_ids`, `scenario_name`, `mask_scope`,
+`fire_size_table`, `device`, ...).
 
-To generate the full Canada hexel map of targets and/or predictions, run the following script (see --help for more args. information):
+## ⚙️ Performance
 
-```python -m src.datasets.postprocessing.full_map.generate_full_hexel_map --data-dir data/ --scale "log" --show_hex_borders --output "experiments/full_canada_map.png"```
+Measured on a single CPU core, no GPU:
 
-Note that to generate the full Canada maps, the `.tif` files of the hexels are required.
+| Area | `check` | `predict` | `evaluate` (predict + scoring) |
+|---|---|---|---|
+| National hexel 12 (~18 M cells) | seconds | ~15 min | + ~7 min scoring with plots, ~6 GB peak memory |
+| NWT regional study (~5.7 M cells) | 17 s, 0.9 GB | ~6 min | 12 min total, 3 GB peak memory |
 
-For example, to generate the full maps of ground truth targets (modify the `--data-dir` argument accordingly):
+A GPU (CUDA or Apple MPS) speeds up `predict`; `--no_plots` speeds up `evaluate`.
 
-```python -m src.datasets.postprocessing.full_map.generate_full_hexel_map --data-dir <raw_data_folder/> --scale "log" --show_hex_borders --output "full_canada_map_targets.png"```
+## 🩺 Troubleshooting
 
-Similarly, to generate the full maps of obtained predictions from an AI surrogate model (modify the `--data-dir` argument accordingly):
+| Problem | Fix |
+|---|---|
+| `check` reports errors | Fix them and re-run `check`; messages name the file concerned and what is wrong |
+| Missing mask shapefile | Add `spatial/mask_grids/hexNN_actual.shp`, or use `--mask_scope none` |
+| Unknown fuel codes | Add `FuelTypes.csv` and `FuelCodeCrosswalk.csv` to `tabular/`, or recode those cells |
+| Out of memory | Lower `--batch_size` (e.g. `2`) |
+| Hangs or crashes when loading data on Windows/macOS | Keep `--num_workers 0` (the default) |
+| Slow start-up | `--skip_checksums` skips verifying the bundle files |
+| Output folder not empty | Choose another `--output` or add `--overwrite` |
 
-```python -m src.datasets.postprocessing.full_map.generate_full_hexel_map --data-dir <model_outputs_folder/predicted_hexels> --pattern "*_predicted.tif" --scale "log" --show_hex_borders --output "full_canada_map_preds.png"```
+## 🔧 For maintainers: exporting a bundle
 
-You can also specify a fixed range of values for map generations via the `--vmin` and `--vmax` arguments.
+Turn a training checkpoint into a bundle (run once per released model):
 
-Finally, to generate a map of residuals (preds - targets) instead (modify the `--target-dir` and `--pred-dir` arguments accordingly):
+```bash
+python -m inference.export_bundle --checkpoint path/to/best.pth --out_dir nrcan-surrogate-bp-fi-ros-v1.0 \
+    --name nrcan-surrogate-bp-fi-ros --version 1.0.0 \
+    --hazard_denominator_json path/to/hazard_scale_denominator.json \
+    --fire_size_table path/to/df_fire_fru_25ha_1970_2023.csv \
+    --fire_size_table_note "Canadian National Fire Database (CNFDB), Canadian Forest Service. Publicly available data." \
+    --selection_note "How this checkpoint was selected."
+```
 
-```python -m src.datasets.postprocessing.full_map.generate_full_hexel_diff_map --target-dir <raw_data_folder/> --target-pattern hex*/outputs/*_iter_bp.tif --pred-dir <model_outputs_folder/predicted_hexels> --pred-pattern "*_predicted.tif" --output "full_canada_map_diffs.png"```
+Normalization statistics and lookup tables are read from the checkpoint's training data folder unless
+overridden (see `--help`). The export verifies that the bundle rebuilds the exact model before writing it.
