@@ -42,6 +42,23 @@ def _topk_thresholds(values: torch.Tensor, percentiles: torch.Tensor) -> torch.T
     return sorted_desc[k - 1]
 
 
+# Upper bound on the size of the boolean threshold masks built at once by compute_auc_iou.
+_AUC_IOU_MAX_MASK_ELEMENTS = 1 << 25
+
+
+def _topk_iou_curve(p: torch.Tensor, t: torch.Tensor, p_thresh: torch.Tensor, t_thresh: torch.Tensor, eps: float) -> torch.Tensor:
+    """IoU of the top-k maps for each pair of thresholds, a few thresholds at a time to bound memory on full hexels."""
+    chunk = max(1, _AUC_IOU_MAX_MASK_ELEMENTS // max(p.numel(), 1))
+    ious = []
+    for start in range(0, p_thresh.numel(), chunk):
+        p_bin = p.unsqueeze(0) >= p_thresh[start : start + chunk].unsqueeze(1)
+        t_bin = t.unsqueeze(0) >= t_thresh[start : start + chunk].unsqueeze(1)
+        intersection = (p_bin & t_bin).sum(dim=1).float()
+        union = (p_bin | t_bin).sum(dim=1).float()
+        ious.append(intersection / (union + eps))
+    return torch.cat(ious)
+
+
 def compute_mse(preds: torch.Tensor, targets: torch.Tensor, mask: torch.Tensor | None = None, eps: float = 1e-8) -> torch.Tensor:
     """Computes Mean Squared Error (MSE), optionally using a mask."""
     if mask is None:
@@ -303,13 +320,7 @@ def compute_auc_iou(
             p_thresh = _topk_thresholds(p, percentiles)
             t_thresh = _topk_thresholds(t, percentiles)
 
-            p_bin = p.unsqueeze(0) >= p_thresh.unsqueeze(1)
-            t_bin = t.unsqueeze(0) >= t_thresh.unsqueeze(1)
-
-            intersection = (p_bin & t_bin).sum(dim=1).float()
-            union = (p_bin | t_bin).sum(dim=1).float()
-
-            ious = intersection / (union + eps)
+            ious = _topk_iou_curve(p, t, p_thresh, t_thresh, eps)
 
             auc = torch.trapz(ious, k_tensor)
             max_area = k_tensor[-1] - k_tensor[0]
@@ -330,13 +341,7 @@ def compute_auc_iou(
             p_thresh = _topk_thresholds(p_valid, percentiles)
             t_thresh = _topk_thresholds(t_valid, percentiles)
 
-            p_bin = p_valid.unsqueeze(0) >= p_thresh.unsqueeze(1)
-            t_bin = t_valid.unsqueeze(0) >= t_thresh.unsqueeze(1)
-
-            intersection = (p_bin & t_bin).sum(dim=1).float()
-            union = (p_bin | t_bin).sum(dim=1).float()
-
-            ious = intersection / (union + eps)
+            ious = _topk_iou_curve(p_valid, t_valid, p_thresh, t_thresh, eps)
 
             auc = torch.trapz(ious, k_tensor)
             max_area = k_tensor[-1] - k_tensor[0]

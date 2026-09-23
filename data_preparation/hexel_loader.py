@@ -78,6 +78,7 @@ def load_spatial_features_per_hexel(
     ignition_weighting: str = "distribution",
     fuel_representation: str = "raw",
     scenario_name: str | None = None,
+    load_targets: bool = True,
 ) -> tuple[np.ndarray | None, np.ndarray | None, dict[int, tuple[int, int]] | None]:
     """
     Load all data (features and output) per hexel
@@ -86,6 +87,8 @@ def load_spatial_features_per_hexel(
     modelling_approach: 1 for joint season-cause modelling, 2 for separate season-cause modelling.
     ignition_weighting: "distribution" (default) for zone-area-weighted blending (2 channels:
         human + lightning), or "max" for the original max-aggregation (1 channel).
+    load_targets: If False, the BurnP3+ output rasters (BP/FI/ROS) are not read and their channels
+        are filled with nodata, so prediction works on input-only projects with the same channel layout.
     Returns:
         all_features: np.ndarray of shape (N, H, W, num_features)
         all_masks: np.ndarray of shape (N, H, W)
@@ -241,21 +244,26 @@ def load_spatial_features_per_hexel(
                 mask_scope=scope,
             )
 
-        bp_out_grid, _ = load_spatial_raster(
-            all_paths.output_burn_prob(scenario_name=scenario_name),
-            mask_path=scope_mask_path,
-            reference_profile=reference_profile,
-        )
-        fi_out_grid, _ = load_spatial_raster(
-            all_paths.output_fire_intensity(scenario_name=scenario_name),
-            mask_path=scope_mask_path,
-            reference_profile=reference_profile,
-        )
-        ros_out_grid, _ = load_spatial_raster(
-            all_paths.output_ros(scenario_name=scenario_name),
-            mask_path=scope_mask_path,
-            reference_profile=reference_profile,
-        )
+        if load_targets:
+            bp_out_grid, _ = load_spatial_raster(
+                all_paths.output_burn_prob(scenario_name=scenario_name),
+                mask_path=scope_mask_path,
+                reference_profile=reference_profile,
+            )
+            fi_out_grid, _ = load_spatial_raster(
+                all_paths.output_fire_intensity(scenario_name=scenario_name),
+                mask_path=scope_mask_path,
+                reference_profile=reference_profile,
+            )
+            ros_out_grid, _ = load_spatial_raster(
+                all_paths.output_ros(scenario_name=scenario_name),
+                mask_path=scope_mask_path,
+                reference_profile=reference_profile,
+            )
+        else:
+            bp_out_grid = np.ma.masked_all(elevation_grid.shape[:2], dtype=np.float32)
+            fi_out_grid = np.ma.masked_all(elevation_grid.shape[:2], dtype=np.float32)
+            ros_out_grid = np.ma.masked_all(elevation_grid.shape[:2], dtype=np.float32)
 
         stacked_features, mask = stack_sample(
             fuel_grid, elevation_grid, ignition_grid, firezones_grid, bp_out_grid, fi_out_grid, ros_out_grid
