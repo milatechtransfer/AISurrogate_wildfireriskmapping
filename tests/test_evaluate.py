@@ -57,11 +57,13 @@ def _burnp3_grids() -> dict[str, np.ndarray]:
     }
 
 
-def _write_burnp3_results(project: Path, hex_id: str = "01") -> dict[str, np.ndarray]:
+def _write_burnp3_results(project: Path, hex_id: str = "01", scenario_name: str | None = None) -> dict[str, np.ndarray]:
     grids = _burnp3_grids()
     paths = Paths(hex_id=hex_id, root_dir=project)
     for name, method in (("bp", paths.output_burn_prob), ("fi", paths.output_fire_intensity), ("ros", paths.output_ros)):
-        _write_raster(method(), grids[name], -9999.0)
+        path = method(scenario_name=scenario_name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_raster(path, grids[name], -9999.0)
     return grids
 
 
@@ -262,3 +264,38 @@ def test_evaluate_without_mask_scores_the_whole_raster(bundle_dir: Path, project
         overwrite=True,
     )
     assert (rescored.metrics["area"] == "none").all()
+
+
+def test_reused_predictions_are_scored_against_their_own_scenario(bundle_dir: Path, bundle: ModelBundle, project: Path, tmp_path: Path):
+    grids = _write_burnp3_results(project, scenario_name="FireExcludeSpotting")
+    predictions = _write_predictions(
+        tmp_path / "predictions", bundle, grids, manifest={"options": {"mask_scope": "actual", "scenario_name": "FireExcludeSpotting"}}
+    )
+
+    run = run_evaluate(bundle_dir, project, tmp_path / "evaluation", predictions_dir=predictions, device="cpu", plots=False)
+
+    np.testing.assert_allclose(run.metrics["mae"], 0.0, atol=1e-6)
+    manifest = json.loads((tmp_path / "evaluation" / EVALUATION_MANIFEST_FILENAME).read_text())
+    assert manifest["options"]["scenario_name"] == "FireExcludeSpotting"
+    with pytest.raises(EvaluateError, match="made for scenario 'FireExcludeSpotting'"):
+        run_evaluate(bundle_dir, project, tmp_path / "other", predictions_dir=predictions, scenario_name="Other", plots=False)
+
+
+def test_national_predictions_cannot_be_scored_against_a_scenario(bundle_dir: Path, bundle: ModelBundle, project: Path, tmp_path: Path):
+    grids = _write_burnp3_results(project)
+    predictions = _write_predictions(
+        tmp_path / "predictions", bundle, grids, manifest={"options": {"mask_scope": "actual", "scenario_name": None}}
+    )
+
+    with pytest.raises(EvaluateError, match="national rasters"):
+        run_evaluate(bundle_dir, project, tmp_path / "evaluation", predictions_dir=predictions, scenario_name="FireExcludeSpotting")
+
+
+def test_evaluate_refuses_to_write_into_the_project(bundle_dir: Path, project: Path):
+    marker = project / "hex01" / "spatial" / "hex01_dem.tif"
+    assert marker.is_file()
+
+    with pytest.raises(EvaluateError, match="outside the project"):
+        run_evaluate(bundle_dir, project, project, device="cpu", overwrite=True)
+
+    assert marker.is_file()

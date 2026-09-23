@@ -399,6 +399,11 @@ def resolve_mask_scope(requested: str | None, bundle: ModelBundle) -> str:
     return scope
 
 
+def resolve_scenario_name(requested: str | None, bundle: ModelBundle) -> str | None:
+    """The scenario to use: ``requested``, else the bundle's training scenario (None = national rasters)."""
+    return requested or bundle.manifest.data_prep.scenario_name or None
+
+
 def data_mask_scope(scope: str) -> str | None:
     """The mask scope understood by data_preparation/src (None = no mask)."""
     return None if scope == NO_MASK_SCOPE else scope

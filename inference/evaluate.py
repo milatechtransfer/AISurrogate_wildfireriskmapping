@@ -53,6 +53,7 @@ from inference.bundle import (
     load_bundle,
     resolve_device,
     resolve_mask_scope,
+    resolve_scenario_name,
     utc_timestamp,
 )
 from inference.check import CheckReport, check_project, resolve_hex_ids
@@ -64,6 +65,7 @@ from inference.predict import (
     discover_hex_ids,
     git_commit,
     log_to_file,
+    output_overlap_error,
     run_predict,
 )
 from src.datasets.postprocessing.hazard import compute_raw_hazard
@@ -461,6 +463,18 @@ def _resolve_scope(requested: str | None, bundle: ModelBundle) -> str:
         raise EvaluateError(str(exc)) from exc
 
 
+def _resolve_reused_scenario(requested: str | None, predicted_options: dict[str, Any], bundle: ModelBundle) -> str | None:
+    """The scenario of reused predictions: the one they were made for, else ``requested`` or the bundle's."""
+    if "scenario_name" not in predicted_options:
+        return resolve_scenario_name(requested, bundle)
+    predicted = predicted_options["scenario_name"] or None
+    if requested and requested != predicted:
+        made_for = f"scenario {predicted!r}" if predicted else "the national rasters (no scenario)"
+        hint = f"--scenario_name {predicted}" if predicted else "no --scenario_name"
+        raise EvaluateError(f"The predictions were made for {made_for}; evaluate them with {hint}.")
+    return predicted
+
+
 def run_evaluate(
     bundle_dir: str | Path,
     project_dir: str | Path,
@@ -486,6 +500,9 @@ def run_evaluate(
     output_dir = Path(output_dir).expanduser().resolve()
     if not project_dir.is_dir():
         raise EvaluateError(f"Project folder not found: {project_dir}")
+    overlap = output_overlap_error(output_dir, project_dir)
+    if overlap:
+        raise EvaluateError(overlap)
     bundle = load_bundle(bundle_dir, verify_checksums=verify_checksums)
     metric_functions = resolve_metric_functions(metrics)
 
@@ -497,10 +514,12 @@ def run_evaluate(
         if not pred_dir.is_dir():
             raise EvaluateError(f"Predictions folder not found: {pred_dir}")
         predictions_manifest = _read_predictions_manifest(pred_dir)
-        predicted_scope = (predictions_manifest or {}).get("options", {}).get("mask_scope")
+        predicted_options = (predictions_manifest or {}).get("options", {})
+        predicted_scope = predicted_options.get("mask_scope")
         scope = _resolve_scope(mask_scope or predicted_scope, bundle)
         if predicted_scope and scope != predicted_scope:
             raise EvaluateError(f"The predictions cover the {predicted_scope!r} area; evaluate them with --mask_scope {predicted_scope}.")
+        scenario_name = _resolve_reused_scenario(scenario_name, predicted_options, bundle)
         available = _hexels_with_predictions(pred_dir, bundle)
         if not available:
             raise EvaluateError(f"No predictions (hexNN/hexNN_<target>.tif) found in {pred_dir}.")
@@ -516,6 +535,7 @@ def run_evaluate(
     else:
         pred_dir = output_dir / PREDICTIONS_DIRNAME
         scope = _resolve_scope(mask_scope, bundle)
+        scenario_name = resolve_scenario_name(scenario_name, bundle)
         try:
             selected = discover_hex_ids(project_dir, hex_ids)
         except PredictError as exc:
@@ -692,7 +712,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="auto", help="auto (default), cpu, cuda, cuda:1 or mps.")
     parser.add_argument("--batch_size", type=int, default=8, help="Patches per model call (lower it if memory runs out).")
     parser.add_argument("--num_workers", type=int, default=0, help="Data-loading worker processes (0 is safest on Windows/macOS).")
-    parser.add_argument("--scenario_name", default=None, help="Use hexNN_fbp_<name>.tif and results/<name>/ BurnP3+ outputs.")
+    parser.add_argument(
+        "--scenario_name",
+        default=None,
+        help="Use hexNN_fbp_<name>.tif and results/<name>/ BurnP3+ outputs (default: the scenario of --predictions, else the model's).",
+    )
     parser.add_argument("--overwrite", action="store_true", help="Replace a previous evaluation in --output.")
     parser.add_argument("--skip_checksums", action="store_true", help="Skip bundle checksum verification (faster start-up).")
     parser.add_argument("--skip_check", action="store_true", help="Do not check the project first (see inference.check --outputs).")

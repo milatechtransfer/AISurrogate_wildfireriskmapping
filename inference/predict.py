@@ -61,6 +61,7 @@ from inference.bundle import (
     load_bundle,
     resolve_device,
     resolve_mask_scope,
+    resolve_scenario_name,
     sha256_file,
     utc_timestamp,
 )
@@ -446,12 +447,21 @@ def predict_hexel(
     )
 
 
+def output_overlap_error(output_dir: Path, project_dir: Path) -> str | None:
+    """Why ``output_dir`` cannot be used for a project's results (it would mix with or overwrite its inputs), else None."""
+    if output_dir == project_dir or output_dir in project_dir.parents:
+        return f"--output {output_dir} contains the project {project_dir}; choose a folder outside the project."
+    if output_dir.is_relative_to(project_dir) and output_dir.relative_to(project_dir).parts[0].startswith("hex"):
+        return f"--output {output_dir} is inside the project's input folder; choose a folder outside the hexNN folders."
+    return None
+
+
 def _prepare_output_dir(output_dir: Path, overwrite: bool) -> None:
     if output_dir.exists() and any(output_dir.iterdir()):
         if not overwrite:
             raise PredictError(f"Output folder {output_dir} is not empty. Choose another --output or pass --overwrite.")
         for child in output_dir.iterdir():
-            if child.name.startswith("hex") or child.name in {WORK_DIRNAME, RUN_MANIFEST_FILENAME, LOG_FILENAME}:
+            if (child.is_dir() and child.name.startswith("hex")) or child.name in {WORK_DIRNAME, RUN_MANIFEST_FILENAME, LOG_FILENAME}:
                 shutil.rmtree(child) if child.is_dir() else child.unlink()
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -589,6 +599,9 @@ def run_predict(
     output_dir = Path(output_dir).expanduser().resolve()
     if not project_dir.is_dir():
         raise PredictError(f"Project folder not found: {project_dir}")
+    overlap = output_overlap_error(output_dir, project_dir)
+    if overlap:
+        raise PredictError(overlap)
 
     bundle = load_bundle(bundle_dir, verify_checksums=verify_checksums)
     fire_size_path = resolve_fire_size_table(bundle, fire_size_table)
@@ -596,6 +609,7 @@ def run_predict(
         scope = resolve_mask_scope(mask_scope, bundle)
     except (BundleError, ValueError) as exc:
         raise PredictError(str(exc)) from exc
+    scenario_name = resolve_scenario_name(scenario_name, bundle)
     selected_hex_ids = discover_hex_ids(project_dir, hex_ids)
 
     _prepare_output_dir(output_dir, overwrite)
@@ -714,7 +728,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Area to predict: actual hexel mask (default), buffer, or none (whole raster extent, e.g. a regional study area).",
     )
     parser.add_argument("--no_hazard", action="store_true", help="Do not write hazard rasters.")
-    parser.add_argument("--scenario_name", default=None, help="Use fuel raster hexNN_fbp_<scenario_name>.tif instead of hexNN_fbp.tif.")
+    parser.add_argument(
+        "--scenario_name",
+        default=None,
+        help="Use fuel raster hexNN_fbp_<scenario_name>.tif instead of hexNN_fbp.tif (default: the model's training scenario, if any).",
+    )
     parser.add_argument("--overwrite", action="store_true", help="Replace previous predictions in --output.")
     parser.add_argument("--keep_work_dir", action="store_true", help=f"Keep intermediate patches in <output>/{WORK_DIRNAME}.")
     parser.add_argument("--skip_checksums", action="store_true", help="Skip bundle checksum verification (faster start-up).")

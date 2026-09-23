@@ -182,7 +182,8 @@ Outputs, one folder per region (GeoTIFF, nodata `-9999`):
 | `predict.log` | Run log |
 
 Outputs are in Canada Lambert Conformal Conic (`ESRI:102002`, ~100 m cells). If your inputs are in another
-CRS, reproject the outputs before overlaying them cell by cell.
+CRS, reproject the outputs before overlaying them cell by cell. `--output` cannot be the project folder or one
+of its `hexNN` folders.
 
 | Option | Use |
 |---|---|
@@ -238,7 +239,8 @@ Evaluated 1 hexel(s) against BurnP3+ (area: actual). Mean over hexels:
 
 Extra options: `--by_firezone`, `--metrics ccc mae` (a subset), `--no_plots` (faster),
 `--mask_scope buffer` (also scores the region and its buffer ring separately), plus the `predict` options.
-When reusing predictions, evaluate warns if they were made with another model.
+When reusing predictions, evaluate uses the area and scenario they were made for, and warns if they were made
+with another model.
 
 ### Metrics
 

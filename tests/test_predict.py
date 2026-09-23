@@ -269,6 +269,27 @@ def test_predict_refuses_non_empty_output_without_overwrite(bundle_dir: Path, pr
     assert (output_dir / "something.txt").read_text() == "keep me"
 
 
+@pytest.mark.parametrize("where", ["project", "input_folder", "parent"])
+def test_predict_refuses_an_output_folder_that_overlaps_the_project_inputs(bundle_dir: Path, project: Path, where: str):
+    output_dir = {"project": project, "input_folder": project / "hex01" / "spatial", "parent": project.parent}[where]
+    inputs_before = sorted(path for path in project.rglob("*"))
+
+    with pytest.raises(PredictError, match="choose a folder outside"):
+        run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=output_dir, device="cpu", overwrite=True)
+
+    assert sorted(path for path in project.rglob("*")) == inputs_before
+
+
+def test_predict_uses_the_bundles_training_scenario_by_default(bundle_dir: Path, project: Path, tmp_path: Path):
+    manifest_path = bundle_dir / MANIFEST_FILENAME
+    manifest = yaml.safe_load(manifest_path.read_text())
+    manifest["data_prep"]["scenario_name"] = "FireExcludeSpotting"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False))
+
+    with pytest.raises(PredictError, match="hex01_fbp_FireExcludeSpotting.tif"):
+        run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu")
+
+
 def test_predict_reports_unknown_hexel(bundle_dir: Path, project: Path, tmp_path: Path):
     with pytest.raises(PredictError, match=r"\['hex07'\] not found"):
         run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", fire_size_table=None, hex_ids=["hex07"])

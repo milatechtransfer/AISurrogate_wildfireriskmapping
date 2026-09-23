@@ -50,6 +50,7 @@ from inference.bundle import (
     ModelBundle,
     load_bundle,
     resolve_mask_scope,
+    resolve_scenario_name,
 )
 from inference.fuels import CODE_COL, describe_codes, read_project_fuel_codes, resolve_fuel_curves
 from src.datasets.fuel_utils import _FEATURE_COLUMN, FUEL_CURVE_ENCODINGS, read_curves
@@ -829,7 +830,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Area to check: the hexel mask (actual, default), the buffered mask, or none (whole raster extent).",
     )
-    parser.add_argument("--scenario_name", default=None, help="Check fuel raster hexNN_fbp_<scenario_name>.tif instead of hexNN_fbp.tif.")
+    parser.add_argument(
+        "--scenario_name",
+        default=None,
+        help="Check fuel raster hexNN_fbp_<scenario_name>.tif instead of hexNN_fbp.tif (default: the model's training scenario, if any).",
+    )
     parser.add_argument(
         "--outputs", action="store_true", help="Also check the BurnP3+ output rasters (results/) that inference.evaluate compares against."
     )
@@ -849,7 +854,7 @@ def main(argv: list[str] | None = None) -> int:
             hex_ids=args.hex_ids,
             fire_size_table=args.fire_size_table,
             mask_scope=args.mask_scope,
-            scenario_name=args.scenario_name,
+            scenario_name=resolve_scenario_name(args.scenario_name, bundle),
             outputs=args.outputs,
         )
     except (BundleError, ValueError) as exc:
