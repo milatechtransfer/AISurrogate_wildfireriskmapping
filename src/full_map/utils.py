@@ -5,6 +5,7 @@ import geopandas as gpd
 import numpy as np
 import rasterio
 from matplotlib.colors import LogNorm, Normalize
+from rasterio.features import geometry_mask
 from rasterio.warp import Resampling, reproject, transform_bounds
 from rasterio.windows import Window, from_bounds
 
@@ -186,11 +187,16 @@ def mosaic_predicted_hexels(
     Each predicted hexel `.tif` lives in its own local raster grid/transform (from patch
     stitching), not aligned to the national reference raster. For every hexel in ``file_map``
     (already grouped by target, e.g. via ``group_predicted_hexel_files_by_target``):
-      1. look up its polygon by hex_id in ``shapefile_gdf`` (used only to sanity-check the hexel
-         is a real national hexel; placement itself comes from each raster's own CRS/transform),
+      1. look up its polygon by hex_id in ``shapefile_gdf`` (the "actual" hex footprint --
+         ``shapefile_gdf`` is the national *actual*-hex-boundary shapefile),
       2. reproject that hexel's array onto the reference raster's grid (CRS/transform/shape),
-      3. paste the reprojected pixels into the output canvas wherever they are valid (non-nodata),
-         so overlapping/adjacent hexels don't overwrite each other's valid pixels.
+      3. mask out any reprojected pixel falling outside that hexel's own "actual" polygon --
+         raw per-hexel source rasters (e.g. BurnP3+ ``output_burn_prob`` results) are computed
+         over a larger buffered simulation domain that overlaps neighboring hexels, so without
+         this step, adjacent hexels' overlapping buffer regions get pasted over each other in
+         arbitrary ``file_map`` iteration order, producing hard hex-shaped seams in the mosaic,
+      4. paste the (now non-overlapping) reprojected pixels into the output canvas wherever they
+         are valid (non-nodata), so adjacent hexels don't overwrite each other's valid pixels.
 
     Returns ``(mosaic, profile)`` where ``mosaic`` is a 2D array shaped like the reference
     raster and ``profile`` is that reference raster's rasterio profile (with ``count=1``).
@@ -209,6 +215,11 @@ def mosaic_predicted_hexels(
         ref_crs = ref_src.crs
         ref_transform = ref_src.transform
         mosaic = np.full((ref_src.height, ref_src.width), ref_nodata, dtype="float32")
+
+        # Reproject all hex polygons to the reference CRS once, up front, so every hexel's
+        # "actual" polygon can be rasterized against `dst_transform` below without
+        # re-reprojecting the shapefile per hexel.
+        hex_geometry_by_id = dict(zip(shapefile_gdf[hexel_id_column].astype(int), shapefile_gdf.to_crs(ref_crs).geometry, strict=True))
 
         for hex_id, hex_path in file_map.items():
             with rasterio.open(hex_path) as hex_src:
@@ -246,6 +257,17 @@ def mosaic_predicted_hexels(
                     dst_nodata=ref_nodata,
                     resampling=Resampling.nearest,
                 )
+
+            # Clip to this hexel's own "actual" polygon before pasting. Raw per-hexel source
+            # rasters (e.g. BurnP3+ output_burn_prob results) are computed over a buffered
+            # simulation domain that overlaps neighboring hexels; without this, overlapping
+            # buffer pixels from adjacent hexels get pasted over each other in arbitrary
+            # file_map iteration order, producing hard hex-shaped seams in the mosaic.
+            hex_geometry = hex_geometry_by_id.get(hex_id)
+            if hex_geometry is not None:
+                outside_actual_hex = geometry_mask([hex_geometry], out_shape=reprojected.shape, transform=dst_transform, invert=False)
+                reprojected[outside_actual_hex] = ref_nodata
+
             valid = valid_pixel_mask(reprojected, ref_nodata)
             mosaic_window = mosaic[row_off:row_end, col_off:col_end]
             mosaic_window[valid] = reprojected[valid]
