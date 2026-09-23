@@ -202,6 +202,17 @@ def test_missing_burnp3_outputs_stop_before_predicting(bundle_dir: Path, project
     assert json.loads((output_dir / EVALUATION_MANIFEST_FILENAME).read_text())["status"] == "failed"
 
 
+def test_burnp3_output_without_data_stops_evaluation(bundle_dir: Path, bundle: ModelBundle, project: Path, tmp_path: Path):
+    grids = _write_burnp3_results(project)
+    predictions = _write_predictions(tmp_path / "predictions", bundle, grids)
+    _write_raster(
+        Paths(hex_id="01", root_dir=project).output_fire_intensity(), np.full((HEIGHT, WIDTH), -9999.0, dtype=np.float32), -9999.0
+    )
+
+    with pytest.raises(EvaluateError, match="BurnP3\\+ fire intensity output has no valid data"):
+        run_evaluate(bundle_dir, project, tmp_path / "evaluation", predictions_dir=predictions, device="cpu", plots=False)
+
+
 def test_predictions_from_another_model_are_flagged(bundle_dir: Path, bundle: ModelBundle, project: Path, tmp_path: Path):
     grids = _write_burnp3_results(project)
     predictions = _write_predictions(

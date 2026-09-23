@@ -264,6 +264,45 @@ def test_outputs_mode_checks_the_burnp3_results_for_evaluation(bundle: ModelBund
     assert "ready to evaluate, no problems found" in report.format()
 
 
+@pytest.mark.parametrize("mask_scope", ["actual", "none"])
+def test_burnp3_outputs_without_data_are_errors_but_partial_nodata_is_normal(bundle: ModelBundle, project: Path, mask_scope: str):
+    from data_preparation.paths import Paths
+    from tests.test_evaluate import _write_burnp3_results
+
+    grids = _write_burnp3_results(project)
+    paths = Paths(hex_id="01", root_dir=project)
+    _write_raster(paths.output_fire_intensity(), np.full((HEIGHT, WIDTH), -9999.0, dtype=np.float32), -9999.0)
+    _write_raster(paths.output_ros(), np.full((HEIGHT, WIDTH), np.nan, dtype=np.float32), -9999.0)
+    bp = grids["bp"].copy()
+    bp[:, : WIDTH // 2] = -9999.0  # nothing burned there
+    _write_raster(paths.output_burn_prob(), bp, -9999.0)
+
+    report = check_project(bundle, project, outputs=True, inputs=False, mask_scope=mask_scope)
+
+    area = "" if mask_scope == "none" else " inside the 'actual' mask"
+    assert _messages(report, "error") == [
+        f"hex01/results/burnP3Plus_OutputFireIntensitySummaryMap/fbpSummary-FireIntensity-Average.tif: "
+        f"BurnP3+ fire intensity output has no valid data{area}.",
+        f"hex01/results/burnP3Plus_OutputRateOfSpreadSummaryMap/fbpSummary-RateOfSpread-Average.tif: "
+        f"BurnP3+ rate of spread output has no valid data{area}.",
+    ]
+    assert report.warnings == []
+
+
+def test_ignition_grid_without_data_inside_the_mask_is_an_error(bundle: ModelBundle, project: Path):
+    grid = project / "hex01" / "spatial" / "ignition_grids" / "hex01_ignGrid_H_s1.tif"
+    assert grid.is_file()
+    empty = np.zeros((HEIGHT, WIDTH), dtype=np.float32)
+    empty[MASK_ROWS[0] : MASK_ROWS[1], MASK_COLS[0] : MASK_COLS[1]] = -9999.0
+    _write_raster(grid, empty, -9999.0)
+
+    report = check_project(bundle, project)
+
+    assert _messages(report, "error") == [
+        "hex01/spatial/ignition_grids/hex01_ignGrid_H_s1.tif: Ignition grid has no valid data inside the 'actual' mask."
+    ]
+
+
 def test_known_fuel_codes_defined_as_another_fuel_are_flagged(bundle: ModelBundle, project: Path):
     # The test bundle's curves are synthetic, so a real C-1 definition of code 1 differs from the model's curve.
     write_project_fuel_tables(project, "01", {1: ("Spruce-Lichen Woodland", "C-1"), 13: ("Plantation", "C-6")})

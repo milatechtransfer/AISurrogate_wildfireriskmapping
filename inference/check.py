@@ -377,7 +377,8 @@ class _HexelCheck:
         for name in self.requirements.targets:
             spec = get_target_spec(name)
             path = getattr(self.paths, spec.path_method)(scenario_name=self.scenario_name)
-            self._check_raster(path, f"BurnP3+ {spec.label.lower()} output", mask, read=False)
+            # BurnP3+ writes nodata where nothing burned, so only an output without any data is a problem.
+            self._check_raster(path, f"BurnP3+ {spec.label.lower()} output", mask, coverage_warning=False)
 
     # --- spatial -----------------------------------------------------------------------------
 
@@ -410,7 +411,7 @@ class _HexelCheck:
             return None
         return mask
 
-    def _check_raster(self, path: Path, what: str, mask: gpd.GeoDataFrame | None, read: bool = True) -> _Raster | None:
+    def _check_raster(self, path: Path, what: str, mask: gpd.GeoDataFrame | None, coverage_warning: bool = True) -> _Raster | None:
         if not path.is_file():
             self.out.error(f"Missing {what}.", path)
             return None
@@ -422,16 +423,10 @@ class _HexelCheck:
                 transform, _, _ = calculate_default_transform(src.crs, self.requirements.crs, src.width, src.height, *src.bounds)
                 raster = _Raster(path=path, crs=src.crs, res_m=float(abs(transform.a)), data=None)
                 if mask is None:
-                    if self.mask_scope == NO_MASK_SCOPE and read:
+                    if self.mask_scope == NO_MASK_SCOPE:
                         return self._read_whole_raster(src, raster, what)
                     return raster
                 shapes = list(mask.to_crs(src.crs).geometry)
-                if not read:
-                    left, bottom, right, top = mask.to_crs(src.crs).total_bounds
-                    if left >= src.bounds.right or right <= src.bounds.left or bottom >= src.bounds.top or top <= src.bounds.bottom:
-                        self.out.error(f"{what[0].upper()}{what[1:]} does not overlap the {self.mask_scope!r} mask.", path)
-                        return None
-                    return raster
                 try:
                     data, window_transform = mask_raster(src, shapes, crop=True, filled=False, indexes=1)
                 except ValueError:
@@ -443,11 +438,13 @@ class _HexelCheck:
 
         inside = geometry_mask(shapes, out_shape=data.shape, transform=window_transform, invert=True)
         valid = inside & ~np.ma.getmaskarray(data)
+        if np.issubdtype(data.dtype, np.floating):
+            valid &= np.isfinite(data.data)
         if not inside.any() or not valid.any():
             self.out.error(f"{what[0].upper()}{what[1:]} has no valid data inside the {self.mask_scope!r} mask.", path)
             return None
         coverage = valid.sum() / inside.sum()
-        if coverage < MIN_VALID_COVERAGE:
+        if coverage_warning and coverage < MIN_VALID_COVERAGE:
             self.out.warning(f"{100 * (1 - coverage):.0f}% of the mask area is nodata in the {what}; those cells get no prediction.", path)
         raster.data = np.ma.masked_array(data.data, mask=~valid)
         return raster
@@ -568,7 +565,7 @@ class _HexelCheck:
             if match is None or match.group(1) not in known_causes:
                 ignored.append(path.name)
                 continue
-            raster = self._check_raster(path, "ignition grid", mask, read=False)
+            raster = self._check_raster(path, "ignition grid", mask)
             if raster is not None:
                 grids.add((match.group(1), match.group(2)))
                 if dem is not None:
