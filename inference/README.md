@@ -72,7 +72,10 @@ with `--device cpu`.
 
 ## 📦 The model bundle
 
-The AI surrogate is shipped as one folder, e.g. `nrcan-surrogate-bp-fi-ros-v1.0/`. Point `--bundle` at it.
+The AI surrogate is shipped as one folder, e.g. `nrcan-surrogate-bp-fi-ros-v1.0/`. Download
+`nrcan-surrogate-bp-fi-ros-v1.0.zip` from the repository's
+[Releases](https://github.com/milatechtransfer/nrcan_wildfireriskmapping/releases) page, unzip it, and point
+`--bundle` at the folder.
 
 | File | Content |
 |---|---|
