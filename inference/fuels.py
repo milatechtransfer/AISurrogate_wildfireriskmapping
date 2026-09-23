@@ -151,8 +151,11 @@ def read_project_fuel_codes(paths: Paths, hex_id: str) -> dict[int, tuple[str, s
     for name, raster_id in zip(fuel_types["Name"], fuel_types["ID"], strict=True):
         if pd.isna(raster_id):
             continue
+        numeric_id = pd.to_numeric(raster_id, errors="coerce")
+        if pd.isna(numeric_id) or not np.isfinite(numeric_id) or float(numeric_id) != int(numeric_id):
+            raise ValueError(f"{types_path}: ID {raster_id!r} of fuel type {str(name).strip()!r} is not a whole number.")
         fbp_code = fbp_codes.get(str(name).strip())
-        codes[int(raster_id)] = (str(name).strip(), None if fbp_code is None or pd.isna(fbp_code) else str(fbp_code).strip())
+        codes[int(numeric_id)] = (str(name).strip(), None if fbp_code is None or pd.isna(fbp_code) else str(fbp_code).strip())
     return codes
 
 

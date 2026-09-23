@@ -23,6 +23,7 @@ import argparse
 import json
 import logging
 import platform
+import re
 import shutil
 import sys
 import time
@@ -82,6 +83,7 @@ logger = logging.getLogger("inference.predict")
 WORK_DIRNAME = "_work"
 RUN_MANIFEST_FILENAME = "run_manifest.json"
 LOG_FILENAME = "predict.log"
+PREDICTION_FOLDER_PATTERN = re.compile(r"hex\d+")
 PREDICT_MASK_SCOPES = MASK_SCOPES
 OUTPUT_NODATA = -9999.0
 HAZARD_CLASS_NODATA = 0
@@ -456,12 +458,23 @@ def output_overlap_error(output_dir: Path, project_dir: Path) -> str | None:
     return None
 
 
+def _is_prediction_folder(path: Path) -> bool:
+    """A hexNN/ folder as written by predict: numeric ID, holding only hexNN_*.tif files (and GIS .aux.xml sidecars)."""
+    if not PREDICTION_FOLDER_PATTERN.fullmatch(path.name) or not path.is_dir():
+        return False
+    prefix = f"{path.name}_"
+    return all(
+        child.is_file() and child.name.startswith(prefix) and (child.suffix == ".tif" or child.name.endswith(".tif.aux.xml"))
+        for child in path.iterdir()
+    )
+
+
 def _prepare_output_dir(output_dir: Path, overwrite: bool) -> None:
     if output_dir.exists() and any(output_dir.iterdir()):
         if not overwrite:
             raise PredictError(f"Output folder {output_dir} is not empty. Choose another --output or pass --overwrite.")
         for child in output_dir.iterdir():
-            if (child.is_dir() and child.name.startswith("hex")) or child.name in {WORK_DIRNAME, RUN_MANIFEST_FILENAME, LOG_FILENAME}:
+            if _is_prediction_folder(child) or child.name in {WORK_DIRNAME, RUN_MANIFEST_FILENAME, LOG_FILENAME}:
                 shutil.rmtree(child) if child.is_dir() else child.unlink()
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -607,9 +620,9 @@ def run_predict(
     fire_size_path = resolve_fire_size_table(bundle, fire_size_table)
     try:
         scope = resolve_mask_scope(mask_scope, bundle)
+        scenario_name = resolve_scenario_name(scenario_name, bundle)
     except (BundleError, ValueError) as exc:
         raise PredictError(str(exc)) from exc
-    scenario_name = resolve_scenario_name(scenario_name, bundle)
     selected_hex_ids = discover_hex_ids(project_dir, hex_ids)
 
     _prepare_output_dir(output_dir, overwrite)

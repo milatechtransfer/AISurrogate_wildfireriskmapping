@@ -51,6 +51,7 @@ from inference.bundle import (
     load_bundle,
     resolve_mask_scope,
     resolve_scenario_name,
+    validate_scenario_name,
 )
 from inference.fuels import CODE_COL, describe_codes, read_project_fuel_codes, resolve_fuel_curves
 from src.datasets.fuel_utils import _FEATURE_COLUMN, FUEL_CURVE_ENCODINGS, read_curves
@@ -778,6 +779,7 @@ def check_project(
     """
     project_dir = Path(project_dir).expanduser().resolve()
     scope = resolve_mask_scope(mask_scope, bundle)
+    scenario_name = validate_scenario_name(scenario_name)
     report = CheckReport(
         project_dir=str(project_dir),
         bundle=f"{bundle.manifest.name} v{bundle.manifest.version}",

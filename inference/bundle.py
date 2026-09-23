@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,6 +58,8 @@ RESOURCE_FUEL_CURVES = "fuel_curves"
 # e.g. a regional study area without a hexel shapefile).
 NO_MASK_SCOPE = "none"
 MASK_SCOPES = ("actual", "buffer", NO_MASK_SCOPE)
+# Scenario names become file and folder names (hexNN_fbp_<name>.tif, results/<name>/), so no path separators or "..".
+SCENARIO_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.\- ]*")
 RESOURCE_FEATURE_CHANNEL_MAP = "feature_channel_map"
 RESOURCE_FIRE_SIZE_TABLE = "fire_size_table"
 
@@ -399,9 +402,21 @@ def resolve_mask_scope(requested: str | None, bundle: ModelBundle) -> str:
     return scope
 
 
+def validate_scenario_name(scenario_name: str | None) -> str | None:
+    """``scenario_name`` if it is a plain name (it becomes part of file and folder names), None if empty."""
+    if not scenario_name:
+        return None
+    if not SCENARIO_NAME_PATTERN.fullmatch(scenario_name):
+        raise ValueError(
+            f"Invalid scenario name {scenario_name!r}: use letters, digits, '_', '-', '.' or spaces, "
+            "starting with a letter or digit (no '/', '\\' or '..')."
+        )
+    return scenario_name
+
+
 def resolve_scenario_name(requested: str | None, bundle: ModelBundle) -> str | None:
     """The scenario to use: ``requested``, else the bundle's training scenario (None = national rasters)."""
-    return requested or bundle.manifest.data_prep.scenario_name or None
+    return validate_scenario_name(requested or bundle.manifest.data_prep.scenario_name)
 
 
 def data_mask_scope(scope: str) -> str | None:

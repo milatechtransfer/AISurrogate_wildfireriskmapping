@@ -168,3 +168,13 @@ def test_project_fuel_codes_join_the_fuel_types_and_crosswalk_tables(tmp_path: P
 
     assert codes == {425: ("Boreal Mixedwood - Leafless (25% Conifer)", "M-1 (25 PC)"), 100: ("Not Available", None)}
     assert read_project_fuel_codes(Paths(hex_id="08", root_dir=tmp_path), "08") is None
+
+
+@pytest.mark.parametrize("bad_id", ["1.9", "abc", "inf"])
+def test_project_fuel_ids_must_be_whole_numbers(tmp_path: Path, bad_id: str):
+    write_project_fuel_tables(tmp_path, "07", {425: ("Boreal Mixedwood - Leafless (25% Conifer)", "M-1 (25 PC)")})
+    types_path = tmp_path / "hex07" / "tabular" / "hex07_FuelTypes.csv"
+    types_path.write_text(types_path.read_text().replace("425", bad_id))
+
+    with pytest.raises(ValueError, match="is not a whole number"):
+        read_project_fuel_codes(Paths(hex_id="07", root_dir=tmp_path), "07")

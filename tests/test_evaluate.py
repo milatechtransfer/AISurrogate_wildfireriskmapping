@@ -291,6 +291,15 @@ def test_national_predictions_cannot_be_scored_against_a_scenario(bundle_dir: Pa
         run_evaluate(bundle_dir, project, tmp_path / "evaluation", predictions_dir=predictions, scenario_name="FireExcludeSpotting")
 
 
+def test_evaluate_rejects_scenario_names_with_path_components(bundle_dir: Path, bundle: ModelBundle, project: Path, tmp_path: Path):
+    predictions = _write_predictions(tmp_path / "predictions", bundle, _write_burnp3_results(project))
+
+    with pytest.raises(EvaluateError, match="Invalid scenario name"):
+        run_evaluate(bundle_dir, project, tmp_path / "evaluation", scenario_name="../outside")
+    with pytest.raises(EvaluateError, match="Invalid scenario name"):
+        run_evaluate(bundle_dir, project, tmp_path / "evaluation", predictions_dir=predictions, scenario_name="../outside")
+
+
 def test_evaluate_refuses_to_write_into_the_project(bundle_dir: Path, project: Path):
     marker = project / "hex01" / "spatial" / "hex01_dem.tif"
     assert marker.is_file()

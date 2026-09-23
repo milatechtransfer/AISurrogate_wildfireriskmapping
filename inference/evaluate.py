@@ -55,6 +55,7 @@ from inference.bundle import (
     resolve_mask_scope,
     resolve_scenario_name,
     utc_timestamp,
+    validate_scenario_name,
 )
 from inference.check import CheckReport, check_project, resolve_hex_ids
 from inference.predict import (
@@ -463,11 +464,15 @@ def _resolve_scope(requested: str | None, bundle: ModelBundle) -> str:
         raise EvaluateError(str(exc)) from exc
 
 
-def _resolve_reused_scenario(requested: str | None, predicted_options: dict[str, Any], bundle: ModelBundle) -> str | None:
-    """The scenario of reused predictions: the one they were made for, else ``requested`` or the bundle's."""
-    if "scenario_name" not in predicted_options:
-        return resolve_scenario_name(requested, bundle)
-    predicted = predicted_options["scenario_name"] or None
+def _resolve_scenario(requested: str | None, bundle: ModelBundle, predicted_options: dict[str, Any] | None = None) -> str | None:
+    """The scenario to score: the one reused predictions were made for, else ``requested`` or the bundle's."""
+    try:
+        if predicted_options is None or "scenario_name" not in predicted_options:
+            return resolve_scenario_name(requested, bundle)
+        predicted = validate_scenario_name(predicted_options["scenario_name"])
+        requested = validate_scenario_name(requested)
+    except ValueError as exc:
+        raise EvaluateError(str(exc)) from exc
     if requested and requested != predicted:
         made_for = f"scenario {predicted!r}" if predicted else "the national rasters (no scenario)"
         hint = f"--scenario_name {predicted}" if predicted else "no --scenario_name"
@@ -519,7 +524,7 @@ def run_evaluate(
         scope = _resolve_scope(mask_scope or predicted_scope, bundle)
         if predicted_scope and scope != predicted_scope:
             raise EvaluateError(f"The predictions cover the {predicted_scope!r} area; evaluate them with --mask_scope {predicted_scope}.")
-        scenario_name = _resolve_reused_scenario(scenario_name, predicted_options, bundle)
+        scenario_name = _resolve_scenario(scenario_name, bundle, predicted_options)
         available = _hexels_with_predictions(pred_dir, bundle)
         if not available:
             raise EvaluateError(f"No predictions (hexNN/hexNN_<target>.tif) found in {pred_dir}.")
@@ -535,7 +540,7 @@ def run_evaluate(
     else:
         pred_dir = output_dir / PREDICTIONS_DIRNAME
         scope = _resolve_scope(mask_scope, bundle)
-        scenario_name = resolve_scenario_name(scenario_name, bundle)
+        scenario_name = _resolve_scenario(scenario_name, bundle)
         try:
             selected = discover_hex_ids(project_dir, hex_ids)
         except PredictError as exc:

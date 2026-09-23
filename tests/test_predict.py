@@ -280,6 +280,33 @@ def test_predict_refuses_an_output_folder_that_overlaps_the_project_inputs(bundl
     assert sorted(path for path in project.rglob("*")) == inputs_before
 
 
+def test_overwrite_only_replaces_earlier_prediction_folders(bundle_dir: Path, project: Path, tmp_path: Path):
+    output_dir = tmp_path / "out"
+    stale = output_dir / "hex99"
+    stale.mkdir(parents=True)
+    (stale / "hex99_bp.tif").write_text("old prediction")
+    (stale / "hex99_bp.tif.aux.xml").write_text("QGIS sidecar")
+    for name in ("hex_notes", "hex7_backup"):
+        (output_dir / name).mkdir()
+        (output_dir / name / "notes.txt").write_text("keep me")
+    (output_dir / "hex98").mkdir()
+    (output_dir / "hex98" / "notes.txt").write_text("keep me")
+
+    run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=output_dir, device="cpu", overwrite=True)
+
+    assert not stale.exists()
+    for name in ("hex_notes", "hex7_backup", "hex98"):
+        assert (output_dir / name / "notes.txt").read_text() == "keep me"
+    assert (output_dir / "hex01" / "hex01_bp.tif").is_file()
+
+
+@pytest.mark.parametrize("scenario", ["../outside", "a/b", "a\\b", "..", ".hidden"])
+def test_scenario_names_cannot_leave_the_project(bundle_dir: Path, project: Path, tmp_path: Path, scenario: str):
+    with pytest.raises(PredictError, match="Invalid scenario name"):
+        run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu", scenario_name=scenario)
+    assert not (tmp_path / "out").exists()
+
+
 def test_predict_uses_the_bundles_training_scenario_by_default(bundle_dir: Path, project: Path, tmp_path: Path):
     manifest_path = bundle_dir / MANIFEST_FILENAME
     manifest = yaml.safe_load(manifest_path.read_text())
