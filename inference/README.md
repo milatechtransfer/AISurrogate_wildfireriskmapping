@@ -1,4 +1,4 @@
-# 🔥 Wildfire Surrogate: Inference
+# 🔥 Wildfire AI Surrogate: Inference
 
 ![python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![package manager](https://img.shields.io/badge/package%20manager-uv-de5fe9)
@@ -6,15 +6,15 @@
 ![os](https://img.shields.io/badge/OS-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
 Produce **burn probability (BP)**, **fire intensity (FI)**, **rate of spread (ROS)** and **wildfire hazard**
-maps for a BurnP3+ project in minutes, using the trained AI surrogate instead of running BurnP3+
-simulations. Where BurnP3+ has already been run, compare the surrogate against it with one command.
+maps for a BurnP3+ project in minutes, using the AI surrogate instead of running BurnP3+ simulations.
+Where BurnP3+ has already been run, compare the AI surrogate against it with one command.
 
 You only need the model **bundle** (one folder) and your BurnP3+ project **inputs**. No training data,
 GPU or BurnP3+ outputs are required to predict.
 
 ## Table of contents
 
-- [🔥 Wildfire Surrogate: Inference](#-wildfire-surrogate-inference)
+- [🔥 Wildfire AI Surrogate: Inference](#-wildfire-ai-surrogate-inference)
   - [Table of contents](#table-of-contents)
   - [🛠️ Installation](#️-installation)
   - [🚀 Quick start](#-quick-start)
@@ -62,7 +62,7 @@ python -m inference.check --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path
 python -m inference.predict --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
     --output path/to/predictions
 
-# 3. (Optional) Where BurnP3+ outputs exist, measure how close the surrogate is to BurnP3+
+# 3. (Optional) Where BurnP3+ outputs exist, measure how close the AI surrogate is to BurnP3+
 python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
     --output path/to/evaluation
 ```
@@ -72,16 +72,13 @@ with `--device cpu`.
 
 ## 📦 The model bundle
 
-The model is shipped as a self-contained folder, e.g. `nrcan-surrogate-bp-fi-ros-v1.0/`:
+The AI surrogate is shipped as one folder, e.g. `nrcan-surrogate-bp-fi-ros-v1.0/`. Point `--bundle` at it.
 
 | File | Content |
 |---|---|
-| `MODEL_CARD.md` | What the model predicts, how it was trained and selected, its metrics and limitations. **Read this first.** |
-| `manifest.yaml` | Everything needed to rebuild the model and prepare inputs exactly as in training |
-| `model.pt` | Model weights |
-| `norm/` | Normalization statistics from the national training data |
-| `lookups/` | FBP fuel curves, the national fire-size table (CNFDB, public data) and the input channel layout |
-| `SHA256SUMS` | Checksums, verified at start-up (skip with `--skip_checksums`) |
+| `MODEL_CARD.md` | What the model predicts, its accuracy and its limitations. **Read this first.** |
+| `model.pt` | The trained model |
+| `manifest.yaml`, `norm/`, `lookups/`, `SHA256SUMS` | Settings and tables the model needs; checked automatically at start-up |
 
 Do not edit files inside the bundle; pass your own tables with command-line options instead.
 
@@ -110,29 +107,25 @@ path/to/project/
     └── results/                              # BurnP3+ outputs: only needed by evaluate
 ```
 
-Rasters may be in any projected CRS; they are reprojected to the model's grid (`ESRI:102002`, Canada Lambert
-Conformal Conic, ~100 m) as in training.
+Rasters may be in any projected CRS; they are reprojected automatically.
 
 ### Fuel codes
 
-The model describes each fuel code by its FBP rate-of-spread curve. The bundle has the curves of all codes in
-the national training data. If your fuel grid uses other codes (e.g. a regional grid with new mixedwood
-percentages), add the BurnP3+ fuel tables to `tabular/`:
+The model knows every fuel code of the national BurnP3+ data. If your fuel grid uses other codes (e.g. new
+mixedwood percentages in a regional grid), add the BurnP3+ fuel tables to `tabular/`:
 
 - `hexNN_FuelTypes.csv` with columns `Name`, `ID`
 - `hexNN_FuelCodeCrosswalk.csv` with columns `FuelType`, `Code` (e.g. `M-1/M-2 (25 PC)`)
 
-The curves of new codes are then computed from the FBP equations, the same way as for training. Supported:
-**C-1 to C-5, C-7, D-1/D-2, M-1/M-2 at any percent conifer, O-1a/O-1b and non-fuel**. Fuel types absent from
-the national training data (**C-6, M-3/M-4, S-1 to S-3**) are refused: the model has never seen them, so
-recode those cells or set them to nodata.
+New codes of these fuel types are then handled automatically: **C-1 to C-5, C-7, D-1/D-2, M-1/M-2 (any
+percent conifer), O-1a/O-1b and non-fuel**. **C-6, M-3/M-4 and S-1 to S-3** are not supported: recode those
+cells or set them to nodata.
 
 ### Fire-size table
 
-The bundle includes the national fire-size table the model was trained with, and it is used by default.
-To use your own (e.g. regional fire sizes), pass `--fire_size_table my_fires.csv` with one row per fire and
-columns `GRIDCODE` (fire-zone ID) and `SIZE_HA` (BurnP3+ `FRU` / `Fsize` columns are accepted too). Fire zones
-missing from your table use the distribution of the whole table. Every command states which table it used.
+A national fire-size table is included in the bundle and used by default. To use your own (e.g. regional
+fire sizes), pass `--fire_size_table my_fires.csv` with one row per fire and columns `GRIDCODE` (fire-zone ID)
+and `SIZE_HA` (hectares); BurnP3+'s `FRU` and `Fsize` column names also work.
 
 ## ✅ Check your inputs
 
@@ -148,8 +141,8 @@ Checked 1 hexel(s) in NWT_data for model nrcan-surrogate-bp-fi-ros v1.0.0 (mask:
 Project
   NOTE     Fire sizes: using the national training table shipped with the model (...)
 hex100: OK
-  NOTE     hex100/tabular/hex100_FuelCodeCrosswalk.csv: Fuel code(s) not in the model's fuel table, with curves
-           computed from the project's fuel tables and the FBP equations: 425 = M-1 (25 PC) (161,615 cells), ...
+  NOTE     hex100/tabular/hex100_FuelCodeCrosswalk.csv: Fuel code(s) not in the model's fuel table, ...:
+           425 = M-1 (25 PC) (161,615 cells), 505 = M-2 (05 PC) (170,755 cells), ...
 
 Result: ready to predict, no problems found.
 ```
@@ -158,7 +151,7 @@ Result: ready to predict, no problems found.
 |---|---|---|
 | 🔴 **ERROR** | Prediction would fail or be meaningless; nothing is run | Missing files, raster without a CRS, DEM not ~100 m, undefined or unsupported fuel codes, no weather for the hexel's fire zones |
 | 🟡 **WARNING** | Prediction runs, but some cells use a fallback; review these | Fire zones without weather (hexel average used), zones missing from the fire-size table, implausible weather values |
-| ⚪ **NOTE** | Information | Which fire-size table is used, fuel codes whose curves were computed |
+| ⚪ **NOTE** | Information | Which fire-size table is used, new fuel codes found in the fuel tables |
 
 Options: `--hex_ids 12 14`, `--scenario_name NAME`, `--mask_scope`, `--fire_size_table`, `--outputs` (also check
 the BurnP3+ results used by `evaluate`) and `--json report.json`. Exit code `0` = ready, `1` = input errors,
@@ -179,13 +172,13 @@ Outputs, one folder per hexel (GeoTIFF, nodata `-9999`):
 | `hexNN/hexNN_fi.tif` | Fire intensity (kW/m) |
 | `hexNN/hexNN_ros.tif` | Rate of spread (m/min) |
 | `hexNN/hexNN_hazard_raw.tif` | Hazard = BP × min(FI, 10 000 kW/m) |
-| `hexNN/hexNN_hazard_scaled.tif` | Hazard scaled 0–100 with the national reference, comparable across studies |
+| `hexNN/hexNN_hazard_scaled.tif` | Hazard on a 0–100 scale, comparable across studies |
 | `hexNN/hexNN_hazard_class.tif` | 13 hazard classes (1 = lowest; 0 = nodata) |
-| `run_manifest.json` | Model, inputs, fire-size table, input check, options and software versions, for reproducibility |
+| `run_manifest.json` | Record of the run (model, inputs, options), for reproducibility |
 | `predict.log` | Run log |
 
-Outputs are on the model's grid (`ESRI:102002`, ~100 m). If your inputs are in another CRS, reproject the
-outputs before overlaying them cell by cell.
+Outputs are in Canada Lambert Conformal Conic (`ESRI:102002`, ~100 m cells). If your inputs are in another
+CRS, reproject the outputs before overlaying them cell by cell.
 
 | Option | Use |
 |---|---|
@@ -194,13 +187,13 @@ outputs before overlaying them cell by cell.
 | `--mask_scope actual\|buffer\|none` | Area to predict: hexel mask (default), buffered mask, or the whole raster |
 | `--fire_size_table FILE` | Your own fire sizes instead of the national table |
 | `--device auto\|cpu\|cuda\|mps` | Hardware to run on |
-| `--batch_size N` | Patches per model call; lower it if memory runs out |
+| `--batch_size N` | Lower it if memory runs out |
 | `--no_hazard` | Skip the hazard rasters |
 | `--overwrite` | Replace earlier predictions in `--output` |
 
 ## 📊 Evaluate against BurnP3+
 
-Where BurnP3+ has been run, `inference.evaluate` predicts (or reuses predictions) and scores the surrogate
+Where BurnP3+ has been run, `inference.evaluate` predicts (or reuses predictions) and scores the AI surrogate
 against the BurnP3+ outputs in each hexel's `results/` folder:
 
 - national layout: `results/burnP3Plus_OutputBurnProbability/burnProbability-sn2.tif`,
@@ -234,8 +227,8 @@ Evaluated 1 hexel(s) against BurnP3+ (area: actual). Mean over hexels:
 | `metrics_per_hexel.csv` | One row per hexel × target, with the number of cells scored |
 | `metrics_per_firezone.csv` | With `--by_firezone`: one row per hexel × fire zone × target |
 | `hazard_metrics_summary.csv`, `hazard_metrics_per_hexel.csv` | Agreement of the hazard classes |
-| `hazard_confusion_matrix.{csv,png}` | Hazard classes, BurnP3+ (rows) vs surrogate (columns) |
-| `plots/hexNN/` | Surrogate, BurnP3+ and difference maps; scatter plots and histograms |
+| `hazard_confusion_matrix.{csv,png}` | Hazard classes, BurnP3+ (rows) vs AI surrogate (columns) |
+| `plots/hexNN/` | AI surrogate, BurnP3+ and difference maps; scatter plots and histograms |
 | `predictions/` | The predictions, when evaluate ran the model |
 | `evaluation_manifest.json`, `evaluate.log` | Model, options, input check, warnings and summary |
 
@@ -245,21 +238,20 @@ When reusing predictions, evaluate warns if they were made with another model.
 
 ### Metrics
 
-Metrics are computed per hexel on the 100 m cells where BurnP3+ has data (BurnP3+ nodata in burn probability
-counts as 0), then averaged over hexels, exactly as in the model's own evaluation.
+Metrics are computed per hexel, over the cells where BurnP3+ has data, then averaged over hexels.
 
-| Metric | Meaning (surrogate vs BurnP3+) | Best |
+| Metric | Meaning (AI surrogate vs BurnP3+) | Best |
 |---|---|---|
 | `ccc` | Concordance correlation: agreement in value, not just ranking | 1 |
 | `spearman` | Rank correlation: are the same places ranked high and low | 1 |
 | `mae`, `mse` | Mean absolute / squared error, in the target's units | 0 |
 | `normalized_mae` | MAE divided by the mean BurnP3+ value | 0 |
-| `bias`, `normalized_bias` | Mean (surrogate − BurnP3+); negative = under-prediction | 0 |
+| `bias`, `normalized_bias` | Mean (AI surrogate − BurnP3+); negative = under-prediction | 0 |
 | `mae_topXX` | MAE over the top XX% cells of either map (`01` = top 1%) | 0 |
 | `iou_topXX` | Overlap of the top XX% cells of both maps (`005` = top 0.5%) | 1 |
 | `auc_iou_top10`, `auc_iou_full` | Mean top-K overlap over K = 1–10% and 1–99% | 1 |
 
-Rows with target `hazard` score the continuous raw hazard. The hazard **class** files report
+Rows with target `hazard` score the raw hazard map. The hazard **class** files report
 `exact_accuracy`, `within_1_accuracy` / `within_2_accuracy` (off by at most 1 or 2 classes),
 `mean_absolute_class_error`, `macro_iou`, `macro_f1` and per-class IoU/F1.
 
@@ -279,10 +271,10 @@ python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project p
 ```
 
 > [!IMPORTANT]
-> The model was trained on national BurnP3+ runs. In a region whose fire regime differs from the national
-> data, the **spatial pattern** of burn probability usually transfers well (high Spearman), but its
-> **absolute level** may not (low CCC, large bias); FI and ROS transfer better. Run `evaluate` on a
-> BurnP3+ run of your region before relying on absolute burn probabilities.
+> The AI surrogate learned from national BurnP3+ runs. In a region whose fire regime differs, it usually
+> gets the **spatial pattern** of burn probability right (high Spearman) but not always its **absolute
+> level** (low CCC, large bias); FI and ROS hold up better. Run `evaluate` on a BurnP3+ run of your region
+> before relying on absolute burn probabilities.
 
 ## 🐍 Using it from Python
 
@@ -337,9 +329,8 @@ python -m inference.export_bundle --checkpoint path/to/best.pth --out_dir nrcan-
     --name nrcan-surrogate-bp-fi-ros --version 1.0.0 \
     --hazard_denominator_json path/to/hazard_scale_denominator.json \
     --fire_size_table path/to/df_fire_fru_25ha_1970_2023.csv \
-    --fire_size_table_note "Canadian National Fire Database (CNFDB), Canadian Forest Service. Publicly available data." \
-    --selection_note "How this checkpoint was selected."
+    --fire_size_table_note "Source of the fire-size table" \
+    --selection_note "How this checkpoint was selected"
 ```
 
-Normalization statistics and lookup tables are read from the checkpoint's training data folder unless
-overridden (see `--help`). The export verifies that the bundle rebuilds the exact model before writing it.
+See `--help` for all options.
