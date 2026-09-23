@@ -55,10 +55,10 @@ All commands below are run from the repository root. Instead of activating, you 
 ## 🚀 Quick start
 
 ```bash
-# 1. Check that the project has everything the model needs (seconds per hexel)
+# 1. Check that the project has everything the model needs (seconds per region)
 python -m inference.check --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project
 
-# 2. Predict BP, FI, ROS and hazard for every hexel
+# 2. Predict BP, FI, ROS and hazard for every region
 python -m inference.predict --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
     --output path/to/predictions
 
@@ -87,7 +87,8 @@ Do not edit files inside the bundle; pass your own tables with command-line opti
 
 ## 📂 Preparing your project
 
-A project is a folder of BurnP3+ hexels, laid out as BurnP3+ writes them:
+A project is a folder of one or more BurnP3+ regions, laid out as BurnP3+ writes them. Each region is a
+folder named `hexNN` (in the national study, one per hexel):
 
 ```text
 path/to/project/
@@ -152,8 +153,8 @@ Result: ready to predict, no problems found.
 
 | Level | Meaning | Examples |
 |---|---|---|
-| 🔴 **ERROR** | Prediction would fail or be meaningless; nothing is run | Missing files, raster without a CRS, DEM not ~100 m, undefined or unsupported fuel codes, no weather for the hexel's fire zones |
-| 🟡 **WARNING** | Prediction runs, but some cells use a fallback; review these | Fire zones without weather (hexel average used), zones missing from the fire-size table, implausible weather values |
+| 🔴 **ERROR** | Prediction would fail or be meaningless; nothing is run | Missing files, raster without a CRS, DEM not ~100 m, undefined or unsupported fuel codes, no weather for the region's fire zones |
+| 🟡 **WARNING** | Prediction runs, but some cells use a fallback; review these | Fire zones without weather (region average used), zones missing from the fire-size table, implausible weather values |
 | ⚪ **NOTE** | Information | Which fire-size table is used, new fuel codes found in the fuel tables |
 
 Options: `--hex_ids 12 14`, `--scenario_name NAME`, `--mask_scope`, `--fire_size_table`, `--outputs` (also check
@@ -167,7 +168,7 @@ python -m inference.predict --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project pa
     --output path/to/predictions
 ```
 
-Outputs, one folder per hexel (GeoTIFF, nodata `-9999`):
+Outputs, one folder per region (GeoTIFF, nodata `-9999`):
 
 | File | Content |
 |---|---|
@@ -185,9 +186,9 @@ CRS, reproject the outputs before overlaying them cell by cell.
 
 | Option | Use |
 |---|---|
-| `--hex_ids 12 14` | Only these hexels (`12` or `hex12`) |
+| `--hex_ids 12 14` | Only these regions (`12` or `hex12`) |
 | `--scenario_name NAME` | Use `hexNN_fbp_NAME.tif` as the fuel grid |
-| `--mask_scope actual\|buffer\|none` | Area to predict: hexel mask (default), buffered mask, or the whole raster |
+| `--mask_scope actual\|buffer\|none` | Area to predict: region mask (default), buffered mask, or the whole raster |
 | `--fire_size_table FILE` | Your own fire sizes instead of the national table |
 | `--device auto\|cpu\|cuda\|mps` | Hardware to run on |
 | `--batch_size N` | Lower it if memory runs out |
@@ -197,7 +198,7 @@ CRS, reproject the outputs before overlaying them cell by cell.
 ## 📊 Evaluate against BurnP3+
 
 Where BurnP3+ has been run, `inference.evaluate` predicts (or reuses predictions) and scores the AI surrogate
-against the BurnP3+ outputs in each hexel's `results/` folder:
+against the BurnP3+ outputs in each region's `results/` folder:
 
 - national layout: `results/burnP3Plus_OutputBurnProbability/burnProbability-sn2.tif`,
   `results/burnP3Plus_OutputFireIntensitySummaryMap/fbpSummary-FireIntensity-Average.tif` and
@@ -214,7 +215,7 @@ python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project p
     --predictions path/to/predictions --output path/to/evaluation
 ```
 
-A summary is printed at the end, e.g. for the national test hexel 12:
+A summary is printed at the end, e.g. for national test region `hex12`:
 
 ```text
 Evaluated 1 hexel(s) against BurnP3+ (area: actual). Mean over hexels:
@@ -226,9 +227,9 @@ Evaluated 1 hexel(s) against BurnP3+ (area: actual). Mean over hexels:
 
 | File | Content |
 |---|---|
-| `metrics_summary.csv` | Mean of each metric over hexels, per target |
-| `metrics_per_hexel.csv` | One row per hexel × target, with the number of cells scored |
-| `metrics_per_firezone.csv` | With `--by_firezone`: one row per hexel × fire zone × target |
+| `metrics_summary.csv` | Mean of each metric over regions, per target |
+| `metrics_per_hexel.csv` | One row per region × target, with the number of cells scored |
+| `metrics_per_firezone.csv` | With `--by_firezone`: one row per region × fire zone × target |
 | `hazard_metrics_summary.csv`, `hazard_metrics_per_hexel.csv` | Agreement of the hazard classes |
 | `hazard_confusion_matrix.{csv,png}` | Hazard classes, BurnP3+ (rows) vs AI surrogate (columns) |
 | `plots/hexNN/` | AI surrogate, BurnP3+ and difference maps; scatter plots and histograms |
@@ -236,12 +237,12 @@ Evaluated 1 hexel(s) against BurnP3+ (area: actual). Mean over hexels:
 | `evaluation_manifest.json`, `evaluate.log` | Model, options, input check, warnings and summary |
 
 Extra options: `--by_firezone`, `--metrics ccc mae` (a subset), `--no_plots` (faster),
-`--mask_scope buffer` (also scores the hexel and its buffer ring separately), plus the `predict` options.
+`--mask_scope buffer` (also scores the region and its buffer ring separately), plus the `predict` options.
 When reusing predictions, evaluate warns if they were made with another model.
 
 ### Metrics
 
-Metrics are computed per hexel, over the cells where BurnP3+ has data, then averaged over hexels.
+Metrics are computed per region, over the cells where BurnP3+ has data, then averaged over regions.
 
 | Metric | Meaning (AI surrogate vs BurnP3+) | Best |
 |---|---|---|
@@ -260,7 +261,7 @@ Rows with target `hazard` score the raw hazard map. The hazard **class** files r
 
 ## 🌲 Regional studies
 
-For a study area that is not a national hexel (e.g. a region prepared as a single `hexNN` folder):
+For a regional study (e.g. a study area prepared as a single `hexNN` folder):
 
 1. **No mask?** Pass `--mask_scope none` to all commands: the whole raster extent is used and
    `mask_grids/` is not needed.
@@ -291,7 +292,7 @@ report = check_project(load_bundle("nrcan-surrogate-bp-fi-ros-v1.0"), "path/to/p
 print(report.format())
 
 run = run_predict("nrcan-surrogate-bp-fi-ros-v1.0", "path/to/project", "path/to/predictions", device="cpu")
-print(run.hexels[0].outputs["bp"])  # path to the BP GeoTIFF of the first hexel
+print(run.hexels[0].outputs["bp"])  # path to the BP GeoTIFF of the first region
 
 evaluation = run_evaluate("nrcan-surrogate-bp-fi-ros-v1.0", "path/to/project", "path/to/evaluation", plots=False)
 print(evaluation.summary)           # pandas DataFrame
@@ -306,7 +307,7 @@ Measured on a single CPU core, no GPU:
 
 | Area | `check` | `predict` | `evaluate` (predict + scoring) |
 |---|---|---|---|
-| National hexel 12 (~18 M cells) | seconds | ~15 min | + ~7 min scoring with plots, ~6 GB peak memory |
+| National region `hex12` (~18 M cells) | seconds | ~15 min | + ~7 min scoring with plots, ~6 GB peak memory |
 | NWT regional study (~5.7 M cells) | 17 s, 0.9 GB | ~6 min | 12 min total, 3 GB peak memory |
 
 A GPU (CUDA or Apple MPS) speeds up `predict`; `--no_plots` speeds up `evaluate`.
