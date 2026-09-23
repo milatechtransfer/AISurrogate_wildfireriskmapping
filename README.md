@@ -115,7 +115,7 @@ The fine-tuned checkpoint is written to `<save_dir>/best.pth`, and can be evalua
 
 ## Hazard evaluation
 
-Hazard evaluation uses a single trained multi-output checkpoint that jointly predicts burn probability (BP) and fire intensity (FI) — optionally alongside other targets, e.g. ROS — over the same test hexels, then computes:
+Hazard evaluation uses a single trained multi-output checkpoint that jointly predicts burn probability (BP) and fire intensity (FI) — optionally alongside other targets, e.g. ROS — over the same test regions, then computes:
 
 - **Raw hazard**: `BP * min(FI, fi_cap)`
 - **Scaled hazard**: `raw_hazard * scale_to / denominator`
@@ -141,12 +141,12 @@ The denominator policy controls how scaled and binned hazard are normalized:
 | `reference_file` | Read the denominator from `reference_denominator_path`. | Reusing a previously computed denominator. |
 | `all_raw_ground_truth` | Compute the max raw hazard over all raw BP/FI rasters. | Default full-data reference for evaluation. |
 | `train_ground_truth` | Compute the max raw hazard over train-split raw rasters. | Leak-safe model comparison. |
-| `eval_ground_truth` | Compute the max raw hazard over the evaluated hexels' ground truth. | Self-contained test-subset reports. |
+| `eval_ground_truth` | Compute the max raw hazard over the evaluated regions' ground truth. | Self-contained test-subset reports. |
 | `prediction` | Compute the max raw hazard over model predictions. | Relative/model-dependent scaling when no reference exists. |
 
 With `--self_normalized_prediction`, ground truth keeps the configured/reference denominator, while predictions are also scaled by the prediction max for diagnostic relative-hazard evaluation.
 
-When `save_hazard_map: true`, hazard raster artifacts are written as a bundle for raw, scaled, and binned hazard. Use `--metrics_only` to skip raster/plot artifacts entirely, or `--skip_plots` to keep GeoTIFFs but skip per-hexel PNG plots. The default output directory is the hazard config's `save_dir`; key outputs include `hazard_scale_denominator.json`, `hazard_metrics_per_hex.csv`, `hazard_metrics_summary.json`, `hazard_confusion_matrix.csv`, `hazard_confusion_matrix.png`, and per-hexel GeoTIFFs under `hazard_hexels/`.
+When `save_hazard_map: true`, hazard raster artifacts are written as a bundle for raw, scaled, and binned hazard. Use `--metrics_only` to skip raster/plot artifacts entirely, or `--skip_plots` to keep GeoTIFFs but skip per-region PNG plots. The default output directory is the hazard config's `save_dir`; key outputs include `hazard_scale_denominator.json`, `hazard_metrics_per_hex.csv`, `hazard_metrics_summary.json`, `hazard_confusion_matrix.csv`, `hazard_confusion_matrix.png`, and per-region GeoTIFFs under `hazard_hexels/`.
 
 For SLURM/cluster instructions to run hazard evaluation (including multi-seed and buffer-only runs), see [Hazard evaluation on the cluster](#hazard-evaluation-on-the-cluster).
 
