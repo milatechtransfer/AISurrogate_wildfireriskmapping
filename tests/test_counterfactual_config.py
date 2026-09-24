@@ -25,6 +25,7 @@ def test_load_counterfactual_config_supports_custom_endpoints(tmp_path: Path) ->
             "endpoints": {
                 "hazard": {
                     "config_path": "configs/hazard.yaml",
+                    "checkpoint_dir": "/checkpoints/hazard",
                 }
             },
             "scenarios": [
@@ -42,6 +43,7 @@ def test_load_counterfactual_config_supports_custom_endpoints(tmp_path: Path) ->
 
     assert config.hex_ids == ["01", "16"]
     assert list(config.endpoints) == ["hazard"]
+    assert config.endpoints["hazard"].checkpoint_dir == Path("/checkpoints/hazard")
     assert config.scenarios[1].fuel_edit() == {"mode": "nonfuel_to_burnable_local_adjacent_modal"}
     assert config.scenario("remove_barriers") == config.scenarios[1]
 
@@ -72,6 +74,43 @@ def test_load_counterfactual_config_supports_weather_scenarios(tmp_path: Path) -
     assert config.scenarios[1].fuel_edit() is None
     with pytest.raises(KeyError, match="missing"):
         config.scenario("missing")
+
+
+def test_load_counterfactual_config_supports_fire_size_scenarios(tmp_path: Path) -> None:
+    path = tmp_path / "counterfactual.yaml"
+    _write_config(
+        path,
+        {
+            "raw_data_dir": "/raw",
+            "save_dir": "/experiment",
+            "hex_ids": ["16"],
+            "endpoints": {"bp": {"config_path": "bp.yaml"}},
+            "scenarios": [
+                {"name": "baseline", "kind": "baseline"},
+                {
+                    "name": "spread_day_fire_size",
+                    "kind": "fire_size",
+                    "params": {
+                        "mode": "spread_day_quantile_scaling",
+                        "spread_day_delta_q50_days": 0.7,
+                        "spread_day_delta_q90_days": 5.0,
+                        "size_scaling_exponent": 2.0,
+                    },
+                },
+            ],
+        },
+    )
+
+    config = load_counterfactual_config(path)
+
+    assert config.scenarios[1].fire_size_edit() == {
+        "mode": "spread_day_quantile_scaling",
+        "spread_day_delta_q50_days": 0.7,
+        "spread_day_delta_q90_days": 5.0,
+        "size_scaling_exponent": 2.0,
+    }
+    assert config.scenarios[1].fuel_edit() is None
+    assert config.scenarios[1].weather_edit() is None
 
 
 def test_resolve_counterfactual_paths_uses_config_defaults_and_overrides(tmp_path: Path) -> None:
@@ -152,3 +191,29 @@ def test_load_counterfactual_config_requires_standard_baseline_name(tmp_path: Pa
 
     with pytest.raises(ValueError, match="named 'baseline'"):
         load_counterfactual_config(path)
+
+
+def test_polygon_fuel_config_uses_q3_checkpoint_and_seasonal_aspen() -> None:
+    config = load_counterfactual_config(Path("configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml"))
+
+    assert {endpoint.config_path for endpoint in config.endpoints.values()} == {
+        Path("configs/multi_output_spatial_weather_firesize_q3.yaml")
+    }
+    assert all(endpoint.checkpoint_dir is not None for endpoint in config.endpoints.values())
+    scenario = config.scenario("pooled_burn_scars_to_aspen")
+    assert scenario.params["replacement_fuel_id"] == 13
+    assert scenario.params["fire_polygons"]["layer"] == "final_burn_perimeters"
+    assert scenario.params["fire_polygons"]["final_perimeter_only"] is False
+
+
+def test_spread_day_config_uses_q3_checkpoint_and_expected_deltas() -> None:
+    config = load_counterfactual_config(Path("configs/counterfactual/counterfactual_fire_size_spread_days_multi_output.yaml"))
+
+    assert {endpoint.config_path for endpoint in config.endpoints.values()} == {
+        Path("configs/multi_output_spatial_weather_firesize_q3.yaml")
+    }
+    assert all(endpoint.checkpoint_dir is not None for endpoint in config.endpoints.values())
+    scenario = config.scenario("spread_days_q50_plus_0p7_q90_plus_5_beta2")
+    assert scenario.params["spread_day_delta_q50_days"] == 0.7
+    assert scenario.params["spread_day_delta_q90_days"] == 5.0
+    assert scenario.params["size_scaling_exponent"] == 2.0
