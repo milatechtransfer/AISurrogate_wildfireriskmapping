@@ -23,6 +23,7 @@ An AI surrogate modelling framework that approximates wildfire burn probability,
     - [Hazard evaluation on the cluster](#hazard-evaluation-on-the-cluster)
     - [⚙️ Runtime and memory profiling](#️-runtime-and-memory-profiling)
     - [Baselines](#baselines)
+    - [Full Map of Canada](#full-map-of-canada)
 
 ## 🛠️ Installation & Setup
 
@@ -243,3 +244,6 @@ sbatch run_files/baselines/train_baseline_multi_run.sh configs/baselines/bp_spat
 ```
 
 Swap `bp_` for `fi_`/`ros_` to target fire intensity or rate of spread. The mean-value baseline is deterministic and only needs a single seed.
+
+### Full Map of Canada
+If you have access to national-data, and want to generate a full-Canada map of predictions/targets, see [`src/full_map/README.md`](src/full_map/README.md).
