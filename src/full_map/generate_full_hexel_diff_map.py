@@ -2,12 +2,6 @@
 Compares each target's real-CRS national predicted mosaic (from ``generate_full_hexel_map.py``)
 against that target's already-stitched national ground-truth raster
 (``config.full_map.national_gt_raster_paths[target]``).
-
-Unlike the previous schematic version of this script (which diffed a hand-picked subset of
-hexels arranged on a fake grid), both rasters here already share the same real grid
-(CRS/transform/shape) -- the mosaic was built directly on the GT raster's grid -- so the diff is
-a straightforward pixel-wise ``prediction - ground_truth`` over real Canada-wide coordinates.
-The model predicts multiple targets (e.g. bp/fi/ros), so one diff is produced per target.
 """
 
 import argparse

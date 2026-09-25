@@ -2,19 +2,12 @@
 Mosaics per-hexel rasters into one true national raster per target, using each hexel's real
 geographic footprint.
 
-Unlike the previous schematic version of this script (which arranged a hand-picked subset of
-hexels on a fake ``(row, col)`` grid with no real coordinates), this reprojects every hexel
-raster onto the same grid (CRS/transform/shape) as that target's configured national
-ground-truth raster (``config.full_map.national_gt_raster_paths[target]``), so the resulting
-mosaic is directly comparable to that GT raster (see ``generate_full_hexel_diff_map.py``). The
-model here predicts multiple targets (e.g. bp/fi/ros), so one mosaic is produced per target.
-
 By default this mosaics *predicted* hexels (from ``generate_predictions.py``). Pass ``--gt`` to
 mosaic *ground-truth* hexels instead -- stitching each hexel's raw GT raster
 (``data_preparation.paths.Paths``) the same way, so the national GT raster is built exactly like
 the predicted one instead of read directly from an already-stitched file. Once built, point
 ``config.full_map.national_gt_raster_paths`` at the produced ``{target}_national_gt_map.tif``
-files -- no other pipeline step needs to change.
+files.
 """
 
 import argparse
