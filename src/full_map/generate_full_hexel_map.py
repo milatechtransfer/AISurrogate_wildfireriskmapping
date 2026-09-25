@@ -122,7 +122,11 @@ def generate_national_mosaics(
         ``skip_existing`` are read back from their existing ``.tif`` so callers still get a
         complete result set.
     """
-    if (pred_root is not None or pattern is not None) == (file_maps_by_target is not None):
+    pred_group_given = pred_root is not None and pattern is not None
+    pred_group_partial = (pred_root is not None) != (pattern is not None)
+    if pred_group_partial:
+        raise ValueError("Both pred_root and pattern must be provided together.")
+    if pred_group_given == (file_maps_by_target is not None):
         raise ValueError("Pass exactly one of (pred_root and pattern) or file_maps_by_target.")
 
     shapefile_gdf = load_hexel_shapefile(shapefile_path, hexel_id_column)
@@ -133,6 +137,13 @@ def generate_national_mosaics(
         file_maps_by_target = group_predicted_hexel_files_by_target(pred_folder, pattern)  # type: ignore[arg-type]
         if not file_maps_by_target:
             raise FileNotFoundError(f"No predicted hexel rasters found under {pred_folder} matching pattern {pattern!r}.")
+
+    # Single-target models are grouped under the key "default" (see
+    # group_predicted_hexel_files_by_target); remap that to the sole configured target so its
+    # mosaic isn't silently skipped below.
+    if set(file_maps_by_target.keys()) == {"default"} and len(reference_raster_paths) == 1:
+        (only_target,) = reference_raster_paths.keys()
+        file_maps_by_target = {only_target: file_maps_by_target["default"]}
 
     results: dict[str, tuple[np.ndarray, dict]] = {}
     output_folder = Path(output_dir)

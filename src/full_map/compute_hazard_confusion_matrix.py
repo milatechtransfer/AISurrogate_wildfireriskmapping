@@ -52,6 +52,11 @@ def accumulate_confusion_matrix(
             raise ValueError(f"pred/gt raster shapes must match, got {pred_src.shape} and {gt_src.shape}")
         if pred_src.bounds != gt_src.bounds:
             raise ValueError(f"pred/gt raster bounds must match, got {pred_src.bounds} and {gt_src.bounds}")
+        if pred_src.crs != gt_src.crs or pred_src.transform != gt_src.transform:
+            raise ValueError(
+                f"pred/gt raster CRS/transform must match, got ({pred_src.crs}, {pred_src.transform}) and "
+                f"({gt_src.crs}, {gt_src.transform})"
+            )
 
         height, width = pred_src.shape
         confusion = np.zeros((num_classes, num_classes), dtype=np.int64)

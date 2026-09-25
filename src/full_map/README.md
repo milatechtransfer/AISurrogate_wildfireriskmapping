@@ -21,7 +21,7 @@ Add a `full_map:` section to your YAML config:
 ```yaml
 full_map:
   national_shapefile_path: /path/to/national_hexel_polygons.shp
-  hexel_id_column: hexid  # default; column in the shapefile holding each polygon's hex_id
+  hexel_id_column: hex_id  # default; column in the shapefile holding each polygon's hex_id
   national_gt_raster_paths:
     bp: /path/to/national_bp_ground_truth.tif
     fi: /path/to/national_fi_ground_truth.tif

@@ -73,14 +73,19 @@ def _require_common_grid(arrays: dict[str, tuple[np.ndarray, dict, rasterio.coor
     """
     names = list(arrays)
     reference_name = names[0]
-    _, _, reference_bounds = arrays[reference_name]
+    _, reference_profile, reference_bounds = arrays[reference_name]
     reference_shape = arrays[reference_name][0].shape
     for name in names[1:]:
-        arr, _, bounds = arrays[name]
+        arr, profile, bounds = arrays[name]
         if arr.shape != reference_shape:
             raise ValueError(f"{name!r} raster shape {arr.shape} does not match {reference_name!r} shape {reference_shape}.")
         if bounds != reference_bounds:
             raise ValueError(f"{name!r} raster bounds {bounds} do not match {reference_name!r} bounds {reference_bounds}.")
+        if profile.get("crs") != reference_profile.get("crs") or profile.get("transform") != reference_profile.get("transform"):
+            raise ValueError(
+                f"{name!r} raster CRS/transform ({profile.get('crs')}, {profile.get('transform')}) does not match "
+                f"{reference_name!r} CRS/transform ({reference_profile.get('crs')}, {reference_profile.get('transform')})."
+            )
 
 
 def _raw_hazard_inplace(bp: np.ndarray, fi: np.ndarray, fi_cap: float | None) -> np.ndarray:
@@ -185,18 +190,44 @@ def generate_national_hazard_maps(
     output_folder.mkdir(parents=True, exist_ok=True)
     pred_output_path = output_folder / PREDICTED_HAZARD_FILENAME
     gt_output_path = output_folder / GROUND_TRUTH_HAZARD_FILENAME
+    summary_path = output_folder / SUMMARY_JSON_FILENAME
 
     required_outputs = [gt_output_path, *([pred_output_path] if compute_predicted else [])]
     if skip_existing and all(path.exists() for path in required_outputs):
         print(f"Skipping hazard national map: {required_outputs} already exist (--skip-existing).")
         with rasterio.open(gt_output_path) as gt_src:
             binned_gt = gt_src.read(1)
+
+        denominator = scale_denominator
+        if denominator is None and summary_path.exists():
+            with open(summary_path) as handle:
+                denominator = json.load(handle).get("denominator")
+        if denominator is None:
+            # Neither an explicit denominator nor a prior summary file is available (e.g. the
+            # job was killed before writing hazard_national_summary.json) -- recompute it from
+            # the ground-truth bp/fi rasters, the same way the non-skip path derives it.
+            gt_bp, gt_profile, gt_bounds = _read_float32_nan(gt_bp_path)
+            gt_fi, _, gt_fi_bounds = _read_float32_nan(gt_fi_path)
+            _require_common_grid({"ground_truth_bp": (gt_bp, gt_profile, gt_bounds), "ground_truth_fi": (gt_fi, gt_profile, gt_fi_bounds)})
+            raw_gt = _raw_hazard_inplace(gt_bp, gt_fi, fi_cap)
+            del gt_bp, gt_fi
+            gc.collect()
+            denominator = _raw_hazard_denominator(raw_gt)
+            del raw_gt
+            gc.collect()
+
         if not compute_predicted:
-            return {"denominator": None, "metrics": None}
+            summary: dict[str, Any] = {"denominator": denominator, "metrics": None}
+            with open(summary_path, "w") as handle:
+                json.dump(summary, handle, indent=2)
+            return summary
         with rasterio.open(pred_output_path) as pred_src:
             binned_pred = pred_src.read(1)
         metrics = calculate_hazard_class_metrics(binned_pred, binned_gt, invalid_class=invalid_class, num_classes=num_classes)
-        return {"denominator": None, "metrics": flatten_hazard_class_metrics(metrics)}
+        summary = {"denominator": denominator, "metrics": flatten_hazard_class_metrics(metrics)}
+        with open(summary_path, "w") as handle:
+            json.dump(summary, handle, indent=2)
+        return summary
 
     # --- Ground truth phase: only gt bp/fi are held in memory at once. ---
     gt_bp, gt_profile, gt_bounds = _read_float32_nan(gt_bp_path)
@@ -254,7 +285,7 @@ def generate_national_hazard_maps(
             _plot_hazard_classes(binned_pred, num_classes, invalid_class, gt_bp_path, str(pred_output_path.with_suffix(".png")), plot_title)
 
     summary = {"denominator": denominator, "metrics": flat_metrics}
-    with open(output_folder / SUMMARY_JSON_FILENAME, "w") as handle:
+    with open(summary_path, "w") as handle:
         json.dump(summary, handle, indent=2)
     return summary
 

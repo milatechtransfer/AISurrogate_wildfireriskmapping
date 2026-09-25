@@ -55,16 +55,16 @@ evaluation:
   report_to_comet: true   # set to False when running evaluation only and don't want comet logging
 
 full_map:
-  national_shapefile_path: /path/to/canada_bp3+_2026_national/mask_hexs_actual_100m.shp"
-  hexel_id_column: "hexid"  # default; column in the shapefile holding each polygon's hexid
+  national_shapefile_path: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_national/mask_hexs_actual_100m.shp"
+  hexel_id_column: "hex_id"  # default; column in the shapefile holding each polygon's hex_id
   national_gt_raster_paths:
-    bp: " /path/to/canada_bp3+_2026_national/Canada_BP3+_2026_BurnProbability_Raw.tif"
-    fi: "/path/to/canada_bp3+_2026_national/Canada_BP3+_2026_FireIntensity_Average_Raw.tif"
-    ros: "/path/to/canada_bp3+_2026_national/Canada_BP3+_2026_RateOfSpread_Average_Raw.tif"
+    bp: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_national/Canada_BP3+_2026_BurnProbability_Raw.tif"
+    fi: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_national/Canada_BP3+_2026_FireIntensity_Average_Raw.tif"
+    ros: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_national/Canada_BP3+_2026_RateOfSpread_Average_Raw.tif"
 
 data:
-  root_dir: "/path/to/canada_bp3+_2026_MILA/data_samples_v4"
-  raw_data_dir: "/path/to/canada_bp3+_2026_MILA"
+  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v4"
+  raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
 
   train_split: "train_indices.csv"
   val_split: "val_indices.csv"

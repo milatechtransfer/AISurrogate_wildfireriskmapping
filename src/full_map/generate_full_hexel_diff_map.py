@@ -46,12 +46,18 @@ def compute_national_diff(pred_path: str, gt_path: str) -> tuple[np.ma.MaskedArr
         )
     if pred_bounds != gt_bounds:
         raise ValueError(f"Prediction mosaic bounds {pred_bounds} do not match GT raster bounds {gt_bounds}. Are they on the same grid?")
+    if pred_profile.get("crs") != gt_profile.get("crs") or pred_profile.get("transform") != gt_profile.get("transform"):
+        raise ValueError(
+            f"Prediction mosaic CRS/transform ({pred_profile.get('crs')}, {pred_profile.get('transform')}) does not match "
+            f"GT raster CRS/transform ({gt_profile.get('crs')}, {gt_profile.get('transform')}). Are they on the same grid?"
+        )
 
     valid = ~np.ma.getmaskarray(pred_arr) & ~np.ma.getmaskarray(gt_arr)
     # Cast to float before filling with NaN: integer-dtype rasters (e.g. ros GT, which uses a
-    # uint8 array with nodata=255) cannot hold a NaN fill value.
-    pred_float = np.ma.filled(pred_arr.astype(np.float64), np.nan)
-    gt_float = np.ma.filled(gt_arr.astype(np.float64), np.nan)
+    # uint8 array with nodata=255) cannot hold a NaN fill value. Use float32 (not float64) to
+    # avoid doubling memory on national-sized (tens of thousands of pixels per side) rasters.
+    pred_float = np.ma.filled(pred_arr.astype(np.float32), np.nan)
+    gt_float = np.ma.filled(gt_arr.astype(np.float32), np.nan)
     diff = np.ma.masked_array(pred_float - gt_float, mask=~valid)
 
     out_profile = gt_profile.copy()

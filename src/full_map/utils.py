@@ -264,9 +264,14 @@ def mosaic_predicted_hexels(
             # buffer pixels from adjacent hexels get pasted over each other in arbitrary
             # file_map iteration order, producing hard hex-shaped seams in the mosaic.
             hex_geometry = hex_geometry_by_id.get(hex_id)
-            if hex_geometry is not None:
-                outside_actual_hex = geometry_mask([hex_geometry], out_shape=reprojected.shape, transform=dst_transform, invert=False)
-                reprojected[outside_actual_hex] = ref_nodata
+            if hex_geometry is None:
+                print(
+                    f"Warning: hex_id={hex_id} ({hex_path.name}) has no polygon in the shapefile; "
+                    "skipping to avoid pasting its unmasked buffer footprint over neighboring hexels."
+                )
+                continue
+            outside_actual_hex = geometry_mask([hex_geometry], out_shape=reprojected.shape, transform=dst_transform, invert=False)
+            reprojected[outside_actual_hex] = ref_nodata
 
             valid = valid_pixel_mask(reprojected, ref_nodata)
             mosaic_window = mosaic[row_off:row_end, col_off:col_end]
