@@ -1,35 +1,34 @@
 #!/bin/bash
 ##SBATCH --mail-type=all
 ##SBATCH --mail-user=name@mila.quebec
-#SBATCH --job-name=unet_multitask
-#SBATCH --output=logs/job_%x_%A_%a.out
-#SBATCH --error=logs/job_%x_%A_%a.err
+#SBATCH --job-name=eval_model
+#SBATCH --output=logs/job_%x_%j.out
+#SBATCH --error=logs/job_%x_%j.err
 #SBATCH --partition=long
 #SBATCH --ntasks=1
-#SBATCH --time=09:59:00
-#SBATCH --mem=64Gb
+#SBATCH --time=01:00:00
+#SBATCH --mem=16Gb
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
-#SBATCH --array=0-2 # One run per entry in SEEDS (src/config.py); run_id must be < len(SEEDS).
 #SBATCH --requeue
 #SBATCH --signal=B:TERM@300
 
 set -euo pipefail
 
+# --requeue lets SLURM resubmit this job (same job ID) if it is preempted or hits
+# the time limit. --signal=B:TERM@300 asks SLURM to send SIGTERM 5 minutes before
+# the time limit so training can shut down cleanly. src.train/Trainer already
+# resumes automatically from save_dir/last.pth on restart, so no extra flags are
+# needed here; just make sure save_dir points to persistent (non-tmpdir) storage.
 echo "Job has been requeued/restarted ${SLURM_RESTART_COUNT:-0} time(s)."
 
 # Config file is required; there is no universal default since it must match the
-# model/data being trained (e.g. configs/multi_output_spatial_weather.yaml).
-CONFIG_FILE=${1:?Usage: sbatch train_multi_run.sh <config_file.yaml>}
+# model/data being evaluated (e.g. configs/multi_output_spatial_weather.yaml).
+CONFIG_FILE=${1:?Usage: sbatch eval.sh <config_file.yaml>}
+# Example: TRAIN_ARGS="--no_log_test_predicted_hexels"
 TRAIN_ARGS=${TRAIN_ARGS:-}
 EVAL_ARGS=${EVAL_ARGS:-}
 RUN_HEXEL_EVAL=${RUN_HEXEL_EVAL:-1}
-
-# Map the SLURM array task ID to a run index (0 when run outside an array job).
-# Forwarded to src.train/src.evaluate_hexels as --run_id so each parallel run
-# gets its own derived seed, save_dir, and Comet experiment name.
-RUN_ID=${SLURM_ARRAY_TASK_ID:-0}
-echo "Starting run RUN_ID=${RUN_ID}"
 
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
@@ -58,19 +57,7 @@ fi
 echo "Using data.root_dir directly from config: $CONFIG_FILE"
 
 echo "Running training with config: $CONFIG_FILE"
-read -r -a TRAIN_ARG_ARRAY <<< "$TRAIN_ARGS"
-python -m src.train \
+read -r -a EVAL_ARG_ARRAY <<< "$TRAIN_ARGS"
+python -m src.evaluate_hexels \
     --config="$CONFIG_FILE" \
-    --run_id="$RUN_ID" \
-    "${TRAIN_ARG_ARRAY[@]}"
-
-# if [[ "$RUN_HEXEL_EVAL" == "1" ]]; then
-#     echo "Running evaluation with config: $CONFIG_FILE"
-#     read -r -a EVAL_ARG_ARRAY <<< "$EVAL_ARGS"
-#     python -m src.evaluate_hexels \
-#         --config="$CONFIG_FILE" \
-#         --run_id="$RUN_ID" \
-#         "${EVAL_ARG_ARRAY[@]}"
-# else
-#     echo "Skipping hexel evaluation because RUN_HEXEL_EVAL=${RUN_HEXEL_EVAL}"
-# fi
+    "${EVAL_ARG_ARRAY[@]}"

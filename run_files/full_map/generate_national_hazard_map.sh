@@ -20,8 +20,9 @@ set -euo pipefail
 # reference raster's actual (height * width * 4 bytes) footprint. Check it with:
 #   python -c "import rasterio; s = rasterio.open('<path>'); print(s.height, s.width, s.height*s.width*4/1e9, 'GB')"
 
-# Capture the first argument, default to the common pipeline config.
-CONFIG_FILE=${1:-configs/bp_common_input_pipeline.yaml}
+# Config file is required (e.g. configs/multi_output_spatial_weather.yaml); there is no
+# universal default since it must match the checkpoint/model being evaluated.
+CONFIG_FILE=${1:?Usage: sbatch generate_national_hazard_map.sh <config_file.yaml>}
 # Directory containing bp/fi_national_predicted_map.tif (from generate_full_hexel_map.py).
 # Not required if GT_ONLY=1.
 MOSAIC_DIR=${MOSAIC_DIR:-experiments/full_map}
@@ -42,7 +43,9 @@ source .venv/bin/activate
 export PYTHONUNBUFFERED=1
 
 echo "Computing national hazard map(s) with config: $CONFIG_FILE"
-read -r -a HAZARD_ARG_ARRAY <<< "$HAZARD_ARGS"
+# Parsed via eval (not `read -a`, which splits on whitespace and drops the embedded
+# quotes) so e.g. --title='Burn Probability' survives as a single argument below.
+eval "HAZARD_ARG_ARRAY=($HAZARD_ARGS)"
 GT_ONLY_ARGS=()
 MOSAIC_DIR_ARGS=()
 if [[ "$GT_ONLY" == "1" ]]; then

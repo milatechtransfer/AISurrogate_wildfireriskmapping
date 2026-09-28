@@ -19,8 +19,9 @@ set -euo pipefail
 # each) peak usage is roughly 40-50GB -- 64Gb gives comfortable headroom. Adjust --mem to
 # fit 2-3x (height * width * 4 bytes) for your actual rasters.
 
-# Capture the first argument, default to the common pipeline config.
-CONFIG_FILE=${1:-configs/bp_common_input_pipeline.yaml}
+# Config file is required (e.g. configs/multi_output_spatial_weather.yaml); there is no
+# universal default since it must match the checkpoint/model being evaluated.
+CONFIG_FILE=${1:?Usage: sbatch generate_full_hexel_diff_map.sh <config_file.yaml>}
 MOSAIC_DIR=${MOSAIC_DIR:-experiments/full_map}
 OUTPUT_DIR=${OUTPUT_DIR:-experiments/full_map}
 # Example: DIFF_ARGS="--save-plots --title='Burn Probability'"
@@ -37,7 +38,9 @@ source .venv/bin/activate
 export PYTHONUNBUFFERED=1
 
 echo "Diffing national mosaics against ground truth with config: $CONFIG_FILE"
-read -r -a DIFF_ARG_ARRAY <<< "$DIFF_ARGS"
+# Parsed via eval (not `read -a`, which splits on whitespace and drops the embedded
+# quotes) so e.g. --title='Burn Probability' survives as a single argument below.
+eval "DIFF_ARG_ARRAY=($DIFF_ARGS)"
 python -m src.full_map.generate_full_hexel_diff_map \
     --config="$CONFIG_FILE" \
     --mosaic-dir="$MOSAIC_DIR" \

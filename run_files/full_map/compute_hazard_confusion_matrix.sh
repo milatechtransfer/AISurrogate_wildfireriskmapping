@@ -29,7 +29,9 @@ source .venv/bin/activate
 export PYTHONUNBUFFERED=1
 
 echo "Computing hazard confusion matrix: pred=$PRED_TIF gt=$GT_TIF"
-read -r -a CONFUSION_ARG_ARRAY <<< "$CONFUSION_ARGS"
+# Parsed via eval (not `read -a`, which splits on whitespace and drops the embedded
+# quotes) so e.g. --title='Burn Probability' survives as a single argument below.
+eval "CONFUSION_ARG_ARRAY=($CONFUSION_ARGS)"
 python -m src.full_map.compute_hazard_confusion_matrix \
     --pred-tif="$PRED_TIF" \
     --gt-tif="$GT_TIF" \

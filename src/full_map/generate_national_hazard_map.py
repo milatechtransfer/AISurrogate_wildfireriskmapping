@@ -207,8 +207,10 @@ def generate_national_hazard_maps(
             # job was killed before writing hazard_national_summary.json) -- recompute it from
             # the ground-truth bp/fi rasters, the same way the non-skip path derives it.
             gt_bp, gt_profile, gt_bounds = _read_float32_nan(gt_bp_path)
-            gt_fi, _, gt_fi_bounds = _read_float32_nan(gt_fi_path)
-            _require_common_grid({"ground_truth_bp": (gt_bp, gt_profile, gt_bounds), "ground_truth_fi": (gt_fi, gt_profile, gt_fi_bounds)})
+            gt_fi, gt_fi_profile, gt_fi_bounds = _read_float32_nan(gt_fi_path)
+            _require_common_grid(
+                {"ground_truth_bp": (gt_bp, gt_profile, gt_bounds), "ground_truth_fi": (gt_fi, gt_fi_profile, gt_fi_bounds)}
+            )
             raw_gt = _raw_hazard_inplace(gt_bp, gt_fi, fi_cap)
             del gt_bp, gt_fi
             gc.collect()
@@ -231,8 +233,8 @@ def generate_national_hazard_maps(
 
     # --- Ground truth phase: only gt bp/fi are held in memory at once. ---
     gt_bp, gt_profile, gt_bounds = _read_float32_nan(gt_bp_path)
-    gt_fi, _, gt_fi_bounds = _read_float32_nan(gt_fi_path)
-    _require_common_grid({"ground_truth_bp": (gt_bp, gt_profile, gt_bounds), "ground_truth_fi": (gt_fi, gt_profile, gt_fi_bounds)})
+    gt_fi, gt_fi_profile, gt_fi_bounds = _read_float32_nan(gt_fi_path)
+    _require_common_grid({"ground_truth_bp": (gt_bp, gt_profile, gt_bounds), "ground_truth_fi": (gt_fi, gt_fi_profile, gt_fi_bounds)})
 
     if scale_denominator is not None:
         denominator = float(scale_denominator)
@@ -262,11 +264,11 @@ def generate_national_hazard_maps(
     if compute_predicted:
         # --- Prediction phase: gt bp/fi are already freed; only pred bp/fi are loaded now. ---
         pred_bp, pred_profile, pred_bounds = _read_float32_nan(predicted_bp_path)  # type: ignore[arg-type]
-        pred_fi, _, pred_fi_bounds = _read_float32_nan(predicted_fi_path)  # type: ignore[arg-type]
+        pred_fi, pred_fi_profile, pred_fi_bounds = _read_float32_nan(predicted_fi_path)  # type: ignore[arg-type]
         _require_common_grid(
             {
                 "predicted_bp": (pred_bp, pred_profile, pred_bounds),
-                "predicted_fi": (pred_fi, pred_profile, pred_fi_bounds),
+                "predicted_fi": (pred_fi, pred_fi_profile, pred_fi_bounds),
                 "ground_truth_bp": (binned_gt, gt_profile, gt_bounds),
             }
         )

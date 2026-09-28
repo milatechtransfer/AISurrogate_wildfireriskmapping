@@ -22,8 +22,9 @@ set -euo pipefail
 # needed here; just make sure save_dir points to persistent (non-tmpdir) storage.
 echo "Job has been requeued/restarted ${SLURM_RESTART_COUNT:-0} time(s)."
 
-# Capture the first argument, default to the common pipeline config.
-CONFIG_FILE=${1:-configs/bp_common_input_pipeline.yaml}
+# Config file is required; there is no universal default since it must match the
+# model/data being trained (e.g. configs/multi_output_spatial_weather.yaml).
+CONFIG_FILE=${1:?Usage: sbatch train_no_tmp_copy.sh <config_file.yaml>}
 # Example: TRAIN_ARGS="--no_log_test_predicted_hexels"
 TRAIN_ARGS=${TRAIN_ARGS:-}
 EVAL_ARGS=${EVAL_ARGS:-}

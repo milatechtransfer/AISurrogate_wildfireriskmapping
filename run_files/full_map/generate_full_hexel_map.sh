@@ -20,8 +20,9 @@ set -euo pipefail
 # (height * width * 4 bytes) footprint. Check it with:
 #   python -c "import rasterio; s = rasterio.open('<path>'); print(s.height, s.width, s.height*s.width*4/1e9, 'GB')"
 
-# Capture the first argument, default to the common pipeline config.
-CONFIG_FILE=${1:-configs/bp_common_input_pipeline.yaml}
+# Config file is required (e.g. configs/multi_output_spatial_weather.yaml); there is no
+# universal default since it must match the checkpoint/model being evaluated.
+CONFIG_FILE=${1:?Usage: sbatch generate_full_hexel_map.sh <config_file.yaml>}
 # Directory containing per-split predicted hexels (defaults to config.save_dir if unset).
 PRED_ROOT=${PRED_ROOT:-}
 OUTPUT_DIR=${OUTPUT_DIR:-experiments/full_map}
@@ -47,7 +48,9 @@ source .venv/bin/activate
 # preempted before Python's internal buffers would otherwise flush.
 export PYTHONUNBUFFERED=1
 
-read -r -a MOSAIC_ARG_ARRAY <<< "$MOSAIC_ARGS"
+# Parsed via eval (not `read -a`, which splits on whitespace and drops the embedded
+# quotes) so e.g. --title='Burn Probability' survives as a single argument below.
+eval "MOSAIC_ARG_ARRAY=($MOSAIC_ARGS)"
 EXTRA_ARGS=()
 if [[ "$GT_MODE" == "1" ]]; then
     echo "Mosaicking ground-truth hexels onto the national grid with config: $CONFIG_FILE"
