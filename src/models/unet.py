@@ -35,6 +35,7 @@ class UNetBase(nn.Module, ABC):
         self.encoder: nn.Module
         self.bottleneck: nn.Module
         self.decoder: nn.Module
+        self.bp_decoder: nn.Module | None
         self.out_conv: nn.Conv2d | None
         self.multi_output_head: nn.Module | None
 
@@ -57,12 +58,22 @@ class UNetBase(nn.Module, ABC):
         """
         Top-level hook that calls the build methods.
         Subclasses may override build_* methods or override _build_components itself.
+        Set self.split_bp_decoder = True before calling this to give BP its own
+        decoder branch (built from the same build_decoder() as the shared one).
         """
         self.encoder = self.build_encoder()
         self.bottleneck = self.build_bottleneck()
         self.decoder = self.build_decoder()
+        self.bp_decoder = self.build_decoder() if getattr(self, "split_bp_decoder", False) else None
 
-    def _build_output_layers(self, feature_channels: int, output_head: str, target_names: list[str] | None) -> None:
+    def _build_output_layers(
+        self,
+        feature_channels: int,
+        output_head: str,
+        target_names: list[str] | None,
+        bp_head_depth: int = 2,
+        bp_head_hidden_channels: int | None = None,
+    ) -> None:
         if output_head == "shared":
             self.out_conv = nn.Conv2d(feature_channels, self.num_classes, kernel_size=1)
             self.multi_output_head = None
@@ -73,13 +84,18 @@ class UNetBase(nn.Module, ABC):
             if self.num_classes != len(target_names):
                 raise ValueError(f"num_classes={self.num_classes} must match configured targets {target_names}.")
             self.out_conv = None
-            self.multi_output_head = BurnProbabilityBehaviorHead(feature_channels, target_names)
+            self.multi_output_head = BurnProbabilityBehaviorHead(
+                feature_channels,
+                target_names,
+                bp_head_depth=bp_head_depth,
+                bp_head_hidden_channels=bp_head_hidden_channels,
+            )
             return
         raise ValueError(f"Unsupported output_head={output_head!r}.")
 
-    def _project_output(self, features: torch.Tensor) -> torch.Tensor:
+    def _project_output(self, features: torch.Tensor, bp_features: torch.Tensor | None = None) -> torch.Tensor:
         if self.multi_output_head is not None:
-            return self.multi_output_head(features)
+            return self.multi_output_head(features, bp_features=bp_features)
         if self.out_conv is None:
             raise RuntimeError("UNet output layers are not configured.")
         return self.out_conv(features)
@@ -106,12 +122,17 @@ class BaselineUNet(UNetBase):
         fuel_curve_std: torch.Tensor | None = None,
         output_head: str = "shared",
         target_names: list[str] | None = None,
+        bp_head_depth: int = 2,
+        bp_head_hidden_channels: int | None = None,
+        bp_split_decoder: bool = False,
     ):
         super().__init__()
         if hidden_features is None:
             hidden_features = [64, 128, 256, 512]
         if input_branches is None:
             input_branches = ["spatial"]
+        if bp_split_decoder and output_head != "bp_behavior":
+            raise ValueError("bp_split_decoder=True requires output_head='bp_behavior'.")
 
         self.input_channels = input_channels
         self.num_classes = num_classes
@@ -121,6 +142,7 @@ class BaselineUNet(UNetBase):
         self.use_activation_after_upsampling = use_activation_after_upsampling
         self.use_coordconv = use_coordconv
         self.input_branches = input_branches
+        self.split_bp_decoder = bp_split_decoder
         self.fuel_curve_input_dim = fuel_curve_input_dim
         self.fuel_curve_embed_dim = fuel_curve_embed_dim if fuel_curve_input_dim > 0 else 0
         # iROS embedding is concatenated with spatial input before the encoder.
@@ -140,7 +162,13 @@ class BaselineUNet(UNetBase):
         else:
             self.fuel_curve_encoder = None
         self._build_components()
-        self._build_output_layers(self.hidden_features[0], output_head, target_names)
+        self._build_output_layers(
+            self.hidden_features[0],
+            output_head,
+            target_names,
+            bp_head_depth=bp_head_depth,
+            bp_head_hidden_channels=bp_head_hidden_channels,
+        )
 
     def build_encoder(self) -> nn.Module:
         encoder = BaselineEncoder(
@@ -172,8 +200,9 @@ class BaselineUNet(UNetBase):
         if self.use_coordconv:
             x = append_coord_channels(x)
         x = self.bottleneck(x)
-        x = self.decoder(x, skip_connections)
-        return self._project_output(x)
+        features = self.decoder(x, skip_connections)
+        bp_features = self.bp_decoder(x, skip_connections) if self.bp_decoder is not None else None
+        return self._project_output(features, bp_features=bp_features)
 
 
 class MultiSourceUNet(UNetBase):
@@ -195,8 +224,13 @@ class MultiSourceUNet(UNetBase):
         fuel_curve_std: torch.Tensor | None = None,
         output_head: str = "shared",
         target_names: list[str] | None = None,
+        bp_head_depth: int = 2,
+        bp_head_hidden_channels: int | None = None,
+        bp_split_decoder: bool = False,
     ):
         super().__init__()
+        if bp_split_decoder and output_head != "bp_behavior":
+            raise ValueError("bp_split_decoder=True requires output_head='bp_behavior'.")
 
         self.input_channels = input_channels
         self.num_classes = num_classes
@@ -206,6 +240,7 @@ class MultiSourceUNet(UNetBase):
         self.use_transpose_conv = use_transpose_conv
         self.use_activation_after_upsampling = use_activation_after_upsampling
         self.use_coordconv = use_coordconv
+        self.split_bp_decoder = bp_split_decoder
         self.auxiliary_input_dims: dict[str, int] = auxiliary_input_dims or {}
         self.auxiliary_hidden_dims: dict[str, list[int] | dict[str, list[int]]] = auxiliary_hidden_dims or {}
         self.auxiliary_embed_dims: dict[str, int] = auxiliary_embed_dims or {}
@@ -231,7 +266,13 @@ class MultiSourceUNet(UNetBase):
         self._effective_spatial_in = self.input_channels + self.fuel_curve_embed_dim
 
         self._build_components()
-        self._build_output_layers(self.hidden_features[0], output_head, target_names)
+        self._build_output_layers(
+            self.hidden_features[0],
+            output_head,
+            target_names,
+            bp_head_depth=bp_head_depth,
+            bp_head_hidden_channels=bp_head_hidden_channels,
+        )
 
     def build_encoder(self) -> nn.Module:
         encoders = nn.ModuleDict()
@@ -359,5 +400,6 @@ class MultiSourceUNet(UNetBase):
         x = self.bottleneck(x, x_fused_tabular, x_wind)
 
         # Decoder and head.
-        x = self.decoder(x, skip_connections)
-        return self._project_output(x)
+        features = self.decoder(x, skip_connections)
+        bp_features = self.bp_decoder(x, skip_connections) if self.bp_decoder is not None else None
+        return self._project_output(features, bp_features=bp_features)
