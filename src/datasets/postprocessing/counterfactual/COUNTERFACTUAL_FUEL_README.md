@@ -129,6 +129,7 @@ params:
     buffer_m: 0
     # select:                     # optional, at most one key; omit to pool every fire
     #   iteration: 2              #   one simulated season
+    #   iteration_range: [1, 10]  #   inclusive span of simulated seasons
     #   fire_ids: [[1, 4], [2, 9]]  #   explicit [iteration, fire_id] pairs
     #   top_k_by_area: 20        #   the k largest final footprints
 ```
@@ -147,7 +148,7 @@ to get wrong when working with them directly:
   `final_burn_perimeters` with one row per fire and no `BurnDay` column, set
   `final_perimeter_only: false`; no additional daily-perimeter reduction is needed.
 
-`select` is optional. `iteration` and `fire_ids` stay stable if the perimeter file is
+`select` is optional. `iteration`, `iteration_range` and `fire_ids` stay stable if the perimeter file is
 regenerated; `top_k_by_area` re-resolves against whatever is in the file. Pooling all
 iterations represents accumulated fire scars rather than a single season, since BurnP3+
 fires never overlap within an iteration.
@@ -164,10 +165,13 @@ The persisted `hexel_<ID>_scenario_fuel.tif` uses the source grid, categorical
 BurnP3+ FBP landscape raster for a matched validation run.
 
 The shipped example is `configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml`,
-which converts every burnable pixel inside the pooled perimeters to fuel 13 (the D-1/D-2
+which converts every burnable pixel inside the perimeters of simulated seasons 1-10
+(`iteration_range: [1, 10]`; 165 fires, ~2.3% of hex16 burnable area) to fuel 13 (the D-1/D-2
 aspen pair, blended per hexel by its season weights). Fuel 12 (pure D-2, green aspen) is
 deliberately **not** used as a replacement: its FBP curves are identically zero, so the
-model cannot distinguish it from a non-fuel spread barrier.
+model cannot distinguish it from a non-fuel spread barrier. Larger selections were
+rejected after NRCan review: all 500 seasons (5,681 fires, ~33% of burnable area) and 20
+seasons (265 fires, ~3.2%) both overstate a realistic recent-burn-scar window.
 
 ## Running
 

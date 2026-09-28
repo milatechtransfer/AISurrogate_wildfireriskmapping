@@ -180,6 +180,14 @@ def test_select_fire_perimeters_by_iteration() -> None:
     assert selected["FireID"].tolist() == [1]
 
 
+def test_select_fire_perimeters_by_inclusive_iteration_range() -> None:
+    selected = select_fire_perimeters(_selection_frame(), select={"iteration_range": [1, 1]})
+    assert sorted(zip(selected["Iteration"], selected["FireID"], strict=True)) == [(1, 1), (1, 2)]
+
+    # A span may include seasons without fires as long as some fire is selected.
+    assert len(select_fire_perimeters(_selection_frame(), select={"iteration_range": [2, 5]})) == 1
+
+
 def test_select_fire_perimeters_by_explicit_fire_ids() -> None:
     selected = select_fire_perimeters(_selection_frame(), select={"fire_ids": [[1, 2], [2, 1]]})
 
@@ -197,6 +205,9 @@ def test_select_fire_perimeters_by_top_k_area() -> None:
     ("select", "match"),
     [
         ({"iteration": 99}, "No fires found for iteration=99"),
+        ({"iteration_range": [3, 9]}, "No fires found for iteration_range"),
+        ({"iteration_range": [2, 1]}, "first=2 > last=1"),
+        ({"iteration_range": [1]}, "must be \\[first, last\\]"),
         ({"fire_ids": [[9, 9]]}, "references fires absent from the file"),
         ({"fire_ids": []}, "must not be empty"),
         ({"top_k_by_area": 0}, "must be positive"),

@@ -34,7 +34,7 @@ fi
 # name : config : scenario : scenario kind
 EXPERIMENTS=(
     "fuel:configs/counterfactual/counterfactual_fuel_multi_output.yaml:c2_to_mixedwood_fixed:fuel"
-    "fuel_polygons:configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml:pooled_burn_scars_to_aspen:fuel"
+    "fuel_polygons:configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml:burn_scars_10_seasons_to_aspen:fuel"
     "mean_weather:configs/counterfactual/counterfactual_mean_weather_multi_output.yaml:bc_mean_weather_transplant:weather"
     "fire_size:configs/counterfactual/counterfactual_fire_size_spread_days_multi_output.yaml:spread_days_q50_plus_0p7_q90_plus_5_beta2:fire_size"
 )

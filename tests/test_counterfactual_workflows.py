@@ -18,7 +18,7 @@ RETAINED_EXPERIMENTS = {
     ),
     "fuel_polygons": (
         Path("configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml"),
-        "pooled_burn_scars_to_aspen",
+        "burn_scars_10_seasons_to_aspen",
         "fuel",
     ),
     "mean_weather": (

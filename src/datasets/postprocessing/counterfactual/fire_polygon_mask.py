@@ -25,7 +25,7 @@ DEFAULT_LAYER = "daily_burn_perimeters"
 DEFAULT_ITERATION_COL = "Iteration"
 DEFAULT_FIRE_ID_COL = "FireID"
 DEFAULT_BURN_DAY_COL = "BurnDay"
-_SELECTION_KEYS = ("iteration", "fire_ids", "top_k_by_area")
+_SELECTION_KEYS = ("iteration", "iteration_range", "fire_ids", "top_k_by_area")
 
 
 @dataclass(frozen=True)
@@ -103,12 +103,13 @@ def select_fire_perimeters(
     """Select a subset of fires.
 
     Supported keys (at most one): `iteration` restricts to a single simulated
-    season, `fire_ids` takes explicit `[iteration, fire_id]` pairs, and
+    season, `iteration_range` takes an inclusive `[first, last]` span of
+    seasons, `fire_ids` takes explicit `[iteration, fire_id]` pairs, and
     `top_k_by_area` keeps the k largest final footprints. Omitting `select`
     pools every fire.
 
-    Only `iteration` and `fire_ids` are stable if the perimeter file is
-    regenerated; `top_k_by_area` re-resolves against whatever is in the file.
+    `iteration`, `iteration_range` and `fire_ids` are stable if the perimeter
+    file is regenerated; `top_k_by_area` re-resolves against whatever is in the file.
     """
     select = dict(select or {})
     requested = [key for key in _SELECTION_KEYS if key in select]
@@ -127,6 +128,20 @@ def select_fire_perimeters(
         if selected.empty:
             available = sorted(frame[iteration_col].astype(int).unique())
             raise ValueError(f"No fires found for iteration={iteration}. Available iterations: {available}.")
+        return selected.reset_index(drop=True)
+
+    if key == "iteration_range":
+        bounds = list(select["iteration_range"])
+        if len(bounds) != 2:
+            raise ValueError(f"Fire polygon selection 'iteration_range' must be [first, last]; got {bounds}.")
+        first, last = int(bounds[0]), int(bounds[1])
+        if first > last:
+            raise ValueError(f"Fire polygon selection 'iteration_range' has first={first} > last={last}.")
+        # Seasons without any fire are legitimate BurnP3+ output, so only an entirely empty span is an error.
+        iterations = frame[iteration_col].astype(int)
+        selected = frame.loc[(iterations >= first) & (iterations <= last)]
+        if selected.empty:
+            raise ValueError(f"No fires found for iteration_range=[{first}, {last}].")
         return selected.reset_index(drop=True)
 
     if key == "fire_ids":
