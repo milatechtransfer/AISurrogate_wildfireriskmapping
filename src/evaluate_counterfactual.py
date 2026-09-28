@@ -319,6 +319,8 @@ def run_counterfactual_evaluation(
             run_config.data.raw_data_dir = str(raw_data_dir)
             run_config.data.num_workers = 0
             run_config.logger.enabled = False
+            # evaluate_hexels re-enables the logger from this flag, so clear it too.
+            run_config.evaluation.report_to_comet = False
 
             patch_transform = None
             fuel_summary = None
