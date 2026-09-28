@@ -1,0 +1,300 @@
+# Full-Canada map generation
+
+`src/full_map/` generates a full-Canada wildfire-risk vis: it runs model inference over
+**every** hexel (train + val + test combined), saves per-hexel predicted rasters, then
+mosaics those rasters onto the real national grid (using the true hexel geometries) and
+compares the mosaic against an already-stitched national ground-truth raster. The model
+predicts three targets — `bp` (burn probability), `fi` (fire intensity), `ros` (rate of
+spread) — so predictions, mosaics, and diffs are all produced **per target**.
+
+Pipeline (each step reads its config via `--config`):
+
+1. `generate_predictions.py` — inference + per-hexel `.tif` predictions + per-split metrics CSV
+2. `generate_full_hexel_map.py` — mosaics predicted hexels into one national raster per target
+   (or, with `--gt`, mosaics raw per-hexel ground-truth rasters instead)
+3. `generate_full_hexel_diff_map.py` — diffs each national mosaic against its GT raster
+
+## Config
+
+Add a `full_map:` section to your YAML config:
+
+```yaml
+full_map:
+  national_shapefile_path: /path/to/national_hexel_polygons.shp
+  hexel_id_column: hex_id  # default; column in the shapefile holding each polygon's hex_id
+  national_gt_raster_paths:
+    bp: /path/to/national_bp_ground_truth.tif
+    fi: /path/to/national_fi_ground_truth.tif
+    ros: /path/to/national_ros_ground_truth.tif
+```
+
+`national_shapefile_path` and `national_gt_raster_paths` are only required for steps 2 and 3
+(mosaicking/diffing); step 1 (prediction generation) does not need them.
+
+## 1. Generate predictions for all hexels
+
+```
+python -m src.full_map.generate_predictions --config path/to/config.yaml
+```
+
+- Runs inference over `train`, `val`, and `test` splits (no shuffling), loading the checkpoint
+  at `config.evaluation.checkpoint_filename`.
+- Comet logging is always disabled and no diagnostic plots are saved, regardless of what the
+  config says.
+- For each split, writes predicted hexel rasters to
+  `config.save_dir/<split>/predicted_hexels/hexel_{hex_id}_{target}_predicted.tif` (one `.tif`
+  per hexel per target — 3 per hexel for `bp`/`fi`/`ros`).
+- Writes one wide-format `config.save_dir/<split>/hexel_metrics.csv` per split (one row per
+  hexel, metric names as columns).
+
+Useful flags: `--stitch_mode {mean,max}` (default `mean`), `--mask_scope`,
+`--report_firezone_metrics`, `--run_id` (applies the same seed/save_dir overrides used by
+training's SLURM array jobs). See `--help` for details.
+
+This step runs a full forward pass over every hexel and needs a GPU, so on Mila/SLURM clusters
+submit it as a job rather than running it on the login node:
+
+```bash
+sbatch run_files/full_map/generate_predictions.sh configs/your_config.yaml
+```
+
+Pass extra CLI flags via `PRED_ARGS`, e.g.:
+
+```bash
+PRED_ARGS="--stitch_mode=max --report_firezone_metrics" sbatch run_files/full_map/generate_predictions.sh configs/your_config.yaml
+```
+
+## 2. Mosaic predictions onto the national grid
+
+```
+python -m src.full_map.generate_full_hexel_map --config path/to/config.yaml \
+    --output-dir experiments/full_map
+```
+
+- Reads `config.full_map.national_shapefile_path` / `hexel_id_column` to look up each hexel's
+  real polygon, and reprojects each predicted hexel raster onto the grid (CRS/transform/shape)
+  of that target's `config.full_map.national_gt_raster_paths[target]`, pasting valid pixels
+  into a national canvas.
+- Defaults to reading predicted hexels from `config.save_dir` (override with `--pred-root`),
+  matching the glob `--pattern` (default `*/predicted_hexels/hexel_*_predicted.tif`, i.e. all
+  splits combined).
+- Writes one `{target}_national_predicted_map.tif` per target (with a configured GT raster)
+  into `--output-dir`. Pass `--save-plots` to also save a `{target}_national_predicted_map.png`
+  (`--scale {linear,log}` controls color scaling, `--title` sets the plot title prefix).
+- Each predicted hexel is reprojected only into the small destination window covering its own
+  footprint (not the full national canvas), so memory/compute scale with the number and size
+  of hexels rather than with the national raster size per hexel.
+- By default (resume-friendly), a target's mosaic is skipped and read back if its
+  `{target}_national_predicted_map.tif` already exists in `--output-dir` -- useful after a job
+  was killed partway through the target loop, so already-finished targets aren't redone. Pass
+  `--force-recompute` to always rebuild every target's mosaic regardless of existing files.
+- **NaN-nodata safe**: nodata comparisons in this module use `valid_pixel_mask`/`mask_nodata`
+  (not `np.ma.masked_equal`/`array != nodata`), because a plain equality/inequality check
+  against a NaN nodata sentinel is always `False`/`True` respectively in numpy (`nan != nan` is
+  `True`). Some national GT rasters (e.g. bp/fi) use `nodata=nan` while others (e.g. ros) use a
+  real numeric sentinel -- without this, reprojected background NaN pixels from a hexel
+  processed later could silently overwrite an already-pasted neighboring hexel's valid data,
+  producing gaps in the mosaic for NaN-nodata targets only.
+
+This step is CPU-only (no GPU needed) but can still be memory-hungry for a Canada-wide
+reference raster (one full national float32 array is held in memory per target). Submit it
+as a job rather than running it on the login node:
+
+```bash
+sbatch run_files/full_map/generate_full_hexel_map.sh configs/your_config.yaml
+```
+
+Override `PRED_ROOT`, `OUTPUT_DIR`, or pass extra flags via `MOSAIC_ARGS`, e.g.:
+
+```bash
+MOSAIC_ARGS="--save-plots --scale=log" sbatch run_files/full_map/generate_full_hexel_map.sh configs/your_config.yaml
+```
+
+Adjust the script's `--mem` to comfortably fit `height * width * 4 bytes` for your national
+reference raster (check with
+`python -c "import rasterio; s = rasterio.open('<path>'); print(s.height, s.width, s.height*s.width*4/1e9, 'GB')"`).
+At 100m resolution and a full Canada-wide extent (~55,000 x 46,000 px), that's ~10GB, so the
+default 48Gb has comfortable headroom; a smaller/regional reference raster needs much less.
+
+### 2b. Mosaic ground truth onto the national grid (instead of using an already-stitched raster)
+
+`config.full_map.national_gt_raster_paths` is normally pointed at an already-stitched national
+GT raster, used both as a data source (steps 3-4) and, always, as each mosaic's reference grid
+(CRS/transform/shape). Pass `--gt` to `generate_full_hexel_map.py` to instead build that
+national GT raster the exact same way predictions are mosaicked in step 2: by stitching each
+hexel's raw per-hexel GT raster (`data_preparation.paths.Paths.output_burn_prob`/
+`output_fire_intensity`, found via `config.data.raw_data_dir` / `--raw-data-dir`) onto the same
+grid, rather than reading an already-stitched file directly.
+
+```
+python -m src.full_map.generate_full_hexel_map --config path/to/config.yaml \
+    --gt --output-dir experiments/full_map
+```
+
+- `config.full_map.national_gt_raster_paths` is still required and used purely as the
+  reference grid (its content is irrelevant to `--gt` mode -- only its CRS/transform/shape).
+- Writes `{target}_national_gt_map.tif` (instead of `{target}_national_predicted_map.tif`) into
+  `--output-dir`. Once built, update `config.full_map.national_gt_raster_paths` to point at
+  these files -- no other pipeline step (steps 3-5) needs to change.
+- Per-hexel raw rasters may not individually cover every pixel that an official, already-merged
+  national product does (e.g. gaps between adjacent hexels' own extents that a province-wide
+  merge fills from overlapping simulations). Pass `--backfill-from-reference` to fill any pixel
+  still nodata after per-hexel stitching from `config.full_map.national_gt_raster_paths[target]`
+  itself (the seamless, already-merged raster, pixel-aligned by construction since it's also the
+  reference grid) -- per-hexel data always stays authoritative wherever it exists; this only
+  fills the leftover gaps, using real simulation data rather than a fabricated value.
+- Via SLURM: `GT_MODE=1 sbatch run_files/full_map/generate_full_hexel_map.sh configs/your_config.yaml`
+  (optionally with `RAW_DATA_DIR=...` and/or `BACKFILL_FROM_REFERENCE=1`).
+
+## 3. Diff mosaics against ground truth
+
+```
+python -m src.full_map.generate_full_hexel_diff_map --config path/to/config.yaml \
+    --mosaic-dir experiments/full_map --output-dir experiments/full_map
+```
+
+- For each target in `config.full_map.national_gt_raster_paths`, loads
+  `{target}_national_predicted_map.tif` from `--mosaic-dir` (produced by step 2) and computes
+  `prediction - ground_truth` on the shared grid (targets whose mosaic file is missing are
+  skipped with a warning, not a hard failure).
+- Writes `{target}_national_diff_map.tif` per target into `--output-dir`, and prints/returns
+  summary metrics (`ccc`, `spearman`, `normalized_mae`, `n_valid_pixels`) computed over
+  pixels valid in both rasters. Pass `--save-plots` for a `{target}_national_diff_map.png`
+  (red/blue diverging colormap centered at 0).
+- By default (resume-friendly), a target's diff is skipped if its
+  `{target}_national_diff_map.tif` already exists in `--output-dir` (e.g. after a killed job);
+  skipped targets are omitted from the returned metrics dict. Pass `--force-recompute` to
+  always recompute every target's diff regardless of existing files.
+
+This step is also CPU-only but loads two full national rasters into memory per target; submit
+via:
+
+```bash
+sbatch run_files/full_map/generate_full_hexel_diff_map.sh configs/your_config.yaml
+```
+
+## 4. National hazard map (BP x FI)
+
+Hazard (`hazard = BP x min(FI, fi_cap)`, scaled and binned into NRCan-style hazard classes,
+see `src/datasets/postprocessing/hazard.py`) is computed directly from the already-mosaicked
+national `bp`/`fi` rasters -- both the step-2 predicted mosaics and the configured GT rasters
+(either an already-stitched national GT raster, or one built via step 2b's `--gt` mode) -- so
+no separate per-hexel/all-split hazard reconstruction pipeline is needed. (Hexel-level BP/FI
+hazard diagnostics for the test split, if you want those separately, are still available via
+`src/evaluate_hazard.py`.)
+
+```
+python -m src.full_map.generate_national_hazard_map --config path/to/config.yaml \
+    --mosaic-dir experiments/full_map --output-dir experiments/full_map
+```
+
+Or via SLURM (recommended for Canada-wide rasters; ground truth and prediction are processed
+sequentially and combined in place to minimize peak memory, but each phase still briefly holds
+~2-3 national-sized arrays, so this needs more headroom than a single mosaic, e.g. `--mem=64Gb`):
+
+```
+sbatch run_files/full_map/generate_national_hazard_map.sh configs/your_config.yaml
+# GT-only:
+GT_ONLY=1 sbatch run_files/full_map/generate_national_hazard_map.sh configs/your_config.yaml
+# extra flags, e.g. plots:
+HAZARD_ARGS="--save-plots" sbatch run_files/full_map/generate_national_hazard_map.sh configs/your_config.yaml
+```
+
+- Requires `config.full_map.national_gt_raster_paths` to include both `bp` and `fi`, and
+  `--mosaic-dir` to contain `bp_national_predicted_map.tif` / `fi_national_predicted_map.tif`
+  from step 2.
+- All four rasters (predicted bp/fi, ground-truth bp/fi) must already share one grid
+  (CRS/transform/shape) -- true by construction, since step 2 mosaics predictions directly onto
+  each target's GT raster grid.
+- Hazard math is controlled by `config.full_map.hazard_fi_cap`, `hazard_scale_to`, and
+  `hazard_bin_thresholds` (defaults match the hexel-level hazard pipeline). The scale
+  denominator is `config.full_map.hazard_scale_denominator` if set (or `--scale-denominator`),
+  otherwise it's derived as the max finite raw hazard over the ground-truth bp/fi rasters.
+- Writes binned (1-based NRCan hazard class) `hazard_national_predicted_map.tif` and
+  `hazard_national_ground_truth_map.tif` into `--output-dir`, plus a `hazard_national_summary.json`
+  with the resolved denominator and hazard class metrics (`calculate_hazard_class_metrics`)
+  comparing the two binned maps. Pass `--save-plots` for PNGs of each.
+- By default (resume-friendly), both outputs are skipped and metrics are read back if they
+  already exist in `--output-dir`; pass `--force-recompute` to always rebuild.
+- Pass `--gt-only` to compute just the ground-truth hazard map, without needing predicted
+  mosaics/`--mosaic-dir` at all (useful before or independent of running steps 1-2):
+  ```
+  python -m src.full_map.generate_national_hazard_map --config path/to/config.yaml \
+      --gt-only --output-dir experiments/full_map
+  ```
+
+## 5. Hazard confusion matrix and ordinal accuracy stats
+
+`generate_national_hazard_map.py` already writes basic hazard class metrics (exact/within-1/
+within-2 accuracy, mean absolute class error, macro IoU/F1) into `hazard_national_summary.json`
+when both predicted and ground-truth maps are computed together, but drops the full confusion
+matrix. Use `compute_hazard_confusion_matrix.py` to (re-)compute all of these, including the
+full confusion matrix, directly from the two saved hazard class rasters -- independent of
+whether/how they were originally generated (e.g. across two separate `--gt-only` runs):
+
+```
+python -m src.full_map.compute_hazard_confusion_matrix \
+    --pred-tif experiments/full_map/hazard_national_predicted_map.tif \
+    --gt-tif experiments/full_map/hazard_national_ground_truth_map.tif \
+    --output-dir experiments/full_map --save-plot
+```
+
+Or via SLURM:
+
+```
+sbatch run_files/full_map/compute_hazard_confusion_matrix.sh \
+    experiments/full_map/hazard_national_predicted_map.tif \
+    experiments/full_map/hazard_national_ground_truth_map.tif
+```
+
+- Reads both rasters in row-block windows (`--block-rows`, default 4096) and accumulates only
+  the tiny `num_classes x num_classes` confusion matrix, so it never holds a full national-sized
+  array in memory (much lighter than step 4).
+- `--num-classes` (default 13) must match how the rasters were binned (`len(hazard_bin_thresholds) + 1`).
+- Writes `hazard_confusion_matrix_summary.json` (flattened metrics + full confusion matrix) into
+  `--output-dir`; pass `--save-plot` for a row-normalized confusion matrix heatmap PNG
+  (`hazard_confusion_matrix.png`).
+
+## Visualizing a saved mosaic or diff map
+
+Both step 2 and step 3 can already save a plot inline via `--save-plots`, but if you just have
+a `.tif` sitting around (e.g. produced on the cluster and now being explored locally) and want
+to (re-)plot it without config/reference-raster setup, use `visualize_mosaic.py`:
+
+```bash
+python -m src.full_map.visualize_mosaic \
+    --tif experiments/full_map/bp_national_predicted_map.tif \
+    --output experiments/full_map/bp_national_predicted_map.png \
+    --scale log --title "Burn Probability"
+
+# Diff rasters (prediction - GT) use a red/blue diverging colormap centered at 0 instead:
+python -m src.full_map.visualize_mosaic \
+    --tif experiments/full_map/bp_national_diff_map.tif \
+    --output experiments/full_map/bp_national_diff_map.png \
+    --diff --title "Burn Probability Diff"
+```
+
+It reads bounds/CRS/nodata straight from the raster file itself, so it works on any saved
+mosaic or diff `.tif` independent of the pipeline run that produced it. `plot_raster(...)` can
+also be called directly (e.g. from a notebook) for the same behavior.
+
+**Memory:** a full Canada-wide 100m raster is ~55,000 x 46,000 px (~10GB as float32) -- reading
+it at full resolution just to make a PNG is easily enough to crash a laptop/VS Code. By default
+`--max-dim 2000` caps the larger dimension to 2000px: GDAL decodes directly at that reduced
+resolution (nearest-neighbor, so nodata isn't blended into valid pixels), so the full-resolution
+array is never loaded into memory. Lower `--max-dim` further (e.g. `500`) if it's still too
+heavy, or set `--max-dim 0 --downsample 1` to force a full-resolution read.
+
+## Module layout
+
+- `generate_predictions.py` — inference + per-hexel raster/metric export (step 1)
+- `generate_full_hexel_map.py` — `generate_national_mosaics(...)`, real-CRS mosaicking (step 2)
+- `generate_full_hexel_diff_map.py` — `generate_national_diffs(...)` / `compute_national_diff`, GT comparison (step 3)
+- `generate_national_hazard_map.py` — `generate_national_hazard_maps(...)`, BP x FI hazard from national rasters (step 4)
+- `compute_hazard_confusion_matrix.py` — `accumulate_confusion_matrix(...)`, windowed confusion matrix/ordinal stats (step 5)
+- `visualize_mosaic.py` — `plot_raster(...)`, standalone plotting for any saved mosaic/diff `.tif`
+- `utils.py` — shared helpers: `load_hexel_shapefile`, `group_predicted_hexel_files_by_target`,
+  `mosaic_predicted_hexels`, `calculate_global_stats`, `get_scale_settings`
+
+See `tests/test_full_map.py` for runnable examples of each helper against tiny synthetic
+rasters/shapefiles.
