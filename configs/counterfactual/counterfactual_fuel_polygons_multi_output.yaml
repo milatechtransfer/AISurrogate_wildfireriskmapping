@@ -1,5 +1,5 @@
 raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
-save_dir: "experiments/counterfactual_fuel_polygons_10seasons_multi_output_hex16_q3_256"
+save_dir: "experiments/counterfactual_fuel_polygons_season357_multi_output_hex16_q3_256"
 hex_ids: ["16"]
 
 # Single multi-output checkpoint jointly predicting bp/fi/ros.
@@ -22,9 +22,9 @@ scenarios:
   # Replacement fuel 13 is the D-1/D-2 aspen pair, blended per hexel by its season
   # weights. Code 12 (pure D-2 green) is deliberately not used: its curve is
   # identically zero, so the model cannot distinguish it from a non-fuel barrier.
-  - name: "burn_scars_10_seasons_to_aspen"
+  - name: "burn_scars_season_357_to_aspen"
     kind: "fuel"
-    description: "Convert every burnable pixel inside the final BurnP3+ fire perimeters of simulated seasons 1-10 (165 fires, ~2.3% of hex16 burnable area on the BurnP3+ grid) to D-1/D-2 aspen. Ten seasons approximates a recent-scar window in which burned stands regrow as deciduous; NRCan review found 500 seasons (5,681 fires, ~33%) and 20 seasons (265 fires, ~3.2%) overstated the intervention."
+    description: "Convert every burnable pixel inside the final BurnP3+ fire perimeters of simulated season 357 (84 fires, ~1.45% of hex16 burnable area on the BurnP3+ grid) to D-1/D-2 aspen. Season 357 is the most extreme of the 500 simulated seasons by burned area, so the edit represents the landscape after one severe fire season, as in NRCan's annual BurnP3+ updates. NRCan review found pooling 500 (5,681 fires, ~33%), 20 (265 fires, ~3.2%) or 10 (165 fires, ~2.3%) seasons forced too much fuel change."
     params:
       mode: "burnable_to_burnable_fixed"
       nonfuel_ids: [100, 101, 102, 105, 106, 110]
@@ -37,4 +37,4 @@ scenarios:
         final_perimeter_only: false
         buffer_m: 0
         select:
-          iteration_range: [1, 10]
+          iteration: 357

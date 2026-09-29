@@ -165,13 +165,16 @@ The persisted `hexel_<ID>_scenario_fuel.tif` uses the source grid, categorical
 BurnP3+ FBP landscape raster for a matched validation run.
 
 The shipped example is `configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml`,
-which converts every burnable pixel inside the perimeters of simulated seasons 1-10
-(`iteration_range: [1, 10]`; 165 fires, ~2.3% of hex16 burnable area) to fuel 13 (the D-1/D-2
+which converts every burnable pixel inside the perimeters of simulated season 357
+(`iteration: 357`; 84 fires, ~1.45% of hex16 burnable area) to fuel 13 (the D-1/D-2
 aspen pair, blended per hexel by its season weights). Fuel 12 (pure D-2, green aspen) is
 deliberately **not** used as a replacement: its FBP curves are identically zero, so the
-model cannot distinguish it from a non-fuel spread barrier. Larger selections were
-rejected after NRCan review: all 500 seasons (5,681 fires, ~33% of burnable area) and 20
-seasons (265 fires, ~3.2%) both overstate a realistic recent-burn-scar window.
+model cannot distinguish it from a non-fuel spread barrier. Season 357 is the most
+extreme simulated season by burned area, so the edit represents the landscape after one
+severe fire season, matching how NRCan updates BurnP3+ fuels annually. Pooled selections
+were rejected after NRCan review as forcing too much fuel change: all 500 seasons (5,681
+fires, ~33% of burnable area), 20 seasons (265 fires, ~3.2%) and 10 seasons (165 fires,
+~2.3%).
 
 ## Running
 

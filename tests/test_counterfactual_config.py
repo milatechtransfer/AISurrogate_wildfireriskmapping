@@ -200,11 +200,11 @@ def test_polygon_fuel_config_uses_q3_checkpoint_and_seasonal_aspen() -> None:
         Path("configs/multi_output_spatial_weather_firesize_q3.yaml")
     }
     assert all(endpoint.checkpoint_dir is not None for endpoint in config.endpoints.values())
-    scenario = config.scenario("burn_scars_10_seasons_to_aspen")
+    scenario = config.scenario("burn_scars_season_357_to_aspen")
     assert scenario.params["replacement_fuel_id"] == 13
     assert scenario.params["fire_polygons"]["layer"] == "final_burn_perimeters"
     assert scenario.params["fire_polygons"]["final_perimeter_only"] is False
-    assert scenario.params["fire_polygons"]["select"] == {"iteration_range": [1, 10]}
+    assert scenario.params["fire_polygons"]["select"] == {"iteration": 357}
 
 
 def test_spread_day_config_uses_q3_checkpoint_and_expected_deltas() -> None:

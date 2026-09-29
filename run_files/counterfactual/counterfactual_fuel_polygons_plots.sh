@@ -17,7 +17,7 @@ source .venv/bin/activate
 config="configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml"
 hex_id="16"
 scenarios=(
-    "burn_scars_10_seasons_to_aspen"
+    "burn_scars_season_357_to_aspen"
 )
 endpoints=("bp" "fi" "ros")
 
