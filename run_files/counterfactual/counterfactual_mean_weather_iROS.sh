@@ -16,7 +16,7 @@ mkdir -p logs
 source .venv/bin/activate
 
 python -m src.evaluate_counterfactual \
-    --config configs/counterfactual_mean_weather_multi_output.yaml \
+    --config configs/counterfactual/counterfactual_mean_weather_multi_output.yaml \
     --endpoint bp \
     --endpoint fi \
     --endpoint ros \

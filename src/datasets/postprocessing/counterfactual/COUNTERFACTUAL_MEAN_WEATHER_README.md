@@ -118,5 +118,11 @@ python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_res
   --hex_id 16
 ```
 
-On SLURM, submit `run_files/counterfactual_mean_weather_iROS.sh`, followed by
-`run_files/counterfactual_mean_weather_plots.sh` with an `afterok` dependency.
+The default SLURM workflow evaluates all three configured seeds and aggregates their
+mean/std responses:
+
+```bash
+bash run_files/counterfactual/submit_all_counterfactuals.sh mean_weather
+```
+
+Use the same entry point with `--single-seed` for a seed-42-only fallback.

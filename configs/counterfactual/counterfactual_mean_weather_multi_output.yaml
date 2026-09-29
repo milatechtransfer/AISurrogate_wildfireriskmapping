@@ -1,5 +1,5 @@
 raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
-save_dir: "experiments/counterfactual_mean_weather_multi_output_hex16"
+save_dir: "experiments/counterfactual_mean_weather_multi_output_hex16_q3_256"
 hex_ids: ["16"]
 nonfuel_ids: [100, 101, 102, 105, 106, 110]
 
@@ -12,11 +12,14 @@ nonfuel_ids: [100, 101, 102, 105, 106, 110]
 # shared prediction directory.
 endpoints:
   bp:
-    config_path: "configs/multi_output_spatial_weather.yaml"
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
   fi:
-    config_path: "configs/multi_output_spatial_weather.yaml"
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
   ros:
-    config_path: "configs/multi_output_spatial_weather.yaml"
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
 
 scenarios:
   - name: "baseline"

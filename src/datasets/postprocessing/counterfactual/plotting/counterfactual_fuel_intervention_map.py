@@ -232,8 +232,14 @@ def load_evaluated_fuel_pair(
     scenario_dir = prediction_dirs.get((scenario, endpoint))
     if scenario_dir is None:
         raise KeyError(f"Missing prediction directory for scenario={scenario!r}, endpoint={endpoint!r}.")
-    baseline_fuel = read_prediction(fuel_intervention_raster_path(scenario_dir, hex_id, "baseline"))
-    scenario_fuel = read_prediction(fuel_intervention_raster_path(scenario_dir, hex_id, "scenario"))
+    baseline_fuel = np.ma.asarray(
+        read_prediction(fuel_intervention_raster_path(scenario_dir, hex_id, "baseline")),
+        dtype=np.float32,
+    )
+    scenario_fuel = np.ma.asarray(
+        read_prediction(fuel_intervention_raster_path(scenario_dir, hex_id, "scenario")),
+        dtype=np.float32,
+    )
     baseline_values = np.asarray(baseline_fuel.filled(np.nan), dtype=np.float32)
     scenario_values = np.asarray(scenario_fuel.filled(np.nan), dtype=np.float32)
     if baseline_values.shape != scenario_values.shape:
@@ -356,7 +362,6 @@ def plot_intervention_map(
     replacement_values = replacement_map[np.isfinite(replacement_map)].astype(np.int32)
     replacement_categories = sorted(map(int, np.unique(replacement_values))) if replacement_values.size else []
 
-    baseline_codes = _categorical_codes(baseline, baseline_categories)
     burnable_codes = _categorical_codes(np.where(original_nonfuel, np.nan, baseline), baseline_categories)
     nonfuel_mask = np.ma.masked_where(~original_nonfuel, np.ones(baseline.shape, dtype=np.float32))
     replacement_codes = _categorical_codes(replacement_map, replacement_categories)
