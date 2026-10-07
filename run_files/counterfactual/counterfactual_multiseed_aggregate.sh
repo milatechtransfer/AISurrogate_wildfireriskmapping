@@ -17,6 +17,6 @@ source .venv/bin/activate
 : "${CONFIG:?Submit with --export=ALL,CONFIG=<counterfactual-config>}"
 : "${SCENARIO:?Submit with --export=ALL,SCENARIO=<scenario-name>}"
 
-python -m src.aggregate_counterfactual_multirun_results \
+python -m src.paper_utils.aggregate_counterfactual_multirun_results \
     --config "${CONFIG}" \
     --scenario "${SCENARIO}"

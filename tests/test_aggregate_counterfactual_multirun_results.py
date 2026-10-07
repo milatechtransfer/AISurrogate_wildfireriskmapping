@@ -9,7 +9,7 @@ import rasterio
 import yaml
 from rasterio.transform import from_origin
 
-from src.aggregate_counterfactual_multirun_results import (
+from src.paper_utils.aggregate_counterfactual_multirun_results import (
     aggregate_counterfactual_runs,
     ensemble_mean_std,
     extents_match,
@@ -171,7 +171,7 @@ def test_aggregate_counterfactual_runs_writes_mean_std_outputs(
         return baseline, delta, (0.0, 200.0, 0.0, 200.0), profile
 
     monkeypatch.setattr(
-        "src.aggregate_counterfactual_multirun_results._load_seed_response",
+        "src.paper_utils.aggregate_counterfactual_multirun_results._load_seed_response",
         _fake_load_seed_response,
     )
 
