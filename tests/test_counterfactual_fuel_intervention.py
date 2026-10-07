@@ -330,6 +330,36 @@ def test_random_component_insertion_is_seeded_and_reaches_area_target() -> None:
     assert set(components["original_fuel_id"]).issubset({1, 2, 3, 4})
 
 
+def test_apply_fuel_edit_burnable_to_nonfuel_respects_edit_mask() -> None:
+    fuel = np.array([[1, 2, 101], [2, 1, 1]], dtype=np.int32)
+    edit_mask = np.array([[True, False, True], [False, True, False]])
+    result = apply_fuel_edit(
+        fuel,
+        [101],
+        mode="burnable_to_nonfuel",
+        scenario_name="masked_barrier",
+        params={"insertion_mask": np.ones_like(fuel, dtype=bool), "replacement_nonfuel_id": 101, "edit_mask": edit_mask},
+    )
+    assert result.edit_mask.tolist() == [[True, False, False], [False, True, False]]
+    assert result.fuel.tolist() == [[101, 2, 101], [2, 101, 1]]
+
+
+def test_apply_fuel_edit_random_components_respects_edit_mask() -> None:
+    fuel = np.array([[1, 1, 101, 2, 2], [1, 1, 101, 2, 2], [3, 3, 101, 4, 4]], dtype=np.int32)
+    edit_mask = np.zeros_like(fuel, dtype=bool)
+    edit_mask[:, 3:] = True
+    result = apply_fuel_edit(
+        fuel,
+        [101],
+        mode="burnable_components_to_nonfuel_random",
+        scenario_name="masked_random_barrier",
+        params={"replacement_nonfuel_id": 101, "target_burnable_area_fraction": 1.0, "seed": 0, "edit_mask": edit_mask},
+    )
+    assert np.array_equal(result.edit_mask, edit_mask)
+    assert np.array_equal(result.fuel[:, :3], fuel[:, :3])
+    assert result.report.candidate_pixels == int(edit_mask.sum())
+
+
 def test_zone_boundary_segments_traces_only_valid_interzone_borders() -> None:
     labels = np.ma.masked_array(
         np.array([[1, 1, 2], [1, 3, 2], [1, 3, 2]], dtype=np.int64),
