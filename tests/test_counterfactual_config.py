@@ -194,7 +194,7 @@ def test_load_counterfactual_config_requires_standard_baseline_name(tmp_path: Pa
 
 
 def test_polygon_fuel_config_uses_q3_checkpoint_and_seasonal_aspen() -> None:
-    config = load_counterfactual_config(Path("configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml"))
+    config = load_counterfactual_config(Path("configs/counterfactual/counterfactual_fuel_burn_scars_multi_output.yaml"))
 
     assert {endpoint.config_path for endpoint in config.endpoints.values()} == {
         Path("configs/multi_output_spatial_weather_firesize_q3.yaml")

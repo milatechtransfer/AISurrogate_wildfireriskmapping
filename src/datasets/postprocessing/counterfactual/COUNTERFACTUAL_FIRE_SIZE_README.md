@@ -52,7 +52,7 @@ instead of recomputing them.
 
 ```text
 configs/counterfactual/counterfactual_fire_size_spread_days_multi_output.yaml
-run_files/counterfactual/counterfactual_fire_size_spread_days_iROS.sh
+run_files/counterfactual/counterfactual_fire_size_spread_days.sh
 run_files/counterfactual/counterfactual_fire_size_spread_days_plots.sh
 src/evaluate_counterfactual.py
 src/datasets/postprocessing/counterfactual/

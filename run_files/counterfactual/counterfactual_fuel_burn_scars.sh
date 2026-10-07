@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=cf_fuel_eval
+#SBATCH --job-name=cf_fuel_burn_scars_eval
 #SBATCH --output=logs/job_%x_%j.out
 #SBATCH --error=logs/job_%x_%j.err
 #SBATCH --partition=unkillable
@@ -15,4 +15,4 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
 source .venv/bin/activate
 
-python -m src.evaluate_counterfactual --config configs/counterfactual/counterfactual_fuel_multi_output.yaml --overwrite
+python -m src.evaluate_counterfactual --config configs/counterfactual/counterfactual_fuel_burn_scars_multi_output.yaml --overwrite

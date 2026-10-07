@@ -11,13 +11,13 @@ from src.datasets.postprocessing.counterfactual.counterfactual_base import load_
 RUN_DIR = Path("run_files/counterfactual")
 SHARED_Q3_CHECKPOINT_DIR = Path("/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3")
 RETAINED_EXPERIMENTS = {
-    "fuel": (
-        Path("configs/counterfactual/counterfactual_fuel_multi_output.yaml"),
+    "fuel_type_swap": (
+        Path("configs/counterfactual/counterfactual_fuel_type_swap_multi_output.yaml"),
         "c2_to_mixedwood_fixed",
         "fuel",
     ),
-    "fuel_polygons": (
-        Path("configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml"),
+    "fuel_burn_scars": (
+        Path("configs/counterfactual/counterfactual_fuel_burn_scars_multi_output.yaml"),
         "burn_scars_season_357_to_aspen",
         "fuel",
     ),

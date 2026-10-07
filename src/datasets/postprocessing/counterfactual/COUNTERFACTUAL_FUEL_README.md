@@ -86,7 +86,7 @@ scenarios:
   - **Single multi-output model**: if one checkpoint jointly predicts `bp`/`fi`/`ros`
     instead of training three separate single-target models, list `bp`, `fi`, and `ros`
     endpoints all pointing at that **same** `config_path` (see
-    `configs/counterfactual_fuel_multi_output.yaml`). `evaluate_counterfactual.py`
+    `configs/counterfactual/counterfactual_fuel_type_swap_multi_output.yaml`). `evaluate_counterfactual.py`
     detects that the endpoints resolve to the same config + data root and runs inference
     only once per scenario, reusing the resulting prediction directory for every alias
     endpoint. Predicted rasters for a multi-output model are written with a
@@ -164,7 +164,7 @@ The persisted `hexel_<ID>_scenario_fuel.tif` uses the source grid, categorical
 `int16` fuel IDs, and nodata `-32768`, so it can be supplied directly as the
 BurnP3+ FBP landscape raster for a matched validation run.
 
-The shipped example is `configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml`,
+The shipped example is `configs/counterfactual/counterfactual_fuel_burn_scars_multi_output.yaml`,
 which converts every burnable pixel inside the perimeters of simulated season 357
 (`iteration: 357`; 84 fires, ~1.45% of hex16 burnable area) to fuel 13 (the D-1/D-2
 aspen pair, blended per hexel by its season weights). Fuel 12 (pure D-2, green aspen) is
@@ -223,15 +223,23 @@ python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_cha
 Run `--help` on any script for the full set of options (e.g. `--zone_overlay` to draw
 firezone boundaries, `--downsample` for lower-resolution map rendering).
 
+The two shipped fuel experiments differ in how the edited pixels are selected:
+
+- `fuel_type_swap` (`counterfactual_fuel_type_swap_multi_output.yaml`): replaces every
+  C-2 pixel (`source_fuel_ids: [2]`) with M-1/M-2 (620), wherever it occurs.
+- `fuel_burn_scars` (`counterfactual_fuel_burn_scars_multi_output.yaml`): replaces every
+  burnable pixel inside the season-357 BurnP3+ fire perimeters (`fire_polygons`) with
+  D-1/D-2 (13), regardless of its original fuel.
+
 The default SLURM workflow evaluates all three configured seeds and aggregates their
 mean/std responses:
 
 ```bash
-bash run_files/counterfactual/submit_all_counterfactuals.sh fuel fuel_polygons
+bash run_files/counterfactual/submit_all_counterfactuals.sh fuel_type_swap fuel_burn_scars
 ```
 
 For a seed-42-only fallback, use the same entry point:
 
 ```bash
-bash run_files/counterfactual/submit_all_counterfactuals.sh --single-seed fuel fuel_polygons
+bash run_files/counterfactual/submit_all_counterfactuals.sh --single-seed fuel_type_swap fuel_burn_scars
 ```

@@ -25,7 +25,7 @@ The configured donor has 136,692 weather rows. Its raw mean FWI is approximately
 
 ```text
 configs/counterfactual_mean_weather.yaml
-run_files/counterfactual_mean_weather_iROS.sh
+run_files/counterfactual/counterfactual_mean_weather.sh
 run_files/counterfactual_mean_weather_plots.sh
 src/evaluate_counterfactual.py
 src/datasets/postprocessing/counterfactual/
@@ -84,7 +84,7 @@ scenarios:
 > Same as the fuel counterfactual config: if `bp`/`fi`/`ros` come from a single
 > multi-output checkpoint instead of three separate models, point all three endpoints at
 > that same `config_path` (see `configs/counterfactual_mean_weather_multi_output.yaml`
-> for a ready-to-run example, or `configs/counterfactual_fuel_multi_output.yaml` for the
+> for a ready-to-run example, or `configs/counterfactual/counterfactual_fuel_type_swap_multi_output.yaml` for the
 > equivalent fuel-scenario config); `evaluate_counterfactual.py` and the plotting scripts
 > below handle this transparently.
 

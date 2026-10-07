@@ -5,7 +5,7 @@
 # Usage:
 #   bash run_files/counterfactual/submit_all_counterfactuals.sh [--dry-run] [--single-seed] [name ...]
 #
-# Names: fuel, fuel_polygons, mean_weather, fire_size
+# Names: fuel_type_swap, fuel_burn_scars, mean_weather, fire_size
 # By default, run_ids 0-2 select seeds 42, 1337, and 2024. `--single-seed`
 # submits run_id 0 (seed 42) and skips across-seed aggregation.
 
@@ -33,8 +33,8 @@ fi
 
 # name : config : scenario : scenario kind
 EXPERIMENTS=(
-    "fuel:configs/counterfactual/counterfactual_fuel_multi_output.yaml:c2_to_mixedwood_fixed:fuel"
-    "fuel_polygons:configs/counterfactual/counterfactual_fuel_polygons_multi_output.yaml:burn_scars_season_357_to_aspen:fuel"
+    "fuel_type_swap:configs/counterfactual/counterfactual_fuel_type_swap_multi_output.yaml:c2_to_mixedwood_fixed:fuel"
+    "fuel_burn_scars:configs/counterfactual/counterfactual_fuel_burn_scars_multi_output.yaml:burn_scars_season_357_to_aspen:fuel"
     "mean_weather:configs/counterfactual/counterfactual_mean_weather_multi_output.yaml:bc_mean_weather_transplant:weather"
     "fire_size:configs/counterfactual/counterfactual_fire_size_spread_days_multi_output.yaml:spread_days_q50_plus_0p7_q90_plus_5_beta2:fire_size"
 )
