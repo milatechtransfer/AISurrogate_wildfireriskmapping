@@ -20,12 +20,11 @@ import pandas as pd
 from matplotlib.colors import Normalize
 from matplotlib.patches import Patch
 
-from src.datasets.fuel_utils import normalize_hex_id
-from src.datasets.postprocessing.counterfactual.counterfactual_base import (
+from src.counterfactual.counterfactual_base import (
     load_counterfactual_config,
     resolve_counterfactual_paths,
 )
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_intervention_map import (
+from src.counterfactual.plotting.counterfactual_fuel_intervention_map import (
     FUEL_GROUP_COLOURS,
     FUEL_GROUP_LABELS,
     SCENARIO,
@@ -35,7 +34,7 @@ from src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_int
     load_evaluated_fuel_pair,
     load_zone_labels_on_prediction_grid,
 )
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz import (
+from src.counterfactual.plotting.counterfactual_viz import (
     DEFAULT_ZONE_OVERLAY_ALPHA,
     DEFAULT_ZONE_OVERLAY_COLOR,
     DEFAULT_ZONE_OVERLAY_LINEWIDTH,
@@ -50,6 +49,7 @@ from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz impo
     prediction_reference_profile,
     robust_norm,
 )
+from src.datasets.fuel_utils import normalize_hex_id
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402

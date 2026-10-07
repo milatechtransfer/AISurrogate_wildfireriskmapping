@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.datasets.postprocessing.counterfactual import counterfactual_weather as cw
-from src.datasets.postprocessing.counterfactual.counterfactual_base import ScenarioConfig
-from src.datasets.postprocessing.counterfactual.weather_counterfactual_transform import (
+from src.counterfactual import counterfactual_weather as cw
+from src.counterfactual.counterfactual_base import ScenarioConfig
+from src.counterfactual.weather_counterfactual_transform import (
     materialize_weather_scenario,
     weather_intervention_csv_path,
 )
@@ -203,7 +203,7 @@ def test_materialize_mean_weather_scenario_writes_compact_hex_zone_lut(
     processed_csv = tmp_path / "weather_table_processed.csv"
     processed.to_csv(processed_csv, index=False)
     monkeypatch.setattr(
-        "src.datasets.postprocessing.counterfactual.weather_counterfactual_transform.load_all_raw_weather_with_hex_ids",
+        "src.counterfactual.weather_counterfactual_transform.load_all_raw_weather_with_hex_ids",
         lambda _raw_data_dir: raw,
     )
     scenario = ScenarioConfig(

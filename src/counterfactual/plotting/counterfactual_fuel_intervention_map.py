@@ -15,12 +15,12 @@ from matplotlib.patches import Patch
 from data_preparation.paths import Paths
 from data_preparation.spatial.fuel import load_fuel_grid
 from data_preparation.spatial.utils import FUEL_GROUP_MAP, load_spatial_raster
-from src.datasets.postprocessing.counterfactual.counterfactual_base import (
+from src.counterfactual.counterfactual_base import (
     load_counterfactual_config,
     resolve_counterfactual_paths,
 )
-from src.datasets.postprocessing.counterfactual.fuel_counterfactual_transform import fuel_intervention_raster_path
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz import (
+from src.counterfactual.fuel_counterfactual_transform import fuel_intervention_raster_path
+from src.counterfactual.plotting.counterfactual_viz import (
     DEFAULT_ZONE_OVERLAY_ALPHA,
     DEFAULT_ZONE_OVERLAY_COLOR,
     DEFAULT_ZONE_OVERLAY_LINEWIDTH,

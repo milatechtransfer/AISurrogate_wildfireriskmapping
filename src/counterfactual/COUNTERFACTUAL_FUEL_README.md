@@ -13,7 +13,7 @@ configs/counterfactual/counterfactual_fuel_type_swap.yaml
 src/evaluate_counterfactual.py            # 1. Evaluate baseline + selected scenario(s), per endpoint
         │
         ▼
-src/datasets/postprocessing/counterfactual/plotting/
+src/counterfactual/plotting/
   counterfactual_fuel_intervention_map.py # 2. Plot the fuel edit itself (original vs. replacement fuel)
   counterfactual_response_maps.py         # 3. Plot GT/baseline/scenario/Δ prediction maps + hotspot patch zoom
   counterfactual_local_zoom_panels.py     #    Fuel-specific zoom on selected evaluated-edit neighborhoods
@@ -197,23 +197,23 @@ counterfactual config plus the `scenario_prediction_index.csv` written by evalua
 
 ```bash
 # Plot the fuel intervention map
-python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_intervention_map \
+python -m src.counterfactual.plotting.counterfactual_fuel_intervention_map \
     --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
     --scenario c2_to_mixedwood_fixed --endpoint bp --hex_id 16
 
 # Plot GT/baseline/scenario/Δ response maps + patch zoom for one endpoint
-python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
+python -m src.counterfactual.plotting.counterfactual_response_maps \
     --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
     --scenario c2_to_mixedwood_fixed --endpoint fi --hex_id 16
 
 # Plot local zoom panels on selected evaluated-edit neighborhoods (uses bp + fi).
 # Requires a scenario that adds or removes burnable support (not burnable-to-burnable swaps).
-python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_local_zoom_panels \
+python -m src.counterfactual.plotting.counterfactual_local_zoom_panels \
     --config <config-with-support-changing-scenario> \
     --scenario <scenario> --hex_id 16
 
 # Summarize the prediction change distribution
-python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_change_distribution \
+python -m src.counterfactual.plotting.counterfactual_change_distribution \
     --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
     --scenario c2_to_mixedwood_fixed --endpoint bp
 ```

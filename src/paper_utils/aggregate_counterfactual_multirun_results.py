@@ -19,22 +19,22 @@ import rasterio
 from matplotlib.colors import Normalize
 
 from src.config import SEEDS
-from src.datasets.fuel_utils import normalize_hex_id
-from src.datasets.postprocessing.counterfactual.counterfactual_base import (
+from src.counterfactual.counterfactual_base import (
     CounterfactualConfig,
     load_counterfactual_config,
     resolve_counterfactual_paths,
 )
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps import (
+from src.counterfactual.plotting.counterfactual_response_maps import (
     ENDPOINT_SPECS,
     load_endpoint_response,
 )
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz import (
+from src.counterfactual.plotting.counterfactual_viz import (
     delta_norm,
     downsample_for_display,
     finite_values,
     prediction_dirs_from_index,
 )
+from src.datasets.fuel_utils import normalize_hex_id
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402

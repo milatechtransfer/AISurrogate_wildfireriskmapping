@@ -13,10 +13,10 @@ import rasterio
 from data_preparation.paths import Paths
 from data_preparation.spatial.fuel import load_fuel_grid
 from data_preparation.spatial.utils import load_spatial_raster
+from src.counterfactual.counterfactual_base import ScenarioConfig
+from src.counterfactual.counterfactual_fuel import FUEL_NODATA, apply_fuel_edit
+from src.counterfactual.fire_polygon_mask import build_fire_polygon_mask, fire_polygon_mask_csv_path
 from src.datasets.fuel_utils import normalize_hex_id
-from src.datasets.postprocessing.counterfactual.counterfactual_base import ScenarioConfig
-from src.datasets.postprocessing.counterfactual.counterfactual_fuel import FUEL_NODATA, apply_fuel_edit
-from src.datasets.postprocessing.counterfactual.fire_polygon_mask import build_fire_polygon_mask, fire_polygon_mask_csv_path
 
 
 @dataclass(frozen=True)

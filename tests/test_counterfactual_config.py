@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.datasets.postprocessing.counterfactual.counterfactual_base import (
+from src.counterfactual.counterfactual_base import (
     load_counterfactual_config,
     resolve_counterfactual_paths,
 )

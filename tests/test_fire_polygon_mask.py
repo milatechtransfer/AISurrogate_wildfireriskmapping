@@ -10,8 +10,8 @@ import pytest
 import rasterio
 from shapely.geometry import box
 
-from src.datasets.postprocessing.counterfactual.counterfactual_fuel import apply_fuel_edit
-from src.datasets.postprocessing.counterfactual.fire_polygon_mask import (
+from src.counterfactual.counterfactual_fuel import apply_fuel_edit
+from src.counterfactual.fire_polygon_mask import (
     build_fire_polygon_mask,
     load_final_fire_perimeters,
     select_fire_perimeters,

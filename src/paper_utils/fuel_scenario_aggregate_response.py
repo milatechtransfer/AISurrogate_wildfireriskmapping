@@ -54,10 +54,10 @@ from matplotlib.colors import ListedColormap
 from matplotlib.patches import Patch
 from rasterio.features import geometry_mask
 
-from src.datasets.postprocessing.counterfactual.counterfactual_base import load_counterfactual_config
-from src.datasets.postprocessing.counterfactual.fuel_counterfactual_transform import fuel_intervention_raster_path
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_intervention_map import burnable_fuel_support
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz import (
+from src.counterfactual.counterfactual_base import load_counterfactual_config
+from src.counterfactual.fuel_counterfactual_transform import fuel_intervention_raster_path
+from src.counterfactual.plotting.counterfactual_fuel_intervention_map import burnable_fuel_support
+from src.counterfactual.plotting.counterfactual_viz import (
     build_endpoint_response,
     delta_norm,
     downsample_for_display,

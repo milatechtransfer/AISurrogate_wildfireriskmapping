@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.datasets.postprocessing.counterfactual.counterfactual_base import load_counterfactual_config
+from src.counterfactual.counterfactual_base import load_counterfactual_config
 
 RUN_DIR = Path("run_files/counterfactual")
 SHARED_Q3_CHECKPOINT_DIR = Path("/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3")

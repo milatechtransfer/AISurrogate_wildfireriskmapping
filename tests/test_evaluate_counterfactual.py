@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from src.datasets.postprocessing.counterfactual.counterfactual_base import EndpointConfig, ScenarioConfig
+from src.counterfactual.counterfactual_base import EndpointConfig, ScenarioConfig
 from src.evaluate_counterfactual import _select_endpoints, _select_scenarios, run_counterfactual_evaluation
 
 _BASELINE = ScenarioConfig(name="baseline", kind="baseline", description="", params={})

@@ -8,7 +8,7 @@ import pytest
 import rasterio
 from rasterio.transform import from_origin
 
-from src.datasets.postprocessing.counterfactual.counterfactual_fuel import (
+from src.counterfactual.counterfactual_fuel import (
     apply_fuel_edit,
     burnable_mask,
     modal_adjacent_burnable_fuel,
@@ -20,13 +20,13 @@ from src.datasets.postprocessing.counterfactual.counterfactual_fuel import (
     replace_nonfuel_with_burnable,
     replace_random_burnable_components_with_nonfuel,
 )
-from src.datasets.postprocessing.counterfactual.fuel_counterfactual_transform import fuel_intervention_raster_path
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_intervention_map import (
+from src.counterfactual.fuel_counterfactual_transform import fuel_intervention_raster_path
+from src.counterfactual.plotting.counterfactual_fuel_intervention_map import (
     intervention_layers,
     intervention_layers_on_prediction_grid,
     summarize_intervention,
 )
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz import zone_boundary_segments
+from src.counterfactual.plotting.counterfactual_viz import zone_boundary_segments
 
 
 def test_nonfuel_and_burnable_masks_are_complements_on_valid_fuel() -> None:

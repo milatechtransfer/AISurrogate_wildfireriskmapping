@@ -24,13 +24,13 @@ endpoints=("bp" "fi" "ros")
 # counterfactual_local_zoom_panels is not run here: it requires an edit that adds or
 # removes burnable support, and this scenario substitutes one burnable fuel for another.
 for scenario in "${scenarios[@]}"; do
-    python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_intervention_map \
+    python -m src.counterfactual.plotting.counterfactual_fuel_intervention_map \
         --config "${config}" --scenario "${scenario}" --endpoint bp --hex_id "${hex_id}"
 
     for endpoint in "${endpoints[@]}"; do
-        python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
+        python -m src.counterfactual.plotting.counterfactual_response_maps \
             --config "${config}" --scenario "${scenario}" --endpoint "${endpoint}" --hex_id "${hex_id}"
-        python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_change_distribution \
+        python -m src.counterfactual.plotting.counterfactual_change_distribution \
             --config "${config}" --scenario "${scenario}" --endpoint "${endpoint}" --hex_id "${hex_id}"
     done
 done

@@ -55,7 +55,7 @@ configs/counterfactual/counterfactual_fire_size_spread_days.yaml
 run_files/counterfactual/counterfactual_fire_size_spread_days.sh
 run_files/counterfactual/counterfactual_fire_size_spread_days_plots.sh
 src/evaluate_counterfactual.py
-src/datasets/postprocessing/counterfactual/
+src/counterfactual/
   fire_size_counterfactual_transform.py
   plotting/counterfactual_response_maps.py
 ```
@@ -133,7 +133,7 @@ python -m src.evaluate_counterfactual \
 Generate one response-map set:
 
 ```bash
-python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
+python -m src.counterfactual.plotting.counterfactual_response_maps \
   --config configs/counterfactual/counterfactual_fire_size_spread_days.yaml \
   --scenario spread_days_q50_plus_0p7_q90_plus_5_beta2 \
   --endpoint fi \

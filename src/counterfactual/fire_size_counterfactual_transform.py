@@ -10,8 +10,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from src.counterfactual.counterfactual_base import ScenarioConfig
 from src.datasets.fuel_utils import normalize_hex_id
-from src.datasets.postprocessing.counterfactual.counterfactual_base import ScenarioConfig
 
 FIRE_SIZE_INTERVENTION_CSV_NAME = "fire_size_quantile_intervention.csv"
 FIRE_SIZE_GLOBAL_FILL_CSV_NAME = "fire_size_quantile_global_fill.csv"

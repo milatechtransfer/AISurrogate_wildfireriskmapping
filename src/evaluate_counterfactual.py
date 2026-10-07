@@ -12,20 +12,20 @@ from typing import Any
 import pandas as pd
 
 from src.config import SEEDS
-from src.datasets.fuel_utils import normalize_hex_id
-from src.datasets.postprocessing.counterfactual.counterfactual_base import (
+from src.counterfactual.counterfactual_base import (
     EndpointConfig,
     ScenarioConfig,
     load_counterfactual_config,
     resolve_counterfactual_paths,
     resolve_project_path,
 )
-from src.datasets.postprocessing.counterfactual.fire_size_counterfactual_transform import (
+from src.counterfactual.fire_size_counterfactual_transform import (
     FireSizeCounterfactualResult,
     materialize_fire_size_scenario,
 )
-from src.datasets.postprocessing.counterfactual.fuel_counterfactual_transform import FuelCounterfactualTransform
-from src.datasets.postprocessing.counterfactual.weather_counterfactual_transform import materialize_weather_scenario
+from src.counterfactual.fuel_counterfactual_transform import FuelCounterfactualTransform
+from src.counterfactual.weather_counterfactual_transform import materialize_weather_scenario
+from src.datasets.fuel_utils import normalize_hex_id
 from src.evaluate_hexels import load_config
 from src.evaluate_hexels import main as evaluate_hexels
 

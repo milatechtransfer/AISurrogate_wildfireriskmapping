@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.datasets.postprocessing.counterfactual import fire_size_counterfactual_transform as fs
-from src.datasets.postprocessing.counterfactual.counterfactual_base import ScenarioConfig
+from src.counterfactual import fire_size_counterfactual_transform as fs
+from src.counterfactual.counterfactual_base import ScenarioConfig
 
 
 def _scenario(**overrides: float) -> ScenarioConfig:

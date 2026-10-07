@@ -29,7 +29,7 @@ mapfile -t run_info < <(
 import sys
 from pathlib import Path
 from src.config import SEEDS
-from src.datasets.postprocessing.counterfactual.counterfactual_base import load_counterfactual_config, resolve_project_path
+from src.counterfactual.counterfactual_base import load_counterfactual_config, resolve_project_path
 
 config = load_counterfactual_config(Path(sys.argv[1]))
 seed = SEEDS[int(sys.argv[2])]
@@ -46,7 +46,7 @@ endpoints=("bp" "fi" "ros")
 
 for hex_id in "${hex_ids[@]}"; do
     if [[ "${SCENARIO_KIND}" == "fuel" ]]; then
-        python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_intervention_map \
+        python -m src.counterfactual.plotting.counterfactual_fuel_intervention_map \
             --config "${CONFIG}" \
             --experiment_dir "${experiment_dir}" \
             --scenario "${SCENARIO}" \
@@ -55,14 +55,14 @@ for hex_id in "${hex_ids[@]}"; do
     fi
 
     for endpoint in "${endpoints[@]}"; do
-        python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
+        python -m src.counterfactual.plotting.counterfactual_response_maps \
             --config "${CONFIG}" \
             --experiment_dir "${experiment_dir}" \
             --scenario "${SCENARIO}" \
             --endpoint "${endpoint}" \
             --hex_id "${hex_id}"
         if [[ "${SCENARIO_KIND}" == "fuel" ]]; then
-            python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_change_distribution \
+            python -m src.counterfactual.plotting.counterfactual_change_distribution \
                 --config "${CONFIG}" \
                 --experiment_dir "${experiment_dir}" \
                 --scenario "${SCENARIO}" \

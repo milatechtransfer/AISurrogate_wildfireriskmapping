@@ -12,15 +12,15 @@ import pandas as pd
 import rasterio
 from scipy.ndimage import distance_transform_edt
 
-from src.datasets.postprocessing.counterfactual.counterfactual_base import (
+from src.counterfactual.counterfactual_base import (
     load_counterfactual_config,
     resolve_counterfactual_paths,
 )
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_intervention_map import (
+from src.counterfactual.plotting.counterfactual_fuel_intervention_map import (
     burnable_fuel_support,
     load_evaluated_fuel_pair,
 )
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz import (
+from src.counterfactual.plotting.counterfactual_viz import (
     abs_share_at,
     build_endpoint_response,
     cumulative_abs_share,

@@ -20,6 +20,6 @@ hex_id="16"
 endpoints=("bp" "fi" "ros")
 
 for endpoint in "${endpoints[@]}"; do
-    python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
+    python -m src.counterfactual.plotting.counterfactual_response_maps \
         --config "${config}" --scenario "${scenario}" --endpoint "${endpoint}" --hex_id "${hex_id}"
 done

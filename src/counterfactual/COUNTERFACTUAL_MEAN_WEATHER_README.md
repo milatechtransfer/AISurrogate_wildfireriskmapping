@@ -28,7 +28,7 @@ configs/counterfactual/counterfactual_mean_weather.yaml
 run_files/counterfactual/counterfactual_mean_weather.sh
 run_files/counterfactual/counterfactual_mean_weather_plots.sh
 src/evaluate_counterfactual.py
-src/datasets/postprocessing/counterfactual/
+src/counterfactual/
   counterfactual_weather.py
   weather_counterfactual_transform.py
   plotting/counterfactual_response_maps.py
@@ -107,7 +107,7 @@ python -m src.evaluate_counterfactual \
 Generate one response-map set:
 
 ```bash
-python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
+python -m src.counterfactual.plotting.counterfactual_response_maps \
   --config configs/counterfactual/counterfactual_mean_weather.yaml \
   --scenario bc_mean_weather_transplant \
   --endpoint fi \
