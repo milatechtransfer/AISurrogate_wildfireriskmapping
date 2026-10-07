@@ -25,18 +25,17 @@ from matplotlib.colors import Normalize, TwoSlopeNorm
 
 from data_preparation.paths import Paths
 from data_preparation.spatial.utils import load_spatial_raster
-from src.datasets.fuel_utils import normalize_hex_id
-from src.datasets.postprocessing.counterfactual.counterfactual_base import (
+from src.counterfactual.counterfactual_base import (
     load_counterfactual_config,
     resolve_counterfactual_paths,
 )
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_intervention_map import (
+from src.counterfactual.plotting.counterfactual_fuel_intervention_map import (
     burnable_fuel_support,
     load_evaluated_fuel_pair,
     load_static_burnable_support,
     load_zone_labels_on_prediction_grid,
 )
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz import (
+from src.counterfactual.plotting.counterfactual_viz import (
     DEFAULT_ZONE_OVERLAY_ALPHA,
     DEFAULT_ZONE_OVERLAY_COLOR,
     DEFAULT_ZONE_OVERLAY_LINEWIDTH,
@@ -55,6 +54,7 @@ from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz impo
     read_prediction_extent,
     restrict_to_support,
 )
+from src.datasets.fuel_utils import normalize_hex_id
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -364,7 +364,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--endpoint", required=True, choices=sorted(ENDPOINT_SPECS), help="Prediction endpoint to render.")
     parser.add_argument("--scenario", required=True, help="Scenario name from scenario_prediction_index.csv.")
     parser.add_argument("--label", default=None, help="Human-readable scenario label for titles (defaults to the name).")
-    parser.add_argument("--config", type=Path, default=Path("configs/counterfactual_fuel.yaml"))
+    parser.add_argument("--config", type=Path, default=Path("configs/counterfactual/counterfactual_fuel_type_swap.yaml"))
     parser.add_argument("--experiment_dir", type=Path, default=None, help="Overrides save_dir from --config.")
     parser.add_argument("--hex_id", type=str, default="16")
     parser.add_argument("--downsample", type=int, default=3, help="Stride factor for map display only.")

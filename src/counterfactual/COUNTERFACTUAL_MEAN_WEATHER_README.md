@@ -24,11 +24,11 @@ The configured donor has 136,692 weather rows. Its raw mean FWI is approximately
 ## Files
 
 ```text
-configs/counterfactual_mean_weather.yaml
-run_files/counterfactual_mean_weather_iROS.sh
-run_files/counterfactual_mean_weather_plots.sh
+configs/counterfactual/counterfactual_mean_weather.yaml
+run_files/counterfactual/counterfactual_mean_weather.sh
+run_files/counterfactual/counterfactual_mean_weather_plots.sh
 src/evaluate_counterfactual.py
-src/datasets/postprocessing/counterfactual/
+src/counterfactual/
   counterfactual_weather.py
   weather_counterfactual_transform.py
   plotting/counterfactual_response_maps.py
@@ -56,17 +56,15 @@ both `hex_id` and `WeatherZone` lookup columns.
 
 ```yaml
 raw_data_dir: "/path/to/raw/hexel/data"
-save_dir: "experiments/counterfactual_mean_weather_hex16"
+save_dir: "experiments/counterfactual_mean_weather_multi_output_hex16_q3_256"
 hex_ids: ["16"]
 nonfuel_ids: [100, 101, 102, 105, 106, 110]
 
 endpoints:
   bp:
-    config_path: "configs/bp_common_input_pipeline.yaml"
-  fi:
-    config_path: "configs/fi_common_input_pipeline.yaml"
-  ros:
-    config_path: "configs/ros_common_input_pipeline.yaml"
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"   # trained checkpoint's config
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+  # fi/ros alias the same multi-output checkpoint
 
 scenarios:
   - name: "baseline"
@@ -81,12 +79,10 @@ scenarios:
       donor_hex_ids: ["17"]
 ```
 
-> Same as the fuel counterfactual config: if `bp`/`fi`/`ros` come from a single
-> multi-output checkpoint instead of three separate models, point all three endpoints at
-> that same `config_path` (see `configs/counterfactual_mean_weather_multi_output.yaml`
-> for a ready-to-run example, or `configs/counterfactual_fuel_multi_output.yaml` for the
-> equivalent fuel-scenario config); `evaluate_counterfactual.py` and the plotting scripts
-> below handle this transparently.
+> As in the fuel counterfactual config, `bp`/`fi`/`ros` all point at the same multi-output
+> checkpoint (see `configs/counterfactual/counterfactual_mean_weather.yaml` for the
+> ready-to-run config); `evaluate_counterfactual.py` and the plotting scripts below handle
+> this transparently.
 
 `mode` is required explicitly. The current workflow supports only
 `external_mean_zone_transplant`.
@@ -101,7 +97,7 @@ Run all configured endpoints:
 
 ```bash
 python -m src.evaluate_counterfactual \
-  --config configs/counterfactual_mean_weather.yaml \
+  --config configs/counterfactual/counterfactual_mean_weather.yaml \
   --endpoint bp \
   --endpoint fi \
   --endpoint ros \
@@ -111,12 +107,18 @@ python -m src.evaluate_counterfactual \
 Generate one response-map set:
 
 ```bash
-python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
-  --config configs/counterfactual_mean_weather.yaml \
+python -m src.counterfactual.plotting.counterfactual_response_maps \
+  --config configs/counterfactual/counterfactual_mean_weather.yaml \
   --scenario bc_mean_weather_transplant \
   --endpoint fi \
   --hex_id 16
 ```
 
-On SLURM, submit `run_files/counterfactual_mean_weather_iROS.sh`, followed by
-`run_files/counterfactual_mean_weather_plots.sh` with an `afterok` dependency.
+The default SLURM workflow evaluates all three configured seeds and aggregates their
+mean/std responses:
+
+```bash
+bash run_files/counterfactual/submit_all_counterfactuals.sh mean_weather
+```
+
+Use the same entry point with `--single-seed` for a seed-42-only fallback.

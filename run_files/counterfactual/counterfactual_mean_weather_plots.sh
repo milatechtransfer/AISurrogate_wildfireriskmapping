@@ -14,7 +14,7 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
 source .venv/bin/activate
 
-config="configs/counterfactual_mean_weather_multi_output.yaml"
+config="configs/counterfactual/counterfactual_mean_weather.yaml"
 hex_id="16"
 scenarios=(
     "bc_mean_weather_transplant"
@@ -23,7 +23,7 @@ endpoints=("bp" "fi" "ros")
 
 for scenario in "${scenarios[@]}"; do
     for endpoint in "${endpoints[@]}"; do
-        python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
+        python -m src.counterfactual.plotting.counterfactual_response_maps \
             --config "${config}" --scenario "${scenario}" --endpoint "${endpoint}" --hex_id "${hex_id}"
     done
 done

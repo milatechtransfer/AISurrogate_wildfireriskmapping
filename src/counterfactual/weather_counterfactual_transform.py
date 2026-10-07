@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.counterfactual.counterfactual_base import ScenarioConfig
+from src.counterfactual.counterfactual_weather import apply_weather_edit, load_all_raw_weather_with_hex_ids
 from src.datasets.fuel_utils import normalize_hex_id
-from src.datasets.postprocessing.counterfactual.counterfactual_base import ScenarioConfig
-from src.datasets.postprocessing.counterfactual.counterfactual_weather import apply_weather_edit, load_all_raw_weather_with_hex_ids
 
 WEATHER_INTERVENTION_CSV_NAME = "weather_table_processed.csv"
 

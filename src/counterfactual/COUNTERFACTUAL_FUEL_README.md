@@ -1,0 +1,243 @@
+# Counterfactual Fuel Intervention
+
+Evaluate how model predictions (BP, FI, ROS) respond to hypothetical edits of the fuel
+map — e.g. "what if this non-fuel barrier were burnable?" or "what if fuel X were
+replaced by non-fuel?" — for a fixed set of hexels, using already-trained checkpoints.
+
+## Pipeline
+
+```
+configs/counterfactual/counterfactual_fuel_type_swap.yaml
+        │
+        ▼
+src/evaluate_counterfactual.py            # 1. Evaluate baseline + selected scenario(s), per endpoint
+        │
+        ▼
+src/counterfactual/plotting/
+  counterfactual_fuel_intervention_map.py # 2. Plot the fuel edit itself (original vs. replacement fuel)
+  counterfactual_response_maps.py         # 3. Plot GT/baseline/scenario/Δ prediction maps + hotspot patch zoom
+  counterfactual_local_zoom_panels.py     #    Fuel-specific zoom on selected evaluated-edit neighborhoods
+  counterfactual_change_distribution.py   # 4. Summarize prediction-change attribution and its decay with distance
+```
+
+1. **Evaluate** (`evaluate_counterfactual.py`): runs the `baseline` scenario (unmodified
+   fuel) and each selected `fuel` scenario, for each selected endpoint. Fuel scenarios
+   apply a `FuelCounterfactualTransform` (see `fuel_counterfactual_transform.py` in this folder) that
+   edits the fuel channel of each patch before it reaches the model. Writes predicted
+   hexel rasters under `<save_dir>/predictions/<scenario>/<endpoint>/`, an index mapping
+   `(scenario, endpoint) -> prediction_dir` (`scenario_prediction_index.csv`), evaluation
+   metrics (`counterfactual_metrics.csv`), and fuel-edit summaries (`fuel_edit_summary.csv`,
+   `fuel_component_replacements.csv`). Fuel scenarios also write the exact baseline and
+   edited fuel rasters used by inference under each prediction directory's
+   `fuel_intervention/` subdirectory.
+2. **Fuel edit map** (`counterfactual_fuel_intervention_map.py`): for one hexel/scenario/
+   endpoint, renders the persisted evaluated fuel intervention (original grouped fuel vs.
+   replacement fuel groups), plus a per-hexel pixel-count summary CSV.
+3. **Response maps** (`counterfactual_response_maps.py`): generic, endpoint-parameterized
+   (`--endpoint {bp,fi,ros}`) ground-truth/baseline/scenario/Δ maps for one hexel/scenario
+   pair, plus zoom-ins on the highest-Δ patches and per-pixel Δ histogram/concentration
+   plots. For `fuel` scenarios it uses the persisted baseline/scenario fuel support:
+   non-burnable pixels contribute zero, so newly burnable pixels contribute the scenario
+   response and newly non-burnable pixels contribute the negative baseline response.
+   Reusable as-is by any future counterfactual scenario family — not just fuel edits.
+4. **Local zoom panels** (`counterfactual_local_zoom_panels.py`): fuel-intervention-specific
+   companion to the response maps. Instead of generic high-|Δ| hotspots, it selects
+   fixed-size windows that contain the persisted evaluated fuel edits and a strong
+   direction-aligned hazard/FI response. It renders the edit mask, edited fuel groups, and
+   baseline/scenario/Δ FI and hazard (BP × FI) maps for each selected window, plus a
+   per-window summary CSV. This supports both non-fuel-to-burnable and
+   burnable-to-non-fuel scenarios without reconstructing the intervention.
+5. **Change distribution** (`counterfactual_change_distribution.py`): computes per-hexel Δ
+   magnitude/sign/concentration statistics — including edited vs. off-edit attribution
+   and top-fraction abs-change shares — into a summary CSV, and plots/tabulates mean Δ as a
+   function of distance from the edited fuel pixels.
+
+## Configuration (`configs/counterfactual/counterfactual_fuel_type_swap.yaml`)
+
+```yaml
+raw_data_dir: "/path/to/raw/hexel/data"
+save_dir: "experiments/counterfactual_fuel_multi_output_hex16_q3_256"
+hex_ids: ["16"]
+
+endpoints:
+  bp:
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"   # trained checkpoint's config
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+  # fi/ros alias the same multi-output checkpoint
+
+scenarios:
+  - name: "baseline"
+    kind: "baseline"
+    description: "Unmodified prepared fuel inputs."
+
+  - name: "c2_to_mixedwood_fixed"
+    kind: "fuel"
+    description: "Replace every C-2 boreal spruce pixel with a fixed Boreal Mixedwood (M-1/M-2) fuel type."
+    params:
+      mode: "burnable_to_burnable_fixed"
+      nonfuel_ids: [100, 101, 102, 105, 106, 110]
+      source_fuel_ids: [2]
+      replacement_fuel_id: 620
+```
+
+- `endpoints`: `config_path` points at the trained model's training/evaluation config
+  (used to resolve its checkpoint, data root, and test split). All current configs use one
+  multi-output checkpoint that jointly predicts `bp`/`fi`/`ros`, so the `bp`, `fi`, and
+  `ros` endpoints all point at that **same** `config_path`. `evaluate_counterfactual.py`
+  detects that the endpoints resolve to the same config + data root and runs inference
+  only once per scenario, reusing the resulting prediction directory for every alias
+  endpoint. Predicted rasters for a multi-output model are written with a
+  target-name suffix (`hexel_XX_bp_predicted.tif`, `hexel_XX_fi_predicted.tif`, ...)
+  into that shared directory, and the plotting scripts below resolve the correct
+  raster automatically from the `--endpoint` name — no other config or CLI changes are
+  needed.
+- `scenarios`: exactly one scenario named `baseline` with `kind: "baseline"`, plus any
+  number of `fuel` scenarios. Each
+  `fuel` scenario's `params` are passed to `apply_fuel_edit` (`counterfactual_fuel.py`),
+  keyed by `mode`:
+
+  | `mode` | Direction | Required params | Behaviour |
+  |---|---|---|---|
+  | `nonfuel_to_burnable_local_adjacent_modal` | barrier removal | `nonfuel_ids` | Each connected non-fuel component is replaced by the modal burnable fuel group among its adjacent pixels. |
+  | `nonfuel_to_burnable_adjacent_modal` | barrier removal | `nonfuel_ids` | Same as above, computed globally instead of per connected component. |
+  | `nonfuel_to_burnable_fixed` | barrier removal | `nonfuel_ids`, `replacement_fuel_id` | Every non-fuel pixel is replaced by a single fixed fuel id. |
+  | `burnable_to_nonfuel` | barrier insertion | `nonfuel_ids`, `insertion_mask` | Replaces burnable pixels under a caller-supplied mask with non-fuel. |
+  | `burnable_components_to_nonfuel_random` | barrier insertion | `nonfuel_ids`, `replacement_nonfuel_id`, `target_burnable_area_fraction`, `seed` | Randomly samples whole burnable connected components (weighted by area) until their combined area reaches `target_burnable_area_fraction` of total burnable area, then replaces them with a fixed non-fuel id. |
+  | `burnable_to_burnable_fixed` | fuel-type substitution | `nonfuel_ids`, `replacement_fuel_id` | Replaces burnable pixels with one fixed fuel ID. When `source_fuel_ids` is provided, only those IDs are replaced; when it is omitted, all burnable pixels are targeted. An empty list is rejected as a likely mistake. Combine with `fire_polygons` to restrict the edit spatially. |
+
+  Adding a new scenario `mode` means adding a branch in `apply_fuel_edit` and a matching
+  entry in this table.
+
+### Restricting an edit to fire perimeters (`fire_polygons`)
+
+Any `fuel` scenario may add a `fire_polygons` block. It rasterizes BurnP3+ fire
+perimeters onto the model grid and passes the result as the scenario's `edit_mask`, so
+the fuel change applies only inside the burned areas:
+
+```yaml
+params:
+  mode: "burnable_to_burnable_fixed"
+  nonfuel_ids: [100, 101, 102, 105, 106, 110]
+  replacement_fuel_id: 13
+  fire_polygons:
+    path: "/path/to/burn-perimeters.gpkg"   # may contain "{hex_id}"
+    layer: "daily_burn_perimeters"
+    final_perimeter_only: true
+    buffer_m: 0
+    # select:                     # optional, at most one key; omit to pool every fire
+    #   iteration: 2              #   one simulated season
+    #   iteration_range: [1, 10]  #   inclusive span of simulated seasons
+    #   fire_ids: [[1, 4], [2, 9]]  #   explicit [iteration, fire_id] pairs
+    #   top_k_by_area: 20        #   the k largest final footprints
+```
+
+Two properties of the perimeter files are handled in `fire_polygon_mask.py` and are easy
+to get wrong when working with them directly:
+
+- **Perimeters are daily and cumulative.** A fire has one row per burn day, each
+  containing every earlier day. `final_perimeter_only: true` (the default) reduces each
+  `(Iteration, FireID)` to its maximum `BurnDay`, which is the fire's final footprint.
+  Set it to `false` to keep every daily step.
+- **They are written in the simulation's own projection**, not the model grid's. They are
+  reprojected onto the reference raster's CRS automatically; a file whose perimeters do
+  not intersect the hexel raises rather than silently producing an empty mask.
+- **Already-final perimeter layers are supported.** For a layer such as
+  `final_burn_perimeters` with one row per fire and no `BurnDay` column, set
+  `final_perimeter_only: false`; no additional daily-perimeter reduction is needed.
+
+`select` is optional. `iteration`, `iteration_range` and `fire_ids` stay stable if the perimeter file is
+regenerated; `top_k_by_area` re-resolves against whatever is in the file. Pooling all
+iterations represents accumulated fire scars rather than a single season, since BurnP3+
+fires never overlap within an iteration.
+
+Each run writes `fuel_intervention/hex<ID>_fire_polygon_mask_summary.csv` with one row
+per selected fire (`iteration`, `fire_id`, `final_area_ha`, `buffered_area_ha`,
+`mask_pixels`, `fully_within_grid`), so coverage and reprojection can be checked without
+re-deriving them. Comparing `final_area_ha` against `mask_pixels` × the pixel area is a
+cheap confirmation that the reprojection landed correctly, and `fully_within_grid`
+flags fires clipped by the hexel boundary.
+
+The persisted `hexel_<ID>_scenario_fuel.tif` uses the source grid, categorical
+`int16` fuel IDs, and nodata `-32768`, so it can be supplied directly as the
+BurnP3+ FBP landscape raster for a matched validation run.
+
+The shipped example is `configs/counterfactual/counterfactual_fuel_burn_scars.yaml`,
+which converts every burnable pixel inside the perimeters of simulated season 357
+(`iteration: 357`; 84 fires, ~1.45% of hex16 burnable area) to fuel 13 (the D-1/D-2
+aspen pair, blended per hexel by its season weights). Fuel 12 (pure D-2, green aspen) is
+deliberately **not** used as a replacement: its FBP curves are identically zero, so the
+model cannot distinguish it from a non-fuel spread barrier. Season 357 is the most
+extreme simulated season by burned area, so the edit represents the landscape after one
+severe fire season, matching how NRCan updates BurnP3+ fuels annually. Pooled selections
+were rejected after NRCan review as forcing too much fuel change: all 500 seasons (5,681
+fires, ~33% of burnable area), 20 seasons (265 fires, ~3.2%) and 10 seasons (165 fires,
+~2.3%).
+
+## Running
+
+By default, `evaluate_counterfactual.py` runs every endpoint and scenario in the config.
+Pass `--endpoint`/`--scenario` (repeatable) to restrict to a subset:
+
+```bash
+# Evaluate everything in the config
+python -m src.evaluate_counterfactual --config configs/counterfactual/counterfactual_fuel_type_swap.yaml --overwrite
+
+# Evaluate only the bp endpoint for one scenario (baseline is always included)
+python -m src.evaluate_counterfactual --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
+    --endpoint bp --scenario c2_to_mixedwood_fixed
+
+# Multiple endpoints/scenarios: repeat the flag
+python -m src.evaluate_counterfactual --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
+    --endpoint bp --endpoint fi --scenario c2_to_mixedwood_fixed
+```
+
+Plotting scripts operate on one hexel/scenario/endpoint at a time and read paths from the
+counterfactual config plus the `scenario_prediction_index.csv` written by evaluation.
+`--experiment_dir` and `--raw_data_dir` are optional overrides:
+
+```bash
+# Plot the fuel intervention map
+python -m src.counterfactual.plotting.counterfactual_fuel_intervention_map \
+    --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
+    --scenario c2_to_mixedwood_fixed --endpoint bp --hex_id 16
+
+# Plot GT/baseline/scenario/Δ response maps + patch zoom for one endpoint
+python -m src.counterfactual.plotting.counterfactual_response_maps \
+    --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
+    --scenario c2_to_mixedwood_fixed --endpoint fi --hex_id 16
+
+# Plot local zoom panels on selected evaluated-edit neighborhoods (uses bp + fi).
+# Requires a scenario that adds or removes burnable support (not burnable-to-burnable swaps).
+python -m src.counterfactual.plotting.counterfactual_local_zoom_panels \
+    --config <config-with-support-changing-scenario> \
+    --scenario <scenario> --hex_id 16
+
+# Summarize the prediction change distribution
+python -m src.counterfactual.plotting.counterfactual_change_distribution \
+    --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
+    --scenario c2_to_mixedwood_fixed --endpoint bp
+```
+
+Run `--help` on any script for the full set of options (e.g. `--zone_overlay` to draw
+firezone boundaries, `--downsample` for lower-resolution map rendering).
+
+The two shipped fuel experiments differ in how the edited pixels are selected:
+
+- `fuel_type_swap` (`counterfactual_fuel_type_swap.yaml`): replaces every
+  C-2 pixel (`source_fuel_ids: [2]`) with M-1/M-2 (620), wherever it occurs.
+- `fuel_burn_scars` (`counterfactual_fuel_burn_scars.yaml`): replaces every
+  burnable pixel inside the season-357 BurnP3+ fire perimeters (`fire_polygons`) with
+  D-1/D-2 (13), regardless of its original fuel.
+
+The default SLURM workflow evaluates all three configured seeds and aggregates their
+mean/std responses:
+
+```bash
+bash run_files/counterfactual/submit_all_counterfactuals.sh fuel_type_swap fuel_burn_scars
+```
+
+For a seed-42-only fallback, use the same entry point:
+
+```bash
+bash run_files/counterfactual/submit_all_counterfactuals.sh --single-seed fuel_type_swap fuel_burn_scars
+```

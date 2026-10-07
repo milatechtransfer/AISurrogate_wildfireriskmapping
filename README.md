@@ -153,7 +153,7 @@ For SLURM/cluster instructions to run hazard evaluation (including multi-seed an
 
 ## Counterfactual analysis
 
-Refer to the READMEs under [`src/datasets/postprocessing/counterfactual`](src/datasets/postprocessing/counterfactual).
+Refer to the READMEs under [`src/counterfactual`](src/counterfactual).
 
 ## 🤖 Training
 

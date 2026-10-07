@@ -15,12 +15,12 @@ from matplotlib.patches import Patch
 from data_preparation.paths import Paths
 from data_preparation.spatial.fuel import load_fuel_grid
 from data_preparation.spatial.utils import FUEL_GROUP_MAP, load_spatial_raster
-from src.datasets.postprocessing.counterfactual.counterfactual_base import (
+from src.counterfactual.counterfactual_base import (
     load_counterfactual_config,
     resolve_counterfactual_paths,
 )
-from src.datasets.postprocessing.counterfactual.fuel_counterfactual_transform import fuel_intervention_raster_path
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz import (
+from src.counterfactual.fuel_counterfactual_transform import fuel_intervention_raster_path
+from src.counterfactual.plotting.counterfactual_viz import (
     DEFAULT_ZONE_OVERLAY_ALPHA,
     DEFAULT_ZONE_OVERLAY_COLOR,
     DEFAULT_ZONE_OVERLAY_LINEWIDTH,
@@ -232,8 +232,14 @@ def load_evaluated_fuel_pair(
     scenario_dir = prediction_dirs.get((scenario, endpoint))
     if scenario_dir is None:
         raise KeyError(f"Missing prediction directory for scenario={scenario!r}, endpoint={endpoint!r}.")
-    baseline_fuel = read_prediction(fuel_intervention_raster_path(scenario_dir, hex_id, "baseline"))
-    scenario_fuel = read_prediction(fuel_intervention_raster_path(scenario_dir, hex_id, "scenario"))
+    baseline_fuel = np.ma.asarray(
+        read_prediction(fuel_intervention_raster_path(scenario_dir, hex_id, "baseline")),
+        dtype=np.float32,
+    )
+    scenario_fuel = np.ma.asarray(
+        read_prediction(fuel_intervention_raster_path(scenario_dir, hex_id, "scenario")),
+        dtype=np.float32,
+    )
     baseline_values = np.asarray(baseline_fuel.filled(np.nan), dtype=np.float32)
     scenario_values = np.asarray(scenario_fuel.filled(np.nan), dtype=np.float32)
     if baseline_values.shape != scenario_values.shape:
@@ -356,7 +362,6 @@ def plot_intervention_map(
     replacement_values = replacement_map[np.isfinite(replacement_map)].astype(np.int32)
     replacement_categories = sorted(map(int, np.unique(replacement_values))) if replacement_values.size else []
 
-    baseline_codes = _categorical_codes(baseline, baseline_categories)
     burnable_codes = _categorical_codes(np.where(original_nonfuel, np.nan, baseline), baseline_categories)
     nonfuel_mask = np.ma.masked_where(~original_nonfuel, np.ones(baseline.shape, dtype=np.float32))
     replacement_codes = _categorical_codes(replacement_map, replacement_categories)
@@ -463,7 +468,7 @@ def write_fuel_intervention_map(
     zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
     zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
     out_dir: Path | None = None,
-    config_path: Path = Path("configs/counterfactual_fuel.yaml"),
+    config_path: Path = Path("configs/counterfactual/counterfactual_fuel_type_swap.yaml"),
 ) -> tuple[Path, Path]:
     """Render a fuel intervention map for one hexel/scenario/endpoint and write its summary CSV.
 
@@ -530,7 +535,7 @@ def write_fuel_intervention_map(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plot an evaluated fuel intervention.")
-    parser.add_argument("--config", type=Path, default=Path("configs/counterfactual_fuel.yaml"))
+    parser.add_argument("--config", type=Path, default=Path("configs/counterfactual/counterfactual_fuel_type_swap.yaml"))
     parser.add_argument("--experiment_dir", type=Path, default=None, help="Overrides save_dir from --config.")
     parser.add_argument("--raw_data_dir", type=Path, default=None, help="Overrides raw_data_dir from --config.")
     parser.add_argument("--scenario", default=SCENARIO)

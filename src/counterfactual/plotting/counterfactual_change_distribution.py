@@ -12,15 +12,15 @@ import pandas as pd
 import rasterio
 from scipy.ndimage import distance_transform_edt
 
-from src.datasets.postprocessing.counterfactual.counterfactual_base import (
+from src.counterfactual.counterfactual_base import (
     load_counterfactual_config,
     resolve_counterfactual_paths,
 )
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_intervention_map import (
+from src.counterfactual.plotting.counterfactual_fuel_intervention_map import (
     burnable_fuel_support,
     load_evaluated_fuel_pair,
 )
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz import (
+from src.counterfactual.plotting.counterfactual_viz import (
     abs_share_at,
     build_endpoint_response,
     cumulative_abs_share,
@@ -331,7 +331,7 @@ def write_change_distribution(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=Path("configs/counterfactual_fuel.yaml"))
+    parser.add_argument("--config", type=Path, default=Path("configs/counterfactual/counterfactual_fuel_type_swap.yaml"))
     parser.add_argument("--experiment_dir", type=Path, default=None, help="Overrides save_dir from --config.")
     parser.add_argument("--scenario", default=SCENARIO)
     parser.add_argument("--endpoint", required=True)
