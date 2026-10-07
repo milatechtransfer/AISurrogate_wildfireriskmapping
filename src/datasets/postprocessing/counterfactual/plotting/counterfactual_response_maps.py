@@ -364,7 +364,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--endpoint", required=True, choices=sorted(ENDPOINT_SPECS), help="Prediction endpoint to render.")
     parser.add_argument("--scenario", required=True, help="Scenario name from scenario_prediction_index.csv.")
     parser.add_argument("--label", default=None, help="Human-readable scenario label for titles (defaults to the name).")
-    parser.add_argument("--config", type=Path, default=Path("configs/counterfactual_fuel.yaml"))
+    parser.add_argument("--config", type=Path, default=Path("configs/counterfactual/counterfactual_fuel_type_swap.yaml"))
     parser.add_argument("--experiment_dir", type=Path, default=None, help="Overrides save_dir from --config.")
     parser.add_argument("--hex_id", type=str, default="16")
     parser.add_argument("--downsample", type=int, default=3, help="Stride factor for map display only.")

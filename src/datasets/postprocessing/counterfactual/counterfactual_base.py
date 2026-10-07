@@ -160,7 +160,7 @@ def _parse_scenarios(raw_scenarios: object) -> list[ScenarioConfig]:
 
 
 def load_counterfactual_config(path: Path) -> CounterfactualConfig:
-    """Load and validate a counterfactual run config (e.g. `configs/counterfactual_fuel.yaml`)."""
+    """Load and validate a counterfactual run config (e.g. `configs/counterfactual/counterfactual_fuel_type_swap.yaml`)."""
     with path.open() as handle:
         raw = yaml.safe_load(handle) or {}
     if not isinstance(raw, dict):

@@ -33,10 +33,10 @@ fi
 
 # name : config : scenario : scenario kind
 EXPERIMENTS=(
-    "fuel_type_swap:configs/counterfactual/counterfactual_fuel_type_swap_multi_output.yaml:c2_to_mixedwood_fixed:fuel"
-    "fuel_burn_scars:configs/counterfactual/counterfactual_fuel_burn_scars_multi_output.yaml:burn_scars_season_357_to_aspen:fuel"
-    "mean_weather:configs/counterfactual/counterfactual_mean_weather_multi_output.yaml:bc_mean_weather_transplant:weather"
-    "fire_size:configs/counterfactual/counterfactual_fire_size_spread_days_multi_output.yaml:spread_days_q50_plus_0p7_q90_plus_5_beta2:fire_size"
+    "fuel_type_swap:configs/counterfactual/counterfactual_fuel_type_swap.yaml:c2_to_mixedwood_fixed:fuel"
+    "fuel_burn_scars:configs/counterfactual/counterfactual_fuel_burn_scars.yaml:burn_scars_season_357_to_aspen:fuel"
+    "mean_weather:configs/counterfactual/counterfactual_mean_weather.yaml:bc_mean_weather_transplant:weather"
+    "fire_size:configs/counterfactual/counterfactual_fire_size_spread_days.yaml:spread_days_q50_plus_0p7_q90_plus_5_beta2:fire_size"
 )
 
 selected=()

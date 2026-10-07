@@ -468,7 +468,7 @@ def write_fuel_intervention_map(
     zone_overlay_linewidth: float = DEFAULT_ZONE_OVERLAY_LINEWIDTH,
     zone_overlay_alpha: float = DEFAULT_ZONE_OVERLAY_ALPHA,
     out_dir: Path | None = None,
-    config_path: Path = Path("configs/counterfactual_fuel.yaml"),
+    config_path: Path = Path("configs/counterfactual/counterfactual_fuel_type_swap.yaml"),
 ) -> tuple[Path, Path]:
     """Render a fuel intervention map for one hexel/scenario/endpoint and write its summary CSV.
 
@@ -535,7 +535,7 @@ def write_fuel_intervention_map(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plot an evaluated fuel intervention.")
-    parser.add_argument("--config", type=Path, default=Path("configs/counterfactual_fuel.yaml"))
+    parser.add_argument("--config", type=Path, default=Path("configs/counterfactual/counterfactual_fuel_type_swap.yaml"))
     parser.add_argument("--experiment_dir", type=Path, default=None, help="Overrides save_dir from --config.")
     parser.add_argument("--raw_data_dir", type=Path, default=None, help="Overrides raw_data_dir from --config.")
     parser.add_argument("--scenario", default=SCENARIO)

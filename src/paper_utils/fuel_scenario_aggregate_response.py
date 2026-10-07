@@ -35,7 +35,7 @@ Used to generate: Figure 3 and Table 4.
 Usage:
     python -m src.paper_utils.fuel_scenario_aggregate_response \
         --experiment_dir final_results/counterfactual_fuel_multi_output_hex16 \
-        --config configs/counterfactual/counterfactual_fuel_type_swap_multi_output.yaml \
+        --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
         --scenario c2_to_mixedwood_fixed \
         --hex_ids 16 \
         --out_path final_results/counterfactual_fuel_multi_output_hex16/c2_to_mixedwood_fixed.png
@@ -285,7 +285,7 @@ def parse_args() -> argparse.Namespace:
         "--config",
         type=Path,
         default=None,
-        help="Optional counterfactual config (e.g. configs/counterfactual/counterfactual_fuel_type_swap_multi_output.yaml) to look up nonfuel_ids/description for --scenario.",
+        help="Optional counterfactual config (e.g. configs/counterfactual/counterfactual_fuel_type_swap.yaml) to look up nonfuel_ids/description for --scenario.",
     )
     parser.add_argument(
         "--nonfuel_ids",

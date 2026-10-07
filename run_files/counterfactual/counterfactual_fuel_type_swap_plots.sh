@@ -14,7 +14,7 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
 source .venv/bin/activate
 
-config="configs/counterfactual/counterfactual_fuel_type_swap_multi_output.yaml"
+config="configs/counterfactual/counterfactual_fuel_type_swap.yaml"
 hex_id="16"
 scenarios=(
     "c2_to_mixedwood_fixed"

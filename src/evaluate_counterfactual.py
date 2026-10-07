@@ -447,7 +447,7 @@ def _parse_name_set(values: list[str] | None) -> set[str] | None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=Path("configs/counterfactual_fuel.yaml"))
+    parser.add_argument("--config", type=Path, default=Path("configs/counterfactual/counterfactual_fuel_type_swap.yaml"))
     parser.add_argument("--endpoint", action="append", dest="endpoints")
     parser.add_argument("--scenario", action="append", dest="scenarios")
     parser.add_argument("--overwrite", action="store_true")

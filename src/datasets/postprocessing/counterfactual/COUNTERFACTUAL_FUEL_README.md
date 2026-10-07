@@ -7,7 +7,7 @@ replaced by non-fuel?" — for a fixed set of hexels, using already-trained chec
 ## Pipeline
 
 ```
-configs/counterfactual_fuel.yaml
+configs/counterfactual/counterfactual_fuel_type_swap.yaml
         │
         ▼
 src/evaluate_counterfactual.py            # 1. Evaluate baseline + selected scenario(s), per endpoint
@@ -52,48 +52,45 @@ src/datasets/postprocessing/counterfactual/plotting/
    and top-fraction abs-change shares — into a summary CSV, and plots/tabulates mean Δ as a
    function of distance from the edited fuel pixels.
 
-## Configuration (`configs/counterfactual_fuel.yaml`)
+## Configuration (`configs/counterfactual/counterfactual_fuel_type_swap.yaml`)
 
 ```yaml
 raw_data_dir: "/path/to/raw/hexel/data"
-save_dir: "experiments/counterfactual_fuel_hex16"
+save_dir: "experiments/counterfactual_fuel_multi_output_hex16_q3_256"
 hex_ids: ["16"]
 
 endpoints:
   bp:
-    config_path: "configs/bp_common_input_pipeline.yaml"   # trained checkpoint's config
-  fi:
-    config_path: "configs/fi_common_input_pipeline.yaml"
-  ros:
-    config_path: "configs/ros_common_input_pipeline.yaml"
+    config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"   # trained checkpoint's config
+    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+  # fi/ros alias the same multi-output checkpoint
 
 scenarios:
   - name: "baseline"
     kind: "baseline"
     description: "Unmodified prepared fuel inputs."
 
-  - name: "remove_barriers_adjacent_modal"
+  - name: "c2_to_mixedwood_fixed"
     kind: "fuel"
-    description: "Replace each connected non-fuel component with its modal adjacent burnable fuel group."
+    description: "Replace every C-2 boreal spruce pixel with a fixed Boreal Mixedwood (M-1/M-2) fuel type."
     params:
-      mode: "nonfuel_to_burnable_local_adjacent_modal"
+      mode: "burnable_to_burnable_fixed"
       nonfuel_ids: [100, 101, 102, 105, 106, 110]
+      source_fuel_ids: [2]
+      replacement_fuel_id: 620
 ```
 
-- `endpoints`: one entry per trained model to evaluate; `config_path` points at that
-  model's own training/evaluation config (used to resolve its checkpoint, data root, and
-  test split).
-  - **Single multi-output model**: if one checkpoint jointly predicts `bp`/`fi`/`ros`
-    instead of training three separate single-target models, list `bp`, `fi`, and `ros`
-    endpoints all pointing at that **same** `config_path` (see
-    `configs/counterfactual/counterfactual_fuel_type_swap_multi_output.yaml`). `evaluate_counterfactual.py`
-    detects that the endpoints resolve to the same config + data root and runs inference
-    only once per scenario, reusing the resulting prediction directory for every alias
-    endpoint. Predicted rasters for a multi-output model are written with a
-    target-name suffix (`hexel_XX_bp_predicted.tif`, `hexel_XX_fi_predicted.tif`, ...)
-    into that shared directory, and the plotting scripts below resolve the correct
-    raster automatically from the `--endpoint` name — no other config or CLI changes are
-    needed.
+- `endpoints`: `config_path` points at the trained model's training/evaluation config
+  (used to resolve its checkpoint, data root, and test split). All current configs use one
+  multi-output checkpoint that jointly predicts `bp`/`fi`/`ros`, so the `bp`, `fi`, and
+  `ros` endpoints all point at that **same** `config_path`. `evaluate_counterfactual.py`
+  detects that the endpoints resolve to the same config + data root and runs inference
+  only once per scenario, reusing the resulting prediction directory for every alias
+  endpoint. Predicted rasters for a multi-output model are written with a
+  target-name suffix (`hexel_XX_bp_predicted.tif`, `hexel_XX_fi_predicted.tif`, ...)
+  into that shared directory, and the plotting scripts below resolve the correct
+  raster automatically from the `--endpoint` name — no other config or CLI changes are
+  needed.
 - `scenarios`: exactly one scenario named `baseline` with `kind: "baseline"`, plus any
   number of `fuel` scenarios. Each
   `fuel` scenario's `params` are passed to `apply_fuel_edit` (`counterfactual_fuel.py`),
@@ -164,7 +161,7 @@ The persisted `hexel_<ID>_scenario_fuel.tif` uses the source grid, categorical
 `int16` fuel IDs, and nodata `-32768`, so it can be supplied directly as the
 BurnP3+ FBP landscape raster for a matched validation run.
 
-The shipped example is `configs/counterfactual/counterfactual_fuel_burn_scars_multi_output.yaml`,
+The shipped example is `configs/counterfactual/counterfactual_fuel_burn_scars.yaml`,
 which converts every burnable pixel inside the perimeters of simulated season 357
 (`iteration: 357`; 84 fires, ~1.45% of hex16 burnable area) to fuel 13 (the D-1/D-2
 aspen pair, blended per hexel by its season weights). Fuel 12 (pure D-2, green aspen) is
@@ -183,15 +180,15 @@ Pass `--endpoint`/`--scenario` (repeatable) to restrict to a subset:
 
 ```bash
 # Evaluate everything in the config
-python -m src.evaluate_counterfactual --config configs/counterfactual_fuel.yaml --overwrite
+python -m src.evaluate_counterfactual --config configs/counterfactual/counterfactual_fuel_type_swap.yaml --overwrite
 
 # Evaluate only the bp endpoint for one scenario (baseline is always included)
-python -m src.evaluate_counterfactual --config configs/counterfactual_fuel.yaml \
-    --endpoint bp --scenario remove_barriers_adjacent_modal
+python -m src.evaluate_counterfactual --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
+    --endpoint bp --scenario c2_to_mixedwood_fixed
 
 # Multiple endpoints/scenarios: repeat the flag
-python -m src.evaluate_counterfactual --config configs/counterfactual_fuel.yaml \
-    --endpoint bp --endpoint fi --scenario remove_barriers_adjacent_modal --scenario remove_barriers_fixed_c2
+python -m src.evaluate_counterfactual --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
+    --endpoint bp --endpoint fi --scenario c2_to_mixedwood_fixed
 ```
 
 Plotting scripts operate on one hexel/scenario/endpoint at a time and read paths from the
@@ -201,23 +198,24 @@ counterfactual config plus the `scenario_prediction_index.csv` written by evalua
 ```bash
 # Plot the fuel intervention map
 python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_intervention_map \
-    --config configs/counterfactual_fuel.yaml \
-    --scenario remove_barriers_adjacent_modal --endpoint bp --hex_id 16
+    --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
+    --scenario c2_to_mixedwood_fixed --endpoint bp --hex_id 16
 
 # Plot GT/baseline/scenario/Δ response maps + patch zoom for one endpoint
 python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps \
-    --config configs/counterfactual_fuel.yaml \
-    --scenario remove_barriers_adjacent_modal --endpoint fi --hex_id 16
+    --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
+    --scenario c2_to_mixedwood_fixed --endpoint fi --hex_id 16
 
-# Plot local zoom panels on selected evaluated-edit neighborhoods (uses bp + fi)
+# Plot local zoom panels on selected evaluated-edit neighborhoods (uses bp + fi).
+# Requires a scenario that adds or removes burnable support (not burnable-to-burnable swaps).
 python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_local_zoom_panels \
-    --config configs/counterfactual_fuel.yaml \
-    --scenario remove_barriers_adjacent_modal --hex_id 16
+    --config <config-with-support-changing-scenario> \
+    --scenario <scenario> --hex_id 16
 
 # Summarize the prediction change distribution
 python -m src.datasets.postprocessing.counterfactual.plotting.counterfactual_change_distribution \
-    --config configs/counterfactual_fuel.yaml \
-    --scenario remove_barriers_adjacent_modal --endpoint bp
+    --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
+    --scenario c2_to_mixedwood_fixed --endpoint bp
 ```
 
 Run `--help` on any script for the full set of options (e.g. `--zone_overlay` to draw
@@ -225,9 +223,9 @@ firezone boundaries, `--downsample` for lower-resolution map rendering).
 
 The two shipped fuel experiments differ in how the edited pixels are selected:
 
-- `fuel_type_swap` (`counterfactual_fuel_type_swap_multi_output.yaml`): replaces every
+- `fuel_type_swap` (`counterfactual_fuel_type_swap.yaml`): replaces every
   C-2 pixel (`source_fuel_ids: [2]`) with M-1/M-2 (620), wherever it occurs.
-- `fuel_burn_scars` (`counterfactual_fuel_burn_scars_multi_output.yaml`): replaces every
+- `fuel_burn_scars` (`counterfactual_fuel_burn_scars.yaml`): replaces every
   burnable pixel inside the season-357 BurnP3+ fire perimeters (`fire_polygons`) with
   D-1/D-2 (13), regardless of its original fuel.
 

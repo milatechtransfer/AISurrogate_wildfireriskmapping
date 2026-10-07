@@ -12,22 +12,22 @@ RUN_DIR = Path("run_files/counterfactual")
 SHARED_Q3_CHECKPOINT_DIR = Path("/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3")
 RETAINED_EXPERIMENTS = {
     "fuel_type_swap": (
-        Path("configs/counterfactual/counterfactual_fuel_type_swap_multi_output.yaml"),
+        Path("configs/counterfactual/counterfactual_fuel_type_swap.yaml"),
         "c2_to_mixedwood_fixed",
         "fuel",
     ),
     "fuel_burn_scars": (
-        Path("configs/counterfactual/counterfactual_fuel_burn_scars_multi_output.yaml"),
+        Path("configs/counterfactual/counterfactual_fuel_burn_scars.yaml"),
         "burn_scars_season_357_to_aspen",
         "fuel",
     ),
     "mean_weather": (
-        Path("configs/counterfactual/counterfactual_mean_weather_multi_output.yaml"),
+        Path("configs/counterfactual/counterfactual_mean_weather.yaml"),
         "bc_mean_weather_transplant",
         "weather",
     ),
     "fire_size": (
-        Path("configs/counterfactual/counterfactual_fire_size_spread_days_multi_output.yaml"),
+        Path("configs/counterfactual/counterfactual_fire_size_spread_days.yaml"),
         "spread_days_q50_plus_0p7_q90_plus_5_beta2",
         "fire_size",
     ),

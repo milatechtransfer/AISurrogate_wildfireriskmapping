@@ -14,7 +14,7 @@ cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p logs
 source .venv/bin/activate
 
-config="configs/counterfactual/counterfactual_fuel_burn_scars_multi_output.yaml"
+config="configs/counterfactual/counterfactual_fuel_burn_scars.yaml"
 hex_id="16"
 scenarios=(
     "burn_scars_season_357_to_aspen"

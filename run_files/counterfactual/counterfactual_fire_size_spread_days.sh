@@ -16,7 +16,7 @@ mkdir -p logs
 source .venv/bin/activate
 
 python -m src.evaluate_counterfactual \
-    --config configs/counterfactual/counterfactual_fire_size_spread_days_multi_output.yaml \
+    --config configs/counterfactual/counterfactual_fire_size_spread_days.yaml \
     --endpoint bp \
     --endpoint fi \
     --endpoint ros \
