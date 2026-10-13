@@ -25,16 +25,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Install uv and Python
+      - name: Install uv and Python 3.12
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.9.10"
-          python-version-file: "pyproject.toml"
+          python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
       - name: Install project dependencies
-        run: uv sync --locked
+        run: uv sync --locked --python 3.12
 
       - name: Download optional model bundle
         if: ${{ inputs.bundle_zip_url != '' }}
@@ -57,7 +57,7 @@ jobs:
               BUNDLE_ARG="--bundle $BUNDLE_DIR"
             fi
           fi
-          uv run --with pyinstaller python -m inference.build_standalone \
+          uv run --python 3.12 --with pyinstaller python -m inference.build_standalone \
             $BUNDLE_ARG \
             --out_dir dist \
             --zip
