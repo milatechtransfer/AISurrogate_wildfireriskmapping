@@ -474,7 +474,7 @@ def _prepare_output_dir(output_dir: Path, overwrite: bool) -> None:
         if not overwrite:
             raise PredictError(f"Output folder {output_dir} is not empty. Choose another --output or pass --overwrite.")
         for child in output_dir.iterdir():
-            if _is_prediction_folder(child) or child.name in {WORK_DIRNAME, RUN_MANIFEST_FILENAME, LOG_FILENAME}:
+            if _is_prediction_folder(child) or child.name in {WORK_DIRNAME, RUN_MANIFEST_FILENAME, LOG_FILENAME, "summary_report.html"}:
                 shutil.rmtree(child) if child.is_dir() else child.unlink()
     output_dir.mkdir(parents=True, exist_ok=True)
 

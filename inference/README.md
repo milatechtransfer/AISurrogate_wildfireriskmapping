@@ -16,7 +16,8 @@ GPU or BurnP3+ outputs are required to predict.
 
 - [🔥 Wildfire AI Surrogate: Inference](#-wildfire-ai-surrogate-inference)
   - [Table of contents](#table-of-contents)
-  - [🛠️ Installation](#️-installation)
+  - [🖥️ One-click desktop application (no Python required)](#️-one-click-desktop-application-no-python-required)
+  - [🛠️ Installation (CLI / developer setup)](#️-installation-cli--developer-setup)
   - [🚀 Quick start](#-quick-start)
   - [📦 The model bundle](#-the-model-bundle)
   - [📂 Preparing your project](#-preparing-your-project)
@@ -32,7 +33,24 @@ GPU or BurnP3+ outputs are required to predict.
   - [🩺 Troubleshooting](#-troubleshooting)
   - [🔧 For maintainers: exporting a bundle](#-for-maintainers-exporting-a-bundle)
 
-## 🛠️ Installation
+## 🖥️ One-click desktop application (no Python required)
+
+For fire scientists who prefer a point-and-click interface without installing Python or using the command line:
+
+1. Download and unzip the standalone `WildfireSurrogateApp` release archive for your operating system.
+2. Double-click **`WildfireSurrogateApp.exe`** (Windows) or **`WildfireSurrogateApp`** (macOS / Linux).
+3. Click **Browse...** next to **BurnP3+ Project** and select your project folder (containing `hexNN/` subfolders).
+   - The app automatically detects your regions, mask mode (`actual`, `buffer`, or `none`), fuel scenarios, and whether BurnP3+ `results/` exist.
+4. Click **1. Check Inputs**, **2. Predict Surrogate Maps**, or **3. Evaluate vs. BurnP3+**.
+5. When finished, an offline visual **`summary_report.html`** opens automatically with metrics, warnings, and plots.
+
+If you already have a Python environment set up from this repository, you can also launch the same desktop window with:
+
+```bash
+python -m inference.app
+```
+
+## 🛠️ Installation (CLI / developer setup)
 
 Install `uv`: https://docs.astral.sh/uv/getting-started/installation.
 
@@ -340,3 +358,14 @@ python -m inference.export_bundle --checkpoint path/to/best.pth --out_dir nrcan-
 ```
 
 See `--help` for all options.
+
+### Building the standalone desktop app
+
+Package `inference.app` together with Python, PyTorch, GDAL/Rasterio, and a model bundle into a standalone, offline-ready folder and `.zip` archive:
+
+```bash
+uv run --with pyinstaller python -m inference.build_standalone \
+    --bundle nrcan-surrogate-bp-fi-ros-v1.0 \
+    --out_dir dist \
+    --zip
+```

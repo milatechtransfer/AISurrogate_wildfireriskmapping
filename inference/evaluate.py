@@ -135,6 +135,7 @@ OWNED_OUTPUTS = frozenset(
         HAZARD_SUMMARY_FILENAME,
         "hazard_confusion_matrix.csv",
         "hazard_confusion_matrix.png",
+        "summary_report.html",
     }
 )
 
