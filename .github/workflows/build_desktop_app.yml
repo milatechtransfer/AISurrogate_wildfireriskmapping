@@ -62,18 +62,18 @@ jobs:
             --out_dir dist \
             --zip
 
-      - name: Verify macOS archive extraction and app signature
+      - name: Verify macOS disk image and app signature
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          mkdir -p _verify_extract
-          ditto -x -k dist/WildfireSurrogateApp-*.zip _verify_extract
-          codesign --verify --deep --strict _verify_extract/WildfireSurrogateApp/WildfireSurrogateApp.app
-          rm -rf _verify_extract
+          ls -lh dist/WildfireSurrogateApp-*.dmg
+          codesign --verify --deep --strict dist/WildfireSurrogateApp/WildfireSurrogateApp.app
 
-      - name: Upload standalone .zip artifact
+      - name: Upload standalone artifact
         uses: actions/upload-artifact@v4
         with:
           name: WildfireSurrogateApp-${{ matrix.os }}
-          path: dist/WildfireSurrogateApp-*.zip
+          path: |
+            dist/WildfireSurrogateApp-*.dmg
+            dist/WildfireSurrogateApp-*.zip
           if-no-files-found: error

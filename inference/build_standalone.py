@@ -404,22 +404,36 @@ def write_quickstart_txt(app_dist_dir: Path, app_name: str = APP_NAME) -> Path:
 
 
 def create_platform_zip_archive(dist_dir: Path, app_name: str, archive_base: Path) -> Path:
-    """Create a ``.zip`` archive of ``dist_dir / app_name`` preserving macOS ``.app`` bundle symlinks."""
+    """Create a distributable platform archive (``.dmg`` on macOS, ``.zip`` on Windows/Linux)."""
+    app_dist_dir = dist_dir / app_name
+
+    # On macOS, Finder's GUI Archive Utility rejects .zip files containing PyInstaller's relative `../..`
+    # framework symlinks. Packaging as a native compressed .dmg disk image avoids Archive Utility symlink
+    # restrictions and lets users open the app with a double-click in Finder.
+    if platform.system() == "Darwin" and shutil.which("hdiutil") is not None:
+        dmg_path = archive_base.with_suffix(".dmg")
+        if dmg_path.exists():
+            dmg_path.unlink()
+        subprocess.run(
+            [
+                "hdiutil",
+                "create",
+                "-volname",
+                app_name,
+                "-srcfolder",
+                str(app_dist_dir),
+                "-ov",
+                "-format",
+                "UDZO",
+                str(dmg_path),
+            ],
+            check=True,
+        )
+        return dmg_path
+
     zip_path = archive_base.with_suffix(".zip")
     if zip_path.exists():
         zip_path.unlink()
-    app_dist_dir = dist_dir / app_name
-
-    # On macOS, Python's zipfile / shutil.make_archive dereferences symlinks inside .app/Contents/Frameworks
-    # and .app/Contents/Resources, breaking the bundle signature and causing macOS Archive Utility to fail.
-    # Apple's native `ditto` preserves framework symlinks and bundle metadata cleanly.
-    if platform.system() == "Darwin" and shutil.which("ditto") is not None:
-        subprocess.run(
-            ["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app_dist_dir), str(zip_path)],
-            check=True,
-        )
-        return zip_path
-
     created = shutil.make_archive(str(archive_base), "zip", root_dir=dist_dir, base_dir=app_name)
     return Path(created)
 

@@ -194,8 +194,12 @@ def inspect_project_folder(project_dir: str | Path) -> ProjectInspection:
         selected_single = match.group(1)
         raw_path = raw_path.parent
 
-    default_pred = raw_path.parent / f"{raw_path.name}_predictions"
-    default_eval = raw_path.parent / f"{raw_path.name}_evaluation"
+    output_parent = raw_path.parent
+    if output_parent.exists() and not os.access(output_parent, os.W_OK):
+        desktop = Path.home() / "Desktop"
+        output_parent = desktop if (desktop.is_dir() and os.access(desktop, os.W_OK)) else Path.home()
+    default_pred = output_parent / f"{raw_path.name}_predictions"
+    default_eval = output_parent / f"{raw_path.name}_evaluation"
 
     if not raw_path.is_dir():
         return ProjectInspection(
