@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_response_maps import (
+from src.counterfactual.plotting.counterfactual_response_maps import (
     ENDPOINT_SPECS,
     block_response,
     hotspot_centers,

@@ -53,7 +53,7 @@ import rasterio
 from matplotlib.ticker import MaxNLocator, ScalarFormatter
 
 from data_preparation.spatial.utils import load_spatial_raster
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz import (
+from src.counterfactual.plotting.counterfactual_viz import (
     delta_norm,
     downsample_for_display,
     find_local_prediction_dir,

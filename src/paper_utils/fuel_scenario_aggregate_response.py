@@ -35,7 +35,7 @@ Used to generate: Figure 3 and Table 4.
 Usage:
     python -m src.paper_utils.fuel_scenario_aggregate_response \
         --experiment_dir final_results/counterfactual_fuel_multi_output_hex16 \
-        --config configs/counterfactual_fuel_multi_output.yaml \
+        --config configs/counterfactual/counterfactual_fuel_type_swap.yaml \
         --scenario c2_to_mixedwood_fixed \
         --hex_ids 16 \
         --out_path final_results/counterfactual_fuel_multi_output_hex16/c2_to_mixedwood_fixed.png
@@ -54,10 +54,10 @@ from matplotlib.colors import ListedColormap
 from matplotlib.patches import Patch
 from rasterio.features import geometry_mask
 
-from src.datasets.postprocessing.counterfactual.counterfactual_base import load_counterfactual_config
-from src.datasets.postprocessing.counterfactual.fuel_counterfactual_transform import fuel_intervention_raster_path
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_fuel_intervention_map import burnable_fuel_support
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz import (
+from src.counterfactual.counterfactual_base import load_counterfactual_config
+from src.counterfactual.fuel_counterfactual_transform import fuel_intervention_raster_path
+from src.counterfactual.plotting.counterfactual_fuel_intervention_map import burnable_fuel_support
+from src.counterfactual.plotting.counterfactual_viz import (
     build_endpoint_response,
     delta_norm,
     downsample_for_display,
@@ -285,7 +285,7 @@ def parse_args() -> argparse.Namespace:
         "--config",
         type=Path,
         default=None,
-        help="Optional counterfactual config (e.g. configs/counterfactual_fuel_multi_output.yaml) to look up nonfuel_ids/description for --scenario.",
+        help="Optional counterfactual config (e.g. configs/counterfactual/counterfactual_fuel_type_swap.yaml) to look up nonfuel_ids/description for --scenario.",
     )
     parser.add_argument(
         "--nonfuel_ids",

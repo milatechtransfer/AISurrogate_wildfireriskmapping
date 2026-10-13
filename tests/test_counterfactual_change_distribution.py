@@ -5,8 +5,8 @@ import pandas as pd
 import rasterio
 from rasterio.transform import from_origin
 
-from src.datasets.postprocessing.counterfactual.fuel_counterfactual_transform import fuel_intervention_raster_path
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_change_distribution import (
+from src.counterfactual.fuel_counterfactual_transform import fuel_intervention_raster_path
+from src.counterfactual.plotting.counterfactual_change_distribution import (
     distance_bin_summary,
     prediction_response_change,
     summarize_change,

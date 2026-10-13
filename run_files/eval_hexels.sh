@@ -13,8 +13,9 @@
 
 set -euo pipefail
 
-# Capture the first argument, default to the common pipeline config.
-CONFIG_FILE=${1:-configs/bp_common_input_pipeline.yaml}
+# Config file is required; there is no universal default since it must match the
+# model/data being evaluated (e.g. configs/multi_output_spatial_weather.yaml).
+CONFIG_FILE=${1:?Usage: sbatch eval_hexels.sh <config_file.yaml>}
 # Example: EVAL_ARGS="--no_log_test_predicted_hexels"
 EVAL_ARGS=${EVAL_ARGS:-}
 

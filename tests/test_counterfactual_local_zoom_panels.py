@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_local_zoom_panels import (
+from src.counterfactual.plotting.counterfactual_local_zoom_panels import (
     NeighborhoodWindow,
     _effective_mean_on_crop,
     _hazard_response,
@@ -12,7 +12,7 @@ from src.datasets.postprocessing.counterfactual.plotting.counterfactual_local_zo
     select_neighborhood_windows,
     window_sum,
 )
-from src.datasets.postprocessing.counterfactual.plotting.counterfactual_viz import build_endpoint_response
+from src.counterfactual.plotting.counterfactual_viz import build_endpoint_response
 
 
 def test_integral_image_and_window_sum_match_direct_sum() -> None:

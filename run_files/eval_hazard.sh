@@ -13,11 +13,11 @@ set -euo pipefail
 
 # Usage: sbatch run_files/eval_hazard.sh configs/<your_hazard_config>.yaml
 # Extra CLI args (e.g. --metrics_only --skip_plots) can be passed via EVAL_ARGS:
-#   EVAL_ARGS="--metrics_only" sbatch run_files/eval_hazard.sh configs/hazard_eval_common_input_pipeline.yaml
+#   EVAL_ARGS="--metrics_only" sbatch run_files/eval_hazard.sh configs/hazard_eval_spatial_weather.yaml
 # Override mask_scope/save_dir/root_dir to run actual vs buffer variants from one config without output collisions:
 #   EVAL_ARGS="--mask_scope buffer_only --root_dir /path/to/buffer_root --save_dir experiments/hazard_eval/buffer_only" \
-#     sbatch run_files/eval_hazard.sh configs/hazard_eval_common_input_pipeline.yaml
-CONFIG_FILE=${1:-configs/hazard_eval_common_input_pipeline.yaml}
+#     sbatch run_files/eval_hazard.sh configs/hazard_eval_spatial_weather.yaml
+CONFIG_FILE=${1:?Usage: sbatch eval_hazard.sh <config_file.yaml>}
 EVAL_ARGS=${EVAL_ARGS:-}
 
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
