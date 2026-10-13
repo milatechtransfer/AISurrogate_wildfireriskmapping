@@ -1,0 +1,68 @@
+name: Build Standalone Desktop App
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_zip_url:
+        description: "Optional URL to a model bundle .zip to embed inside the standalone app"
+        required: false
+        default: ""
+  release:
+    types: [published]
+
+jobs:
+  build-standalone:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.10"
+          python-version-file: "pyproject.toml"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install project dependencies
+        run: uv sync --locked
+
+      - name: Download optional model bundle
+        if: ${{ inputs.bundle_zip_url != '' }}
+        shell: bash
+        env:
+          BUNDLE_ZIP_URL: ${{ inputs.bundle_zip_url }}
+        run: |
+          mkdir -p _bundle_download
+          curl -fsSL "$BUNDLE_ZIP_URL" -o _bundle_download/bundle.zip
+          unzip -q _bundle_download/bundle.zip -d _bundle_download/unpacked
+
+      - name: Build standalone PyInstaller bundle and .zip archive
+        shell: bash
+        run: |
+          BUNDLE_ARG=""
+          if [[ -d "_bundle_download/unpacked" ]]; then
+            MANIFEST_PATH="$(find _bundle_download/unpacked -name manifest.yaml -print -quit)"
+            if [[ -n "$MANIFEST_PATH" ]]; then
+              BUNDLE_DIR="$(dirname "$MANIFEST_PATH")"
+              BUNDLE_ARG="--bundle $BUNDLE_DIR"
+            fi
+          fi
+          uv run --with pyinstaller python -m inference.build_standalone \
+            $BUNDLE_ARG \
+            --out_dir dist \
+            --zip
+
+      - name: Upload standalone .zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WildfireSurrogateApp-${{ matrix.os }}
+          path: dist/WildfireSurrogateApp-*.zip
+          if-no-files-found: error
