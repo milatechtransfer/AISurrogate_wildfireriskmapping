@@ -62,6 +62,15 @@ jobs:
             --out_dir dist \
             --zip
 
+      - name: Verify macOS archive extraction and app signature
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p _verify_extract
+          ditto -x -k dist/WildfireSurrogateApp-*.zip _verify_extract
+          codesign --verify --deep --strict _verify_extract/WildfireSurrogateApp/WildfireSurrogateApp.app
+          rm -rf _verify_extract
+
       - name: Upload standalone .zip artifact
         uses: actions/upload-artifact@v4
         with:

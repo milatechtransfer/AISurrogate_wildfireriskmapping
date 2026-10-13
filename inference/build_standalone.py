@@ -376,15 +376,22 @@ def stage_bundle_into_app(bundle_dir: Path, app_dist_dir: Path) -> Path:
 
 def write_quickstart_txt(app_dist_dir: Path, app_name: str = APP_NAME) -> Path:
     """Write a short plain-text README inside the standalone distribution folder."""
-    exe_label = f"{app_name}.exe" if platform.system() == "Windows" else app_name
+    if platform.system() == "Windows":
+        exe_label = f"{app_name}.exe"
+    elif platform.system() == "Darwin":
+        exe_label = f"{app_name}.app"
+    else:
+        exe_label = app_name
     text = (
         "NRCan Wildfire AI Surrogate — Standalone Desktop Application\n"
         "=============================================================\n\n"
         "No Python or package installation is needed.\n\n"
         "How to run:\n"
         f"  1. Double-click '{exe_label}' in this folder.\n"
-        "  2. Click 'Browse...' next to 'BurnP3+ Project' and select your project folder\n"
-        "     (the folder containing hexNN/ region subfolders).\n"
+        "     (On macOS, if prompted about an unverified developer on first launch,\n"
+        f"      right-click '{exe_label}' -> Open, or run: xattr -cr {exe_label})\n"
+        "  2. Click 'Sample' to test immediately with the bundled sample BurnP3+ project,\n"
+        "     or click 'Browse...' next to 'BurnP3+ Project' to select your own project folder.\n"
         "  3. Click:\n"
         "     - '1. Check Inputs' to verify all rasters and tables,\n"
         "     - '2. Predict Surrogate Maps' to generate BP, FI, ROS, and Hazard GeoTIFFs, or\n"
@@ -394,6 +401,27 @@ def write_quickstart_txt(app_dist_dir: Path, app_name: str = APP_NAME) -> Path:
     readme_path = app_dist_dir / "README_QUICKSTART.txt"
     readme_path.write_text(text, encoding="utf-8")
     return readme_path
+
+
+def create_platform_zip_archive(dist_dir: Path, app_name: str, archive_base: Path) -> Path:
+    """Create a ``.zip`` archive of ``dist_dir / app_name`` preserving macOS ``.app`` bundle symlinks."""
+    zip_path = archive_base.with_suffix(".zip")
+    if zip_path.exists():
+        zip_path.unlink()
+    app_dist_dir = dist_dir / app_name
+
+    # On macOS, Python's zipfile / shutil.make_archive dereferences symlinks inside .app/Contents/Frameworks
+    # and .app/Contents/Resources, breaking the bundle signature and causing macOS Archive Utility to fail.
+    # Apple's native `ditto` preserves framework symlinks and bundle metadata cleanly.
+    if platform.system() == "Darwin" and shutil.which("ditto") is not None:
+        subprocess.run(
+            ["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app_dist_dir), str(zip_path)],
+            check=True,
+        )
+        return zip_path
+
+    created = shutil.make_archive(str(archive_base), "zip", root_dir=dist_dir, base_dir=app_name)
+    return Path(created)
 
 
 def build_standalone_app(
@@ -454,8 +482,7 @@ def build_standalone_app(
     if make_zip:
         sys_tag = f"{platform.system().lower()}-{platform.machine().lower()}"
         archive_base = dist_dir / f"{app_name}-{sys_tag}"
-        zip_path = shutil.make_archive(str(archive_base), "zip", root_dir=dist_dir, base_dir=app_name)
-        return Path(zip_path)
+        return create_platform_zip_archive(dist_dir=dist_dir, app_name=app_name, archive_base=archive_base)
     return app_dist_dir
 
 
