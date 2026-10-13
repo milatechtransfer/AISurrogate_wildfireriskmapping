@@ -126,11 +126,11 @@ def is_bundle_dir(path: str | Path) -> bool:
 
 
 def _default_bundle_search_roots() -> list[Path]:
-    """Directories searched automatically for a model bundle (supports both source checkouts and PyInstaller builds)."""
+    """Directories searched automatically for a model bundle (supports source checkouts, Windows/Linux builds, and macOS .app)."""
     roots: list[Path] = []
     if getattr(sys, "frozen", False):
-        exe_dir = Path(sys.executable).resolve().parent
-        roots.extend([exe_dir, exe_dir.parent])
+        exe_path = Path(sys.executable).resolve()
+        roots.extend(exe_path.parents[:4])
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
             roots.append(Path(meipass).resolve())

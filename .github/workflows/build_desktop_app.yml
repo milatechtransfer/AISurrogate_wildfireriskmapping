@@ -1,6 +1,8 @@
 name: Build Standalone Desktop App
 
 on:
+  push:
+    branches: [feat/desktop-app-launcher]
   workflow_dispatch:
     inputs:
       bundle_zip_url:

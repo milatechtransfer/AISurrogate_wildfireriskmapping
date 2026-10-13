@@ -19,16 +19,20 @@ Example (run by maintainers on the target OS or in GitHub Actions):
 from __future__ import annotations
 
 import argparse
+import json
 import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
+import torch
+import yaml
 from rasterio.transform import from_origin
 from shapely.geometry import box
 
@@ -40,9 +44,13 @@ from inference.bundle import (
     ModelBundle,
     load_bundle,
 )
+from inference.export_bundle import export_bundle
+from src.config import Config
+from src.models.factory import build_model
 
 APP_NAME = "WildfireSurrogateApp"
 SAMPLE_PROJECT_DIRNAME = "sample_project"
+DEMO_BUNDLE_DIRNAME = "demo-surrogate-bp-fi-ros"
 
 # Modules imported dynamically at runtime (e.g. via src.datasets.utils.get_data_source_class
 # or Cython/GDAL extensions inside rasterio and pyogrio).
@@ -256,6 +264,105 @@ def create_sample_project(
     return out_root
 
 
+def create_demo_bundle(out_dir: str | Path) -> Path:
+    """Create a lightweight, self-contained demo model bundle so standalone builds work out-of-the-box."""
+    repo_root = Path(__file__).resolve().parents[1]
+    q3_config_path = repo_root / "configs" / "multi_output_spatial_weather_firesize_q3.yaml"
+    num_isi_bins = 5
+    fuel_log_mean, fuel_log_std = 2.5, 1.25
+    feature_channel_map = {
+        "fuel_grid": [0],
+        "elevation_grid": [1],
+        "ignition_grid_human": [2],
+        "ignition_grid_lightning": [3],
+        "firezones_grid": [4],
+        "bp_out_grid": [5],
+        "fi_out_grid": [6],
+        "ros_out_grid": [7],
+    }
+    z_cols = [
+        "Temperature",
+        "WindSpeed",
+        "DuffMoistureCode",
+        "DroughtCode",
+        "InitialSpreadIndex",
+        "BuildupIndex",
+        "FireWeatherIndex",
+        "wind_x",
+        "wind_y",
+    ]
+
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp = Path(tmp_str)
+        data_root = tmp / "data_samples"
+        data_root.mkdir(parents=True)
+        norm_stats = {
+            "elevation": {"min": -10.0, "max": 3000.0},
+            "fuel_curve_iROS": {"log_mean": fuel_log_mean, "log_std": fuel_log_std},
+            "fire_intensity": {"log_mean": 7.9, "log_std": 1.1},
+            "fire_ros": {"log_mean": 1.8, "log_std": 0.55},
+            "fire_burn_probability": {"min": 1e-5, "max": 0.12},
+        }
+        (data_root / "dataset_norm_stats.json").write_text(json.dumps(norm_stats))
+        (data_root / "weather_norm_params.json").write_text(
+            json.dumps(
+                {
+                    "min_max": {"cols": ["RelativeHumidity", "FineFuelMoistureCode"], "min": [0.0, 77.7], "max": [100.0, 99.0]},
+                    "z_score": {"cols": z_cols, "mean": [20.0] * len(z_cols), "std": [5.0] * len(z_cols)},
+                }
+            )
+        )
+        (data_root / "fire_size_norm_params.json").write_text(json.dumps({"log_size_min": 0.0, "log_size_max": 6.0}))
+        (data_root / "feature_channel_map_1.json").write_text(json.dumps(feature_channel_map))
+        curve_rows = [
+            {"fbp_code": code, "SeasonState": state, "ISI": isi, "ROS": float(code + isi), "HFI": float(code * isi)}
+            for code, states in ((1, ["direct"]), (13, ["green", "leafless"]))
+            for state in states
+            for isi in range(num_isi_bins)
+        ]
+        pd.DataFrame(curve_rows).to_csv(data_root / "fbp_curves_national_fuel.csv", index=False)
+
+        cfg_dict = yaml.safe_load(q3_config_path.read_text())
+        cfg_dict["model"]["hidden_features"] = [4, 8]
+        cfg_dict["data"]["root_dir"] = str(data_root)
+        cfg_dict["data"]["raw_data_dir"] = str(tmp)
+        config = Config(**cfg_dict)
+
+        torch.manual_seed(0)
+        model = build_model(
+            model_config=config.model,
+            spatial_input_channels=20,
+            auxiliary_input_dims={"fuel_curve": num_isi_bins},
+            fuel_curve_mean=torch.tensor([fuel_log_mean]),
+            fuel_curve_std=torch.tensor([fuel_log_std]),
+            target_names=["bp", "fi", "ros"],
+        ).eval()
+
+        ckpt_path = tmp / "run" / "best.pth"
+        ckpt_path.parent.mkdir(parents=True)
+        torch.save({"model_state": model.state_dict(), "epoch": 1, "config": config.model_dump()}, ckpt_path)
+
+        denom_json = tmp / "hazard_scale_denominator.json"
+        denom_json.write_text(json.dumps({"scale_denominator": 50.0, "scale_denominator_source": "demo"}))
+        fs_table = tmp / "df_fire_fru_demo.csv"
+        pd.DataFrame({"GRIDCODE": [21, 21, 21, 22, 22, 22], "SIZE_HA": [30.0, 120.0, 900.0, 50.0, 400.0, 5000.0]}).to_csv(
+            fs_table, index=False
+        )
+
+        return export_bundle(
+            checkpoint_path=ckpt_path,
+            out_dir=Path(out_dir),
+            name="demo-surrogate-bp-fi-ros",
+            version="0.1.0-demo",
+            description="Lightweight demo bundle included with the standalone desktop application for immediate testing.",
+            hazard_denominator_json=denom_json,
+            fire_size_table=fs_table,
+            fire_size_table_note="Synthetic demo fire-size table (fire zones 21 and 22).",
+            selection_note="Demo weights for UI verification; replace with nrcan-surrogate-bp-fi-ros-v1.0 for production.",
+            overwrite=True,
+        )
+
+
 def stage_bundle_into_app(bundle_dir: Path, app_dist_dir: Path) -> Path:
     """Validate and copy a model bundle into ``<app_dist_dir>/bundles/<bundle_name>``."""
     bundle = load_bundle(bundle_dir, verify_checksums=True)
@@ -326,8 +433,20 @@ def build_standalone_app(
 
     shutil.rmtree(work_dir, ignore_errors=True)
     app_dist_dir = dist_dir / app_name
+
+    # On macOS, PyInstaller --windowed also creates <dist_dir>/<app_name>.app.
+    # Place the .app bundle inside <app_dist_dir>/ so the archive contains the native macOS app alongside bundles/ and sample_project/.
+    mac_app = dist_dir / f"{app_name}.app"
+    if platform.system() == "Darwin" and mac_app.is_dir():
+        shutil.rmtree(app_dist_dir, ignore_errors=True)
+        app_dist_dir.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(mac_app), str(app_dist_dir / f"{app_name}.app"))
+
     if loaded_bundle is not None:
         stage_bundle_into_app(loaded_bundle.root, app_dist_dir)
+    else:
+        demo_dir = create_demo_bundle(app_dist_dir / "bundles" / DEMO_BUNDLE_DIRNAME)
+        loaded_bundle = load_bundle(demo_dir, verify_checksums=False)
     if include_sample_project:
         create_sample_project(app_dist_dir / SAMPLE_PROJECT_DIRNAME, bundle=loaded_bundle)
     write_quickstart_txt(app_dist_dir, app_name=app_name)
