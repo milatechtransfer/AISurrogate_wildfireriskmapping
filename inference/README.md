@@ -143,8 +143,9 @@ mixedwood percentages in a regional grid), add the BurnP3+ fuel tables to `tabul
 - `hexNN_FuelCodeCrosswalk.csv` with columns `FuelType`, `Code` (e.g. `M-1/M-2 (25 PC)`)
 
 New codes of these fuel types are then handled automatically: **C-1 to C-5, C-7, D-1/D-2, M-1/M-2 (any
-percent conifer), O-1a/O-1b and non-fuel**. **C-6, M-3/M-4 and S-1 to S-3** are not supported: recode those
-cells or set them to nodata.
+percent conifer), O-1a/O-1b and non-fuel**. The two tables are all you need to provide; the fuel curves the
+model uses for these codes are computed from them at each run. **C-6, M-3/M-4 and S-1 to S-3** are not
+supported: recode those cells or set them to nodata.
 
 ### Fire-size table
 
