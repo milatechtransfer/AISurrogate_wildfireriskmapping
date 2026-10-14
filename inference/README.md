@@ -88,7 +88,9 @@ Do not edit files inside the bundle; pass your own tables with command-line opti
 ## 📂 Preparing your project
 
 A project is a folder of one or more BurnP3+ regions, laid out as BurnP3+ writes them. Each region is a
-folder named `hexNN` (in the national study, one per hexel):
+folder named `hexNN`, e.g. `hex01` or `hex100`. The name is only a folder-naming convention that `check`,
+`predict` and `evaluate` expect. `NN` is any region number you choose, and each folder holds one BurnP3+
+study area of any shape. A regional study is usually a single folder.
 
 ```text
 path/to/project/
