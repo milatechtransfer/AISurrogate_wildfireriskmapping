@@ -131,7 +131,8 @@ path/to/project/
     └── results/                              # BurnP3+ outputs: only needed by evaluate
 ```
 
-Rasters may be in any projected CRS; they are reprojected automatically.
+Rasters may be in any projected CRS; they are reprojected automatically to a common CRS,
+ESRI:102002 (Canada Lambert Conformal Conic), the CRS the model was trained on.
 
 ### Fuel codes
 
