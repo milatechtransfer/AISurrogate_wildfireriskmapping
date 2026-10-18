@@ -1,14 +1,17 @@
 """
 Export a training checkpoint into a portable model bundle.
 
-Example (Mila cluster):
+Example: rebuild the v1.0.0 release bundle. Every input is in the repository (run ``git lfs pull`` first):
 
+    D=model_checkpoints/multi_task_spatial_weather_firesize_seed1337
     uv run python -m inference.export_bundle \
-        --checkpoint /network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3/seed_1337/best.pth \
+        --checkpoint $D/best.pth --data_root $D \
         --out_dir bundles/nrcan-surrogate-bp-fi-ros-v1.0 \
         --name nrcan-surrogate-bp-fi-ros --version 1.0.0 \
-        --hazard_denominator_json experiments/hazard_eval_multi_output_spatial_weather_firesize_q3/seed_1337/hazard_scale_denominator.json \
-        --fire_size_table "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/df_fire_fru_25ha_1970_2023.csv" \
+        --description "AI surrogate of BurnP3+ that predicts burn probability, fire intensity and rate of spread (and wildfire hazard) from BurnP3+ project inputs, trained on the national BurnP3+ hexel dataset." \
+        --hazard_denominator_json $D/hazard_scale_denominator.json \
+        --fire_size_table $D/df_fire_fru_25ha_1970_2023.csv \
+        --fire_size_table_note "Canadian National Fire Database (CNFDB), Canadian Forest Service: fires of 25 ha or more, 1970-2023, by fire zone (GRIDCODE). Publicly available data." \
         --selection_note "Seed 1337 of {42, 1337, 2024}: best mean validation hexel CCC over BP/FI/ROS."
 
 Normalization statistics and lookup tables are read from the checkpoint's training ``data.root_dir``
