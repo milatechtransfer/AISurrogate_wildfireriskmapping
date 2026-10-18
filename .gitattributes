@@ -1,1 +1,2 @@
 model_checkpoints/**/*.pth filter=lfs diff=lfs merge=lfs -text
+model_checkpoints/**/df_fire_*.csv filter=lfs diff=lfs merge=lfs -text

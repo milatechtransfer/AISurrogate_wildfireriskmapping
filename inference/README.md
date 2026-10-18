@@ -361,7 +361,9 @@ python -m inference.export_bundle --checkpoint path/to/best.pth --out_dir nrcan-
     --selection_note "How this checkpoint was selected"
 ```
 
-See `--help` for all options.
+See `--help` for all options. The inputs of the v1.0.0 release bundle (checkpoint, normalization and lookup
+tables, hazard denominator, fire-size table) are in `model_checkpoints/multi_task_spatial_weather_firesize_seed1337/`;
+the exact command that rebuilds it is in the docstring of `inference/export_bundle.py`.
 
 ### Building the standalone desktop app
 

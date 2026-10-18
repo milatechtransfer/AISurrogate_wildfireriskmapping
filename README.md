@@ -84,6 +84,8 @@ For all data preparation steps, refer to [`data_preparation/README.md`](data_pre
 
 Under `model_checkpoints/` we release the best model checkpoints for the multi-output models (spatial-only, and spatial + weather, spatial + weather + fire size (TODO)). The latest checkpoint, `model_checkpoints/multi_task_spatial_weather_firesize/best.pth`, is the one used for all analysis throughout the paper, corresponding to [`configs/multi_output_spatial_weather_firesize_q3.yaml`](configs/multi_output_spatial_weather_firesize_q3.yaml).
 
+`model_checkpoints/multi_task_spatial_weather_firesize_seed1337/` holds the same configuration trained with seed 1337 (best validation CCC of seeds 42, 1337 and 2024), with every input needed to rebuild the v1.0.0 release bundle used by [inference](inference/README.md).
+
 These `.pth` files are stored via Git LFS (see [Installation & Setup](#️-installation--setup)). If `git lfs install` wasn't run before cloning, run `git lfs pull` to replace the LFS pointer files with the actual checkpoint weights before loading them.
 
 ## Model inference
