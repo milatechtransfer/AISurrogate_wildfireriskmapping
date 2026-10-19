@@ -837,7 +837,51 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bundle", default=None, help="Optional initial model bundle folder.")
     parser.add_argument("--project", default=None, help="Optional initial BurnP3+ project folder.")
     parser.add_argument("--output", default=None, help="Optional initial output folder.")
+    parser.add_argument(
+        "--smoke-test",
+        action="store_true",
+        help=argparse.SUPPRESS,  # CI-only: run check/predict/evaluate on the bundled sample project without opening the GUI.
+    )
     return parser
+
+
+def run_smoke_test() -> int:
+    """Headless self-test of a packaged app: auto-discover the bundle and sample project, then run every workflow."""
+    import tempfile
+
+    bundles = discover_bundles()
+    if not bundles:
+        print("SMOKE TEST FAILED: no model bundle found next to the application.")
+        return 1
+    samples = discover_sample_projects()
+    if not samples:
+        print("SMOKE TEST FAILED: no sample_project/ found next to the application.")
+        return 1
+    print(f"Bundle: {bundles[0]}\nSample project: {samples[0]}")
+
+    info = inspect_project_folder(samples[0])
+    actions: list[ActionType] = ["check", "predict"]
+    if info.has_burnp3_results:
+        actions.append("evaluate")
+    out_root = Path(tempfile.mkdtemp(prefix="wildfire_smoke_"))
+    for action in actions:
+        outcome = execute_workflow_action(
+            WorkflowRequest(
+                action=action,
+                bundle_dir=bundles[0],
+                project_dir=info.project_dir,
+                output_dir=out_root / action,
+                mask_scope=info.recommended_mask_scope,
+                scenario_name=info.recommended_scenario,
+                device="cpu",
+            )
+        )
+        print(f"[{action}] ok={outcome.ok} report={outcome.report_html}")
+        if not outcome.ok:
+            print(f"SMOKE TEST FAILED during '{action}': {outcome.error or outcome.summary_text}")
+            return 1
+    print("SMOKE TEST PASSED")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -845,6 +889,14 @@ def main(argv: list[str] | None = None) -> int:
 
     multiprocessing.freeze_support()
     args = build_arg_parser().parse_args(argv)
+    if args.smoke_test:
+        if sys.stdout is None:
+            # Windowed (no-console) builds have no stdout; write results to a log CI can print.
+            import tempfile
+
+            log_stream = open(Path(tempfile.gettempdir()) / "wildfire_smoke_test.log", "w", encoding="utf-8")  # noqa: SIM115
+            sys.stdout = sys.stderr = log_stream
+        return run_smoke_test()
     return launch_gui(
         initial_bundle=args.bundle,
         initial_project=args.project,

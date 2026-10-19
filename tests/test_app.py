@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -14,9 +16,11 @@ from inference.app import (
     execute_workflow_action,
     inspect_project_folder,
     parse_hex_ids_input,
+    run_smoke_test,
 )
 from inference.build_standalone import (
     APP_NAME,
+    EXCLUDED_MODULES,
     HIDDEN_IMPORTS,
     SAMPLE_PROJECT_DIRNAME,
     build_pyinstaller_args,
@@ -190,3 +194,20 @@ def test_build_standalone_helpers(bundle_dir: Path, tmp_path: Path):
     readme = write_quickstart_txt(app_dir)
     assert readme.is_file()
     assert "BurnP3+ Project" in readme.read_text(encoding="utf-8")
+
+
+def test_app_imports_without_modules_excluded_from_standalone_build():
+    """The packaged app omits EXCLUDED_MODULES; importing the app must not require any of them."""
+    blocked = ", ".join(repr(m) for m in EXCLUDED_MODULES)
+    code = f"import sys\nfor m in ({blocked},):\n    sys.modules[m] = None\nimport inference.app\n"
+    repo_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run([sys.executable, "-c", code], cwd=repo_root, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_smoke_test_runs_all_workflows_on_staged_app(bundle_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    app_dir = tmp_path / APP_NAME
+    stage_bundle_into_app(bundle_dir, app_dir)
+    create_sample_project(app_dir / SAMPLE_PROJECT_DIRNAME, bundle=load_bundle(bundle_dir))
+    monkeypatch.chdir(app_dir)
+    assert run_smoke_test() == 0

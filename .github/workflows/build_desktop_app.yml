@@ -69,6 +69,32 @@ jobs:
           ls -lh dist/WildfireSurrogateApp-*.dmg
           codesign --verify --deep --strict dist/WildfireSurrogateApp/WildfireSurrogateApp.app
 
+      # Launch the packaged app headlessly (from outside the repo) so CI fails if it cannot start,
+      # cannot find its bundled model/sample project, or cannot run check/predict/evaluate.
+      - name: Smoke-test packaged app (macOS / Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            APP_EXE="$PWD/dist/WildfireSurrogateApp/WildfireSurrogateApp.app/Contents/MacOS/WildfireSurrogateApp"
+          else
+            APP_EXE="$PWD/dist/WildfireSurrogateApp/WildfireSurrogateApp"
+          fi
+          cd "$RUNNER_TEMP"
+          "$APP_EXE" --smoke-test
+
+      - name: Smoke-test packaged app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $exe = Join-Path $PWD "dist\WildfireSurrogateApp\WildfireSurrogateApp.exe"
+          $proc = Start-Process -FilePath $exe -ArgumentList "--smoke-test" -WorkingDirectory $env:RUNNER_TEMP -Wait -PassThru
+          $log = Join-Path $env:TEMP "wildfire_smoke_test.log"
+          if (Test-Path $log) { Get-Content $log }
+          if ($proc.ExitCode -ne 0) { throw "Smoke test failed with exit code $($proc.ExitCode)" }
+
       - name: Upload standalone artifact
         uses: actions/upload-artifact@v4
         with:
