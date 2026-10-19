@@ -37,13 +37,17 @@ GPU or BurnP3+ outputs are required to predict.
 
 For fire scientists who prefer a point-and-click interface without installing Python or using the command line:
 
-1. Download and unzip the standalone `WildfireSurrogateApp` release archive for your operating system.
-2. Double-click **`WildfireSurrogateApp.exe`** (Windows) or **`WildfireSurrogateApp`** (macOS / Linux).
+1. Download the app for your operating system from the [Releases page](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases)
+   (see [Try the tool](../README.md#-try-the-tool-no-installation-needed) for direct links and first-launch security prompts).
+   - **Windows:** unzip `WildfireSurrogateApp-windows-amd64.zip`.
+   - **macOS (Apple silicon):** open `WildfireSurrogateApp-darwin-arm64.dmg` and drag the `WildfireSurrogateApp` folder to your Desktop.
+2. Double-click **`WildfireSurrogateApp.exe`** (Windows) or **`WildfireSurrogateApp.app`** (macOS). Keep the app next to its `bundles/` and `sample_project/` folders.
 3. Click **Browse...** next to **BurnP3+ Project** and select your project folder (containing `hexNN/` subfolders).
    - The app automatically detects your regions, mask mode (`actual`, `buffer`, or `none`), fuel scenarios, and whether BurnP3+ `results/` exist.
 4. Click **1. Check Inputs**, **2. Predict Surrogate Maps**, or **3. Evaluate vs. BurnP3+**.
    - Under **Predict Outputs**, tick the maps you want (default: BP, FI, ROS and hazard class).
 5. When finished, an offline visual **`summary_report.html`** opens automatically with metrics, warnings, and plots.
+6. Lost? Click **? Help** (or press F1) for the expected project folder layout, option explanations and troubleshooting.
 
 If you already have a Python environment set up from this repository, you can also launch the same desktop window with:
 

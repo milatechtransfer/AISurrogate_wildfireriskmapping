@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -37,6 +38,7 @@ from rasterio.transform import from_origin
 from shapely.geometry import box
 
 from data_preparation.paths import Paths
+from inference.app import LOGO_FILENAME
 from inference.bundle import (
     RESOURCE_FIRE_SIZE_TABLE,
     RESOURCE_FUEL_CURVES,
@@ -71,6 +73,7 @@ HIDDEN_IMPORTS: tuple[str, ...] = (
     "tkinter.ttk",
     "tkinter.filedialog",
     "tkinter.messagebox",
+    "inference.app_help",
 )
 
 # Geospatial packages whose PROJ/GDAL data files must be bundled for offline CRS reprojection.
@@ -121,6 +124,9 @@ def build_pyinstaller_args(
         args.extend(["--collect-data", pkg, "--collect-submodules", pkg])
     for excl in EXCLUDED_MODULES:
         args.extend(["--exclude-module", excl])
+    logo = repo_root / "inference" / "assets" / LOGO_FILENAME
+    if logo.is_file():
+        args.extend(["--add-data", f"{logo}{os.pathsep}inference/assets"])
     args.append(str(entry_script))
     return args
 
@@ -383,20 +389,23 @@ def write_quickstart_txt(app_dist_dir: Path, app_name: str = APP_NAME) -> Path:
     else:
         exe_label = app_name
     text = (
-        "NRCan Wildfire AI Surrogate — Standalone Desktop Application\n"
-        "=============================================================\n\n"
+        "Wildfire AI Surrogate — Desktop App\n"
+        "===================================\n\n"
         "No Python or package installation is needed.\n\n"
         "How to run:\n"
         f"  1. Double-click '{exe_label}' in this folder.\n"
-        "     (On macOS, if prompted about an unverified developer on first launch,\n"
-        f"      right-click '{exe_label}' -> Open, or run: xattr -cr {exe_label})\n"
+        "     (macOS: if told the app cannot be verified, open System Settings -> Privacy & Security\n"
+        "      -> Open Anyway, or run in Terminal: xattr -cr <this folder>.\n"
+        "      Windows: if SmartScreen appears, click More info -> Run anyway.)\n"
         "  2. Click 'Sample' to test immediately with the bundled sample BurnP3+ project,\n"
         "     or click 'Browse...' next to 'BurnP3+ Project' to select your own project folder.\n"
         "  3. Click:\n"
         "     - '1. Check Inputs' to verify all rasters and tables,\n"
         "     - '2. Predict Surrogate Maps' to generate BP, FI, ROS, and Hazard GeoTIFFs, or\n"
         "     - '3. Evaluate vs. BurnP3+' if your project also has BurnP3+ results/ rasters.\n"
-        "  4. When complete, the visual HTML summary report opens automatically.\n"
+        "  4. When complete, the visual HTML summary report opens automatically.\n\n"
+        "Lost? Click '? Help' in the app (or press F1) for the expected project folder layout,\n"
+        "what each option means, and troubleshooting tips.\n"
     )
     readme_path = app_dist_dir / "README_QUICKSTART.txt"
     readme_path.write_text(text, encoding="utf-8")
@@ -414,21 +423,29 @@ def create_platform_zip_archive(dist_dir: Path, app_name: str, archive_base: Pat
         dmg_path = archive_base.with_suffix(".dmg")
         if dmg_path.exists():
             dmg_path.unlink()
-        subprocess.run(
-            [
-                "hdiutil",
-                "create",
-                "-volname",
-                app_name,
-                "-srcfolder",
-                str(app_dist_dir),
-                "-ov",
-                "-format",
-                "UDZO",
-                str(dmg_path),
-            ],
-            check=True,
-        )
+        # The image holds a single <app_name>/ folder so users drag one folder (app + bundles + sample project) out.
+        staging_root = Path(tempfile.mkdtemp(prefix="dmg_root_", dir=dist_dir))
+        staged = staging_root / app_name
+        app_dist_dir.rename(staged)
+        try:
+            subprocess.run(
+                [
+                    "hdiutil",
+                    "create",
+                    "-volname",
+                    app_name,
+                    "-srcfolder",
+                    str(staging_root),
+                    "-ov",
+                    "-format",
+                    "UDZO",
+                    str(dmg_path),
+                ],
+                check=True,
+            )
+        finally:
+            staged.rename(app_dist_dir)
+            staging_root.rmdir()
         return dmg_path
 
     zip_path = archive_base.with_suffix(".zip")

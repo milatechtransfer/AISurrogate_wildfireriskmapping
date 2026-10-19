@@ -9,18 +9,23 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import inference.app as app_module
 from inference.app import (
+    APP_TITLE,
     DEFAULT_PREDICT_RASTERS,
     DEFAULT_SCENARIO_LABEL,
+    LOGO_FILENAME,
     WorkflowRequest,
     discover_bundles,
     discover_sample_projects,
     execute_workflow_action,
+    find_logo_path,
     inspect_project_folder,
     parse_hex_ids_input,
     run_smoke_test,
     scenario_name_from_ui,
 )
+from inference.app_help import HELP_SECTIONS
 from inference.build_standalone import (
     APP_NAME,
     EXCLUDED_MODULES,
@@ -225,3 +230,32 @@ def test_scenario_name_from_ui_maps_default_label_to_none():
     assert scenario_name_from_ui(DEFAULT_SCENARIO_LABEL) is None
     assert scenario_name_from_ui("  ") is None
     assert scenario_name_from_ui(" FireExcludeSpotting ") == "FireExcludeSpotting"
+
+
+def test_help_sections_document_project_layout_and_troubleshooting():
+    headings = [heading for heading, _kind, _text in HELP_SECTIONS]
+    assert "Troubleshooting" in headings
+    all_text = "\n".join(text for _h, _k, text in HELP_SECTIONS)
+    for expected in ("hexNN_fbp", "DailyWeather", "results", "summary_report.html"):
+        assert expected in all_text
+    assert all(kind in {"text", "code"} for _h, kind, _t in HELP_SECTIONS)
+
+
+def test_find_logo_path_returns_none_when_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(app_module, "ASSETS_DIR", tmp_path / "missing")
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    assert find_logo_path() is None
+
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / LOGO_FILENAME).write_bytes(b"png")
+    monkeypatch.setattr(app_module, "ASSETS_DIR", assets)
+    assert find_logo_path() == assets / LOGO_FILENAME
+
+
+def test_pyinstaller_args_bundle_logo_only_when_present(tmp_path: Path):
+    args = build_pyinstaller_args(Path("inference/app.py"), tmp_path / "dist", tmp_path / "build")
+    logo = Path(__file__).resolve().parents[1] / "inference" / "assets" / LOGO_FILENAME
+    assert ("--add-data" in args) == logo.is_file()
+    assert "inference.app_help" in HIDDEN_IMPORTS
+    assert APP_TITLE == "Wildfire AI Surrogate"

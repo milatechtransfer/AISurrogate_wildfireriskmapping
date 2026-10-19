@@ -22,7 +22,7 @@ import webbrowser
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from data_preparation.paths import Paths
 from data_preparation.utils import find_hex_ids
@@ -121,6 +121,12 @@ class WorkflowOutcome:
     error: str | None = None
 
 
+APP_TITLE = "Wildfire AI Surrogate"
+APP_SUBTITLE = "Fast burn probability, fire intensity & hazard maps from your BurnP3+ projects"
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+LOGO_FILENAME = "mila_logo.png"
+LOGO_MAX_HEIGHT_PX = 48
+
 # Predict output checkboxes (raster name, label) and the ones ticked by default.
 PREDICT_RASTER_OPTIONS = (
     ("bp", "Burn probability"),
@@ -145,6 +151,15 @@ def scenario_name_from_ui(raw: str) -> str | None:
 def is_bundle_dir(path: str | Path) -> bool:
     candidate = Path(path)
     return candidate.is_dir() and (candidate / MANIFEST_FILENAME).is_file() and (candidate / WEIGHTS_FILENAME).is_file()
+
+
+def find_logo_path() -> Path | None:
+    """The logo shown in the app header (``inference/assets/mila_logo.png``, also inside frozen builds), if present."""
+    candidates = [ASSETS_DIR / LOGO_FILENAME]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "inference" / "assets" / LOGO_FILENAME)
+    return next((path for path in candidates if path.is_file()), None)
 
 
 def _default_bundle_search_roots() -> list[Path]:
@@ -445,6 +460,50 @@ class _QueueLogHandler(logging.Handler):
         self._queue.put(("log", self.format(record)))
 
 
+def show_help_window(parent: Any) -> Any:
+    """Open (or raise) the offline Help window; returns the Toplevel."""
+    import tkinter as tk
+    import webbrowser
+    from tkinter import ttk
+
+    from inference.app_help import DOCS_URL, HELP_SECTIONS
+
+    existing = getattr(parent, "_help_window", None)
+    if existing is not None and existing.winfo_exists():
+        existing.deiconify()
+        existing.lift()
+        return existing
+
+    win = tk.Toplevel(parent)
+    parent._help_window = win
+    win.title(f"{APP_TITLE} — Help")
+    win.geometry("860x640")
+    frame = ttk.Frame(win, padding=10)
+    frame.pack(fill=tk.BOTH, expand=True)
+    mono = ("Consolas", 9) if platform.system() == "Windows" else ("Menlo", 10) if platform.system() == "Darwin" else ("Monospace", 9)
+    text = tk.Text(frame, wrap=tk.WORD, padx=12, pady=10, font=("Segoe UI", 10), relief=tk.FLAT, bg="#ffffff")
+    scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text.yview)
+    text.configure(yscrollcommand=scrollbar.set)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    text.tag_configure("title", font=("Segoe UI", 15, "bold"), spacing3=6)
+    text.tag_configure("heading", font=("Segoe UI", 12, "bold"), foreground="#b45309", spacing1=12, spacing3=4)
+    text.tag_configure("body", spacing1=2, spacing3=2, lmargin1=4, lmargin2=4)
+    text.tag_configure("code", font=mono, wrap=tk.NONE, background="#f1f5f9", lmargin1=8, lmargin2=8)
+
+    text.insert(tk.END, f"{APP_TITLE} — Help\n", "title")
+    for heading, kind, body in HELP_SECTIONS:
+        text.insert(tk.END, heading + "\n", "heading")
+        text.insert(tk.END, body.rstrip("\n") + "\n", "code" if kind == "code" else "body")
+    text.configure(state=tk.DISABLED)
+
+    buttons = ttk.Frame(win, padding=(10, 0, 10, 10))
+    buttons.pack(fill=tk.X)
+    ttk.Button(buttons, text="Open full documentation (online)", command=lambda: webbrowser.open(DOCS_URL)).pack(side=tk.LEFT)
+    ttk.Button(buttons, text="Close", command=win.destroy).pack(side=tk.RIGHT)
+    return win
+
+
 def launch_gui(
     initial_bundle: str | Path | None = None,
     initial_project: str | Path | None = None,
@@ -463,7 +522,7 @@ def launch_gui(
         return 2
 
     root = tk.Tk()
-    root.title("Wildfire AI Surrogate — BurnP3+ Project Launcher")
+    root.title(APP_TITLE)
     root.geometry("920x740")
     root.minsize(780, 620)
 
@@ -505,12 +564,29 @@ def launch_gui(
     # Header
     hdr = ttk.Frame(outer)
     hdr.pack(fill=tk.X, pady=(0, 10))
-    ttk.Label(hdr, text="NRCan Wildfire AI Surrogate — BurnP3+ Project Launcher", style="Header.TLabel").pack(anchor=tk.W)
-    ttk.Label(
-        hdr,
-        text="Check project inputs, generate BP / FI / ROS / Hazard maps, or evaluate against BurnP3+ simulations.",
-        style="Subheader.TLabel",
-    ).pack(anchor=tk.W)
+    hdr_text = ttk.Frame(hdr)
+    hdr_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    ttk.Label(hdr_text, text=APP_TITLE, style="Header.TLabel").pack(anchor=tk.W)
+    ttk.Label(hdr_text, text=APP_SUBTITLE, style="Subheader.TLabel").pack(anchor=tk.W)
+
+    logo_path = find_logo_path()
+    if logo_path is not None:
+        try:
+            logo_img = tk.PhotoImage(file=str(logo_path))
+            factor = max(1, -(-logo_img.height() // LOGO_MAX_HEIGHT_PX))
+            if factor > 1:
+                logo_img = logo_img.subsample(factor, factor)
+            logo_label = ttk.Label(hdr, image=logo_img)
+            logo_label.image = logo_img  # type: ignore[attr-defined]  # keep a reference so Tk does not drop it
+            logo_label.pack(side=tk.RIGHT, padx=(12, 0))
+        except tk.TclError:
+            pass
+
+    def _show_help() -> None:
+        show_help_window(root)
+
+    ttk.Button(hdr, text="? Help", style="Action.TButton", command=_show_help).pack(side=tk.RIGHT, anchor=tk.N)
+    root.bind("<F1>", lambda _event: _show_help())
 
     # 1. Folders Frame
     folders_box = ttk.LabelFrame(outer, text=" 1. Select Model Bundle & BurnP3+ Project Folder ", padding=10)
