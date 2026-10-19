@@ -525,6 +525,14 @@ def run_evaluate(
         scope = _resolve_scope(mask_scope or predicted_scope, bundle)
         if predicted_scope and scope != predicted_scope:
             raise EvaluateError(f"The predictions cover the {predicted_scope!r} area; evaluate them with --mask_scope {predicted_scope}.")
+        predicted_rasters = predicted_options.get("rasters")
+        if predicted_rasters is not None:
+            missing_targets = [t.name for t in bundle.manifest.targets if t.name not in predicted_rasters]
+            if missing_targets:
+                raise EvaluateError(
+                    f"These predictions do not include {missing_targets}, which evaluate needs. "
+                    "Re-run inference.predict with all targets in --rasters, or drop --predictions."
+                )
         scenario_name = _resolve_scenario(scenario_name, bundle, predicted_options)
         available = _hexels_with_predictions(pred_dir, bundle)
         if not available:

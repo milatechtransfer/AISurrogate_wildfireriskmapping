@@ -362,22 +362,25 @@ def render_predict_report_html(run: PredictRun, bundle: ModelBundle, project_dir
         f"<tbody>{''.join(hex_rows)}</tbody></table></section>"
     )
 
-    target_rows = [
-        f"<tr><td><code>{_esc(t.name)}</code></td><td>{_esc(t.label)}</td><td><code>{_esc(t.units)}</code></td>"
+    layer_rows = {
+        t.name: f"<tr><td><code>{_esc(t.name)}</code></td><td>{_esc(t.label)}</td><td><code>{_esc(t.units)}</code></td>"
         f"<td><code>{OUTPUT_NODATA:g}</code></td></tr>"
         for t in bundle.manifest.targets
-    ]
+    }
     if {"bp", "fi"} <= {t.name for t in bundle.manifest.targets}:
-        target_rows.extend(
-            [
-                f"<tr><td><code>hazard_raw</code></td><td>Raw hazard (BP &times; capped FI)</td><td><code>kW/m</code></td>"
+        layer_rows.update(
+            {
+                "hazard_raw": f"<tr><td><code>hazard_raw</code></td><td>Raw hazard (BP &times; capped FI)</td><td><code>kW/m</code></td>"
                 f"<td><code>{OUTPUT_NODATA:g}</code></td></tr>",
-                f"<tr><td><code>hazard_scaled</code></td><td>Scaled hazard index</td>"
+                "hazard_scaled": f"<tr><td><code>hazard_scaled</code></td><td>Scaled hazard index</td>"
                 f"<td><code>0-{bundle.manifest.hazard.scale_to:g}</code></td><td><code>{OUTPUT_NODATA:g}</code></td></tr>",
-                f"<tr><td><code>hazard_class</code></td><td>Binned hazard class (1 = lowest)</td><td><code>class 1..13</code></td>"
+                "hazard_class": f"<tr><td><code>hazard_class</code></td><td>Binned hazard class (1 = lowest)</td>"
+                f"<td><code>class 1..{len(bundle.manifest.hazard.bin_thresholds) + 1}</code></td>"
                 f"<td><code>{HAZARD_CLASS_NODATA}</code></td></tr>",
-            ]
+            }
         )
+    written = {name for hex_res in run.hexels for name in hex_res.outputs}
+    target_rows = [row for name, row in layer_rows.items() if name in written]
 
     sections.append(
         "<section><h2>Output Layer Reference &amp; GIS Info</h2>"

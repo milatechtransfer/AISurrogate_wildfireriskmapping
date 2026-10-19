@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from inference.app import (
+    DEFAULT_PREDICT_RASTERS,
     DEFAULT_SCENARIO_LABEL,
     WorkflowRequest,
     discover_bundles,
@@ -122,15 +123,17 @@ def test_execute_workflow_check_predict_and_evaluate_write_html_reports(bundle_d
             project_dir=project,
             output_dir=pred_out,
             device="cpu",
+            rasters=list(DEFAULT_PREDICT_RASTERS),
         )
     )
     assert pred_res.ok is True
-    assert (pred_out / "hex01" / "hex01_bp.tif").is_file()
+    assert sorted(p.name for p in (pred_out / "hex01").glob("*.tif")) == sorted(f"hex01_{n}.tif" for n in DEFAULT_PREDICT_RASTERS)
     assert pred_res.report_html == pred_out / SUMMARY_REPORT_FILENAME
     pred_html = pred_res.report_html.read_text(encoding="utf-8")
     assert "Wildfire AI Surrogate — Prediction Summary" in pred_html
     assert "hex01/hex01_bp.tif" in pred_html
-    assert "hazard_scaled" in pred_html
+    assert "hazard_class" in pred_html
+    assert "hazard_scaled" not in pred_html
 
     # 3. Evaluate (and verify overwrite cleans up previous summary_report.html cleanly)
     eval_out = tmp_path / "eval_out"

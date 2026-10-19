@@ -14,7 +14,7 @@ Example:
 
 Outputs (per hexel ``hexNN/``): ``hexNN_bp.tif``, ``hexNN_fi.tif``, ``hexNN_ros.tif`` in physical units and,
 when the bundle predicts BP and FI, ``hexNN_hazard_raw.tif``, ``hexNN_hazard_scaled.tif``,
-``hexNN_hazard_class.tif``. A ``run_manifest.json`` and ``predict.log`` are written to the output folder.
+``hexNN_hazard_class.tif`` (``--rasters`` writes only some of them). A ``run_manifest.json`` and ``predict.log`` are written to the output folder.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import shutil
 import sys
 import time
 import traceback
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -87,6 +87,7 @@ PREDICTION_FOLDER_PATTERN = re.compile(r"hex\d+")
 PREDICT_MASK_SCOPES = MASK_SCOPES
 OUTPUT_NODATA = -9999.0
 HAZARD_CLASS_NODATA = 0
+HAZARD_RASTERS = ("hazard_raw", "hazard_scaled", "hazard_class")
 
 
 class PredictError(RuntimeError):
@@ -355,6 +356,32 @@ def stitch_predictions(
     return grids, dict(profile)
 
 
+def available_rasters(bundle: ModelBundle) -> list[str]:
+    """Every raster the bundle can write: its targets, then the hazard layers it supports."""
+    names = [target.name for target in bundle.manifest.targets]
+    if {"bp", "fi"} <= set(names):
+        names.append("hazard_raw")
+        if bundle.manifest.hazard.scale_denominator is not None:
+            names.extend(["hazard_scaled", "hazard_class"])
+    return names
+
+
+def resolve_rasters(bundle: ModelBundle, rasters: Sequence[str] | None, hazard: bool = True) -> list[str]:
+    """The rasters to write (bundle order): ``rasters`` if given, else all of them (no hazard layers if ``hazard`` is False)."""
+    available = available_rasters(bundle)
+    if rasters is None:
+        return [name for name in available if hazard or name not in HAZARD_RASTERS]
+    requested = {name.strip().lower() for name in rasters if name.strip()}
+    unknown = sorted(requested - set(available))
+    if unknown:
+        raise PredictError(f"Unknown raster(s) {unknown} for this model; choose from {available}.")
+    if not requested:
+        raise PredictError(f"Choose at least one raster to write from {available}.")
+    if not hazard and requested & set(HAZARD_RASTERS):
+        raise PredictError("Hazard rasters were requested but hazard is turned off (--no_hazard).")
+    return [name for name in available if name in requested]
+
+
 def compute_hazard_grids(bundle: ModelBundle, grids: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     if not {"bp", "fi"} <= set(grids):
         return {}
@@ -390,11 +417,14 @@ def write_hexel_outputs(
     hazard_grids: dict[str, np.ndarray],
     profile: dict[str, Any],
     output_dir: Path,
+    rasters: Collection[str] | None = None,
 ) -> dict[str, str]:
     hexel_dir = output_dir / f"hex{hex_id}"
     hexel_dir.mkdir(parents=True, exist_ok=True)
     outputs = {}
     for target in bundle.manifest.targets:
+        if rasters is not None and target.name not in rasters:
+            continue
         path = hexel_dir / f"hex{hex_id}_{target.name}.tif"
         write_geotiff(path, grids[target.name], profile, description=target.label, units=target.units)
         outputs[target.name] = str(path.relative_to(output_dir).as_posix())
@@ -404,6 +434,8 @@ def write_hexel_outputs(
         "hazard_class": ("Hazard class", "class (1-based, 0 = nodata)"),
     }
     for name, grid in hazard_grids.items():
+        if rasters is not None and name not in rasters:
+            continue
         path = hexel_dir / f"hex{hex_id}_{name}.tif"
         write_geotiff(path, grid, profile, description=descriptions[name][0], units=descriptions[name][1])
         outputs[name] = str(path.relative_to(output_dir).as_posix())
@@ -422,6 +454,7 @@ def predict_hexel(
     num_workers: int,
     hazard: bool = True,
     scenario_name: str | None = None,
+    rasters: Collection[str] | None = None,
 ) -> HexelResult:
     start = time.perf_counter()
     logger.info("hex%s: preparing input patches", hex_id)
@@ -436,8 +469,9 @@ def predict_hexel(
     logger.info("hex%s: running the model on %d patches", hex_id, len(dataset))
     predictions = run_model(predictor, dataset, batch_size=batch_size, num_workers=num_workers)
     grids, profile = stitch_predictions(bundle, project_dir, hex_id, work_dir, dataset, predictions, mask_scope)
-    hazard_grids = compute_hazard_grids(bundle, grids) if hazard else {}
-    outputs = write_hexel_outputs(bundle, hex_id, grids, hazard_grids, profile, output_dir)
+    wants_hazard = hazard and (rasters is None or any(name in HAZARD_RASTERS for name in rasters))
+    hazard_grids = compute_hazard_grids(bundle, grids) if wants_hazard else {}
+    outputs = write_hexel_outputs(bundle, hex_id, grids, hazard_grids, profile, output_dir, rasters=rasters)
     seconds = time.perf_counter() - start
     logger.info("hex%s: done in %.1f s -> %s", hex_id, seconds, output_dir / f"hex{hex_id}")
     return HexelResult(
@@ -605,8 +639,12 @@ def run_predict(
     scenario_name: str | None = None,
     verify_checksums: bool = True,
     check_inputs: bool = True,
+    rasters: Sequence[str] | None = None,
 ) -> PredictRun:
-    """Run the model bundle on every requested hexel of a project and write GeoTIFFs to ``output_dir``."""
+    """Run the model bundle on every requested hexel of a project and write GeoTIFFs to ``output_dir``.
+
+    ``rasters`` limits the GeoTIFFs written (e.g. ``["bp", "hazard_class"]``; default: all, see ``available_rasters``).
+    """
     started_at = utc_timestamp()
     project_dir = Path(project_dir).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
@@ -623,6 +661,7 @@ def run_predict(
         scenario_name = resolve_scenario_name(scenario_name, bundle)
     except (BundleError, ValueError) as exc:
         raise PredictError(str(exc)) from exc
+    selected_rasters = resolve_rasters(bundle, rasters, hazard=hazard)
     selected_hex_ids = discover_hex_ids(project_dir, hex_ids)
 
     _prepare_output_dir(output_dir, overwrite)
@@ -643,6 +682,7 @@ def run_predict(
             keep_work_dir=keep_work_dir,
             scenario_name=scenario_name,
             check_inputs=check_inputs,
+            rasters=selected_rasters,
         )
 
 
@@ -663,6 +703,7 @@ def _run_predict(
     keep_work_dir: bool,
     scenario_name: str | None,
     check_inputs: bool,
+    rasters: list[str],
 ) -> PredictRun:
     resolved_device = resolve_device(device)
     options = {
@@ -672,6 +713,7 @@ def _run_predict(
         "num_workers": num_workers,
         "mask_scope": scope,
         "hazard": hazard,
+        "rasters": rasters,
         "scenario_name": scenario_name,
         "check_inputs": check_inputs,
     }
@@ -705,6 +747,7 @@ def _run_predict(
                     num_workers=num_workers,
                     hazard=hazard,
                     scenario_name=scenario_name,
+                    rasters=rasters,
                 )
             )
         _write_run_manifest(run, bundle, project_dir, fire_size_path, options, started_at, status="success")
@@ -742,6 +785,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--no_hazard", action="store_true", help="Do not write hazard rasters.")
     parser.add_argument(
+        "--rasters",
+        nargs="+",
+        default=None,
+        metavar="NAME",
+        help="Only write these GeoTIFFs: bp fi ros hazard_raw hazard_scaled hazard_class (default: all).",
+    )
+    parser.add_argument(
         "--scenario_name",
         default=None,
         help="Use fuel raster hexNN_fbp_<scenario_name>.tif instead of hexNN_fbp.tif (default: the model's training scenario, if any).",
@@ -773,6 +823,7 @@ def main(argv: list[str] | None = None) -> int:
                 scenario_name=args.scenario_name,
                 verify_checksums=not args.skip_checksums,
                 check_inputs=not args.skip_check,
+                rasters=args.rasters,
             )
     except (PredictError, BundleError, FileNotFoundError, ValueError, KeyError) as exc:
         log_path = Path(args.output) / LOG_FILENAME

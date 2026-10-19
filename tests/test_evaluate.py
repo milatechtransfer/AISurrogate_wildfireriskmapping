@@ -241,6 +241,16 @@ def test_invalid_requests_are_rejected(bundle_dir: Path, bundle: ModelBundle, pr
         run_evaluate(bundle_dir, project, tmp_path / "evaluation", predictions_dir=predictions, **kwargs)
 
 
+def test_predictions_missing_a_target_are_rejected(bundle_dir: Path, bundle: ModelBundle, project: Path, tmp_path: Path):
+    grids = _write_burnp3_results(project)
+    predictions = _write_predictions(
+        tmp_path / "predictions", bundle, grids, manifest={"options": {"mask_scope": "actual", "rasters": ["bp", "hazard_class"]}}
+    )
+
+    with pytest.raises(EvaluateError, match=r"do not include \['fi', 'ros'\]"):
+        run_evaluate(bundle_dir, project, tmp_path / "evaluation", predictions_dir=predictions, device="cpu", plots=False)
+
+
 def test_evaluate_cli_prints_summary_and_plain_errors(bundle_dir: Path, bundle: ModelBundle, project: Path, tmp_path: Path, capsys):
     predictions = _write_predictions(tmp_path / "predictions", bundle, _write_burnp3_results(project))
     args = ["--bundle", str(bundle_dir), "--project", str(project), "--predictions", str(predictions), "--device", "cpu", "--no_plots"]

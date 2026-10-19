@@ -42,6 +42,7 @@ For fire scientists who prefer a point-and-click interface without installing Py
 3. Click **Browse...** next to **BurnP3+ Project** and select your project folder (containing `hexNN/` subfolders).
    - The app automatically detects your regions, mask mode (`actual`, `buffer`, or `none`), fuel scenarios, and whether BurnP3+ `results/` exist.
 4. Click **1. Check Inputs**, **2. Predict Surrogate Maps**, or **3. Evaluate vs. BurnP3+**.
+   - Under **Predict Outputs**, tick the maps you want (default: BP, FI, ROS and hazard class).
 5. When finished, an offline visual **`summary_report.html`** opens automatically with metrics, warnings, and plots.
 
 If you already have a Python environment set up from this repository, you can also launch the same desktop window with:
@@ -216,6 +217,7 @@ of its `hexNN` folders.
 | `--device auto\|cpu\|cuda\|mps` | Hardware to run on |
 | `--batch_size N` | Lower it if memory runs out |
 | `--no_hazard` | Skip the hazard rasters |
+| `--rasters bp fi hazard_class` | Only write these GeoTIFFs (default: all six above). `evaluate` needs `bp fi ros` |
 | `--overwrite` | Replace earlier predictions in `--output` |
 
 ## 📊 Evaluate against BurnP3+

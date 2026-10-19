@@ -39,7 +39,7 @@ from inference.bundle import (
 )
 from inference.check import check_project
 from inference.evaluate import EvaluateError, format_summary, run_evaluate
-from inference.predict import PredictError, resolve_fire_size_table, run_predict
+from inference.predict import PredictError, available_rasters, resolve_fire_size_table, run_predict
 from inference.report import (
     SUMMARY_REPORT_FILENAME,
     write_check_report_html,
@@ -108,6 +108,7 @@ class WorkflowRequest:
     overwrite: bool = True
     plots: bool = True
     by_firezone: bool = False
+    rasters: list[str] | None = None  # predict only: GeoTIFFs to write (None = all)
 
 
 @dataclass
@@ -119,6 +120,17 @@ class WorkflowOutcome:
     report_html: Path | None = None
     error: str | None = None
 
+
+# Predict output checkboxes (raster name, label) and the ones ticked by default.
+PREDICT_RASTER_OPTIONS = (
+    ("bp", "Burn probability"),
+    ("fi", "Fire intensity"),
+    ("ros", "Rate of spread"),
+    ("hazard_raw", "Hazard (raw)"),
+    ("hazard_scaled", "Hazard (scaled 0-100)"),
+    ("hazard_class", "Hazard class"),
+)
+DEFAULT_PREDICT_RASTERS = ("bp", "fi", "ros", "hazard_class")
 
 # Shown in the fuel-scenario dropdown in place of an empty value (maps to scenario_name=None).
 DEFAULT_SCENARIO_LABEL = "(default fuel grid)"
@@ -346,6 +358,7 @@ def execute_workflow_action(request: WorkflowRequest) -> WorkflowOutcome:
                 hazard=True,
                 overwrite=request.overwrite,
                 scenario_name=resolved_scenario,
+                rasters=request.rasters,
             )
             report_path = write_predict_report_html(pred_run, bundle, project_dir, output_dir / SUMMARY_REPORT_FILENAME)
             lines = [
@@ -475,6 +488,7 @@ def launch_gui(
     open_report_var = tk.BooleanVar(value=True)
     plots_var = tk.BooleanVar(value=True)
     by_firezone_var = tk.BooleanVar(value=False)
+    raster_vars = {name: tk.BooleanVar(value=name in DEFAULT_PREDICT_RASTERS) for name, _ in PREDICT_RASTER_OPTIONS}
 
     bundle_status_var = tk.StringVar(value="Select a model bundle folder (contains manifest.yaml & model.pt).")
     project_status_var = tk.StringVar(value="Select a BurnP3+ project folder (containing hexNN/ subfolders).")
@@ -607,8 +621,16 @@ def launch_gui(
     ttk.Button(fs_frame, text="Browse CSV...", command=_browse_fire_size).grid(row=0, column=1, padx=(6, 0))
     ttk.Button(fs_frame, text="Default", command=lambda: fire_size_var.set("")).grid(row=0, column=2, padx=(4, 0))
 
+    ttk.Label(opts_box, text="Predict Outputs:").grid(row=2, column=0, sticky=tk.W, padx=(0, 6), pady=(6, 0))
+    rasters_frame = ttk.Frame(opts_box)
+    rasters_frame.grid(row=2, column=1, columnspan=5, sticky=tk.W, pady=(6, 0))
+    raster_checks: dict[str, ttk.Checkbutton] = {}
+    for name, label in PREDICT_RASTER_OPTIONS:
+        raster_checks[name] = ttk.Checkbutton(rasters_frame, text=label, variable=raster_vars[name])
+        raster_checks[name].pack(side=tk.LEFT, padx=(0, 12))
+
     chk_frame = ttk.Frame(opts_box)
-    chk_frame.grid(row=2, column=0, columnspan=6, sticky=tk.W, pady=(6, 0))
+    chk_frame.grid(row=3, column=0, columnspan=6, sticky=tk.W, pady=(6, 0))
     ttk.Checkbutton(chk_frame, text="Overwrite existing output folder", variable=overwrite_var).pack(side=tk.LEFT, padx=(0, 16))
     ttk.Checkbutton(chk_frame, text="Open HTML summary report when finished", variable=open_report_var).pack(side=tk.LEFT, padx=(0, 16))
     ttk.Checkbutton(chk_frame, text="Save evaluation comparison plots", variable=plots_var).pack(side=tk.LEFT, padx=(0, 16))
@@ -686,6 +708,9 @@ def launch_gui(
             b = load_bundle(raw, verify_checksums=False)
             targets = ", ".join(t.name.upper() for t in b.manifest.targets)
             bundle_status_var.set(f"Loaded bundle: {b.manifest.name} v{b.manifest.version}  |  Targets: {targets}")
+            supported = set(available_rasters(b))
+            for name, check in raster_checks.items():
+                check.configure(state=tk.NORMAL if name in supported else tk.DISABLED)
         except (BundleError, FileNotFoundError, ValueError) as exc:
             bundle_status_var.set(f"Invalid bundle folder: {exc}")
 
@@ -732,6 +757,11 @@ def launch_gui(
             messagebox.showwarning("Missing Project Folder", "Please select a BurnP3+ Project folder first.")
             return
 
+        rasters = [name for name, check in raster_checks.items() if raster_vars[name].get() and check.instate(["!disabled"])]
+        if action == "predict" and not rasters:
+            messagebox.showwarning("No Outputs Selected", "Tick at least one map under 'Predict Outputs'.")
+            return
+
         info = inspect_project_folder(p_dir)
         out_str = output_var.get().strip()
         if not out_str or not output_customized:
@@ -755,6 +785,7 @@ def launch_gui(
             overwrite=bool(overwrite_var.get()),
             plots=bool(plots_var.get()),
             by_firezone=bool(by_firezone_var.get()),
+            rasters=rasters,
         )
 
         _set_running_state(True)

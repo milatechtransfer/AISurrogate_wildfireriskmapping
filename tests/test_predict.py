@@ -198,6 +198,34 @@ def test_predict_writes_georeferenced_outputs_without_burnp3_results(bundle_dir:
     assert "national training table shipped with the model" in (output_dir / "predict.log").read_text()
 
 
+def test_predict_writes_only_the_requested_rasters(bundle_dir: Path, project: Path, tmp_path: Path):
+    output_dir = tmp_path / "out"
+    code = main(
+        ["--bundle", str(bundle_dir), "--project", str(project), "--output", str(output_dir), "--device", "cpu"]
+        + ["--rasters", "hazard_class", "bp"]
+    )
+
+    assert code == 0
+    assert sorted(path.name for path in (output_dir / "hex01").glob("*.tif")) == ["hex01_bp.tif", "hex01_hazard_class.tif"]
+    run_manifest = json.loads((output_dir / RUN_MANIFEST_FILENAME).read_text())
+    assert run_manifest["options"]["rasters"] == ["bp", "hazard_class"]
+    assert set(run_manifest["hexels"][0]["outputs"]) == {"bp", "hazard_class"}
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"rasters": ["bp", "smoke"]}, r"Unknown raster\(s\) \['smoke'\]"),
+        ({"rasters": []}, "Choose at least one raster"),
+        ({"rasters": ["hazard_class"], "hazard": False}, "hazard is turned off"),
+    ],
+)
+def test_predict_rejects_invalid_raster_requests(bundle_dir: Path, project: Path, tmp_path: Path, kwargs, message):
+    with pytest.raises(PredictError, match=message):
+        run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu", **kwargs)
+    assert not (tmp_path / "out").exists()
+
+
 def test_predict_derives_curves_for_fuel_codes_defined_in_the_project(bundle_dir: Path, project: Path, tmp_path: Path):
     from tests.test_fuels import write_project_fuel_tables
 
