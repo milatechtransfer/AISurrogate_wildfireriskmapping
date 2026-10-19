@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from inference.app import (
+    DEFAULT_SCENARIO_LABEL,
     WorkflowRequest,
     discover_bundles,
     discover_sample_projects,
@@ -17,6 +18,7 @@ from inference.app import (
     inspect_project_folder,
     parse_hex_ids_input,
     run_smoke_test,
+    scenario_name_from_ui,
 )
 from inference.build_standalone import (
     APP_NAME,
@@ -148,6 +150,9 @@ def test_execute_workflow_check_predict_and_evaluate_write_html_reports(bundle_d
     assert "Wildfire AI Surrogate — BurnP3+ Evaluation Report" in eval_html
     assert "Summary Metrics" in eval_html
     assert "Wildfire Hazard Class Agreement" in eval_html
+    assert 'class="table-scroll"' in eval_html
+    assert ">iou_top10</th>" in eval_html
+    assert ">mae_top10</th>" not in eval_html  # full metric set stays in metrics_summary.csv
 
 
 def test_execute_workflow_reports_input_errors_cleanly(bundle_dir: Path, project: Path, tmp_path: Path):
@@ -211,3 +216,9 @@ def test_smoke_test_runs_all_workflows_on_staged_app(bundle_dir: Path, tmp_path:
     create_sample_project(app_dir / SAMPLE_PROJECT_DIRNAME, bundle=load_bundle(bundle_dir))
     monkeypatch.chdir(app_dir)
     assert run_smoke_test() == 0
+
+
+def test_scenario_name_from_ui_maps_default_label_to_none():
+    assert scenario_name_from_ui(DEFAULT_SCENARIO_LABEL) is None
+    assert scenario_name_from_ui("  ") is None
+    assert scenario_name_from_ui(" FireExcludeSpotting ") == "FireExcludeSpotting"

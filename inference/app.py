@@ -90,7 +90,7 @@ class ProjectInspection:
             f"{len(self.scenarios)} scenario(s) available" if self.scenarios else "national/default fuel grid"
         )
         results_desc = "BurnP3+ results found (Evaluate ready)" if self.has_burnp3_results else "Inputs only (Predict ready)"
-        return f"{regions}  |  Mask: {mask_desc}  |  Scenario: {scen_desc}  |  {results_desc}"
+        return f"{regions}  |  Mask: {mask_desc}  |  Fuel scenario: {scen_desc}  |  {results_desc}"
 
 
 @dataclass
@@ -118,6 +118,16 @@ class WorkflowOutcome:
     output_dir: Path
     report_html: Path | None = None
     error: str | None = None
+
+
+# Shown in the fuel-scenario dropdown in place of an empty value (maps to scenario_name=None).
+DEFAULT_SCENARIO_LABEL = "(default fuel grid)"
+
+
+def scenario_name_from_ui(raw: str) -> str | None:
+    """Map the fuel-scenario dropdown value to a scenario name (blank or the default label -> None)."""
+    cleaned = raw.strip()
+    return None if not cleaned or cleaned == DEFAULT_SCENARIO_LABEL else cleaned
 
 
 def is_bundle_dir(path: str | Path) -> bool:
@@ -449,7 +459,6 @@ def launch_gui(
         style.theme_use("clam")
     style.configure("Header.TLabel", font=("Segoe UI", 14, "bold"))
     style.configure("Subheader.TLabel", font=("Segoe UI", 9), foreground="#475569")
-    style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"), padding=(12, 7))
     style.configure("Action.TButton", font=("Segoe UI", 10), padding=(10, 7))
 
     # State variables
@@ -457,7 +466,7 @@ def launch_gui(
     project_var = tk.StringVar()
     output_var = tk.StringVar()
     mask_var = tk.StringVar(value="actual")
-    scenario_var = tk.StringVar(value="")
+    scenario_var = tk.StringVar(value=DEFAULT_SCENARIO_LABEL)
     hex_ids_var = tk.StringVar(value="all")
     device_var = tk.StringVar(value="auto")
     batch_size_var = tk.IntVar(value=8)
@@ -570,8 +579,8 @@ def launch_gui(
     mask_combo = ttk.Combobox(opts_box, textvariable=mask_var, values=list(MASK_SCOPES), state="readonly", width=12)
     mask_combo.grid(row=0, column=1, sticky=tk.EW, padx=(0, 12), pady=3)
 
-    ttk.Label(opts_box, text="Scenario:").grid(row=0, column=2, sticky=tk.W, padx=(0, 6), pady=3)
-    scenario_combo = ttk.Combobox(opts_box, textvariable=scenario_var, values=[""], width=18)
+    ttk.Label(opts_box, text="Fuel Scenario:").grid(row=0, column=2, sticky=tk.W, padx=(0, 6), pady=3)
+    scenario_combo = ttk.Combobox(opts_box, textvariable=scenario_var, values=[DEFAULT_SCENARIO_LABEL], width=18)
     scenario_combo.grid(row=0, column=3, sticky=tk.EW, padx=(0, 12), pady=3)
 
     ttk.Label(opts_box, text="Regions (hexNN):").grid(row=0, column=4, sticky=tk.W, padx=(0, 6), pady=3)
@@ -613,7 +622,7 @@ def launch_gui(
     btn_check.pack(side=tk.LEFT, padx=(0, 8))
 
     btn_predict = ttk.Button(
-        actions_box, text="2. Predict Surrogate Maps", style="Primary.TButton", command=lambda: _start_action("predict")
+        actions_box, text="2. Predict Surrogate Maps", style="Action.TButton", command=lambda: _start_action("predict")
     )
     btn_predict.pack(side=tk.LEFT, padx=(0, 8))
 
@@ -691,8 +700,8 @@ def launch_gui(
         project_status_var.set(info.summary_line())
         if info.hex_ids:
             mask_var.set(info.recommended_mask_scope)
-            scenario_combo["values"] = ["", *info.scenarios]
-            scenario_var.set(info.recommended_scenario or "")
+            scenario_combo["values"] = [DEFAULT_SCENARIO_LABEL, *info.scenarios]
+            scenario_var.set(info.recommended_scenario or DEFAULT_SCENARIO_LABEL)
             if info.selected_single_hexel:
                 hex_ids_var.set(f"hex{info.selected_single_hexel}")
             else:
@@ -739,7 +748,7 @@ def launch_gui(
             output_dir=out_path,
             hex_ids=parse_hex_ids_input(hex_ids_var.get()),
             mask_scope=mask_var.get().strip() or None,
-            scenario_name=scenario_var.get().strip() or None,
+            scenario_name=scenario_name_from_ui(scenario_var.get()),
             fire_size_table=Path(fs_str) if fs_str else None,
             device=device_var.get().strip() or "auto",
             batch_size=max(1, int(batch_size_var.get() or 8)),

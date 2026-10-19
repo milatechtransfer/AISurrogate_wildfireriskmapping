@@ -118,6 +118,9 @@ section h3 {
 .badge-warning { background: var(--warn-bg); color: var(--warn-fg); }
 .badge-error { background: var(--err-bg); color: var(--err-fg); }
 .badge-note { background: var(--note-bg); color: var(--note-fg); }
+.table-scroll {
+    overflow-x: auto;
+}
 table {
     width: 100%;
     border-collapse: collapse;
@@ -431,7 +434,7 @@ def _dataframe_to_html_table(df: pd.DataFrame, float_fmt: str = "{:.4g}") -> str
             else:
                 cells.append(f"<td><code>{_esc(val)}</code></td>")
         rows.append(f"<tr>{''.join(cells)}</tr>")
-    return f"<table><thead><tr>{''.join(headers)}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    return f'<div class="table-scroll"><table><thead><tr>{"".join(headers)}</tr></thead>' f"<tbody>{''.join(rows)}</tbody></table></div>"
 
 
 def render_evaluate_report_html(run: EvaluateRun, bundle: ModelBundle, project_dir: str | Path) -> str:
@@ -454,14 +457,16 @@ def render_evaluate_report_html(run: EvaluateRun, bundle: ModelBundle, project_d
         sections.append(f'<section><h2>Run Warnings</h2><ul class="findings">{warn_items}</ul></section>')
 
     if not run.summary.empty:
-        preferred = ["target", "area", "n_hexels", *HEADLINE_METRICS, "normalized_mae", "normalized_bias", "iou_top10", "auc_iou_top10"]
+        # The full metric set (top-k MAE/IoU, AUC, ...) is in metrics_summary.csv; keep the page table readable.
+        preferred = ["target", "area", "n_hexels", *HEADLINE_METRICS, "iou_top10"]
         cols = [c for c in preferred if c in run.summary.columns]
-        extra = [c for c in run.summary.columns if c not in cols]
         sections.append(
             "<section><h2>Summary Metrics (AI Surrogate vs. BurnP3+)</h2>"
             "<p>Concordance correlation (<code>ccc</code>) and <code>spearman</code> rank correlation measure spatial agreement "
-            "(1.0 is best); <code>mae</code> and <code>bias</code> are in physical units (0.0 is best).</p>"
-            f"{_dataframe_to_html_table(run.summary[cols + extra])}"
+            "(1.0 is best); <code>mae</code> and <code>bias</code> are in physical units (0.0 is best); "
+            "<code>iou_top10</code> is the overlap of the top-10% highest-value areas (1.0 is best). "
+            "All other metrics are in the CSV files below.</p>"
+            f"{_dataframe_to_html_table(run.summary[cols])}"
             '<p style="margin-top:10px;font-size:0.86rem;">'
             'CSV downloads: <a href="metrics_summary.csv"><code>metrics_summary.csv</code></a> &middot; '
             '<a href="metrics_per_hexel.csv"><code>metrics_per_hexel.csv</code></a></p>'
