@@ -50,7 +50,7 @@ jobs:
           mkdir -p _bundle_download
           if [[ -z "$BUNDLE_ZIP_URL" ]]; then
             curl -fsSL "$DEFAULT_BUNDLE_ZIP_URL" -o _bundle_download/bundle.zip
-            echo "$DEFAULT_BUNDLE_ZIP_SHA256  _bundle_download/bundle.zip" | shasum -a 256 -c -
+            uv run --python 3.12 python -c "import hashlib, os, sys; h = hashlib.sha256(open('_bundle_download/bundle.zip', 'rb').read()).hexdigest(); sys.exit(0 if h == os.environ['DEFAULT_BUNDLE_ZIP_SHA256'] else f'Bundle checksum mismatch: {h}')"
           else
             curl -fsSL "$BUNDLE_ZIP_URL" -o _bundle_download/bundle.zip
           fi
