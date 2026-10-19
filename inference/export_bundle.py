@@ -3,9 +3,10 @@ Export a training checkpoint into a portable model bundle.
 
 Example: rebuild the v1.0.0 release bundle. Every input is in the repository (run ``git lfs pull`` first):
 
-    D=model_checkpoints/multi_task_spatial_weather_firesize_seed1337
+    C=model_checkpoints/multi_task_spatial_weather_firesize_seed1337
+    D=model_checkpoints/multi_task_spatial_weather_firesize_bundle_inputs
     uv run python -m inference.export_bundle \
-        --checkpoint $D/best.pth --data_root $D \
+        --checkpoint $C/best.pth --data_root $D \
         --out_dir bundles/nrcan-surrogate-bp-fi-ros-v1.0 \
         --name nrcan-surrogate-bp-fi-ros --version 1.0.0 \
         --description "AI surrogate of BurnP3+ that predicts burn probability, fire intensity and rate of spread (and wildfire hazard) from BurnP3+ project inputs, trained on the national BurnP3+ hexel dataset." \
