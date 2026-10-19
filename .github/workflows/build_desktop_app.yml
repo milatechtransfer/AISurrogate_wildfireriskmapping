@@ -6,11 +6,16 @@ on:
   workflow_dispatch:
     inputs:
       bundle_zip_url:
-        description: "Optional URL to a model bundle .zip to embed inside the standalone app"
+        description: "Model bundle .zip URL to embed (blank = v1.0.0 release bundle, 'demo' = random-weights demo bundle)"
         required: false
         default: ""
   release:
     types: [published]
+
+env:
+  # Trained model published as a GitHub release asset (no Git LFS bandwidth used).
+  DEFAULT_BUNDLE_ZIP_URL: https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/v1.0.0/nrcan-surrogate-bp-fi-ros-v1.0.zip
+  DEFAULT_BUNDLE_ZIP_SHA256: c864edef9964315ad5044287c8bf9ba20b3d7693146d90cbb86b6b250014b0bb
 
 jobs:
   build-standalone:
@@ -36,14 +41,19 @@ jobs:
       - name: Install project dependencies
         run: uv sync --locked --python 3.12
 
-      - name: Download optional model bundle
-        if: ${{ inputs.bundle_zip_url != '' }}
+      - name: Download model bundle
+        if: ${{ inputs.bundle_zip_url != 'demo' }}
         shell: bash
         env:
           BUNDLE_ZIP_URL: ${{ inputs.bundle_zip_url }}
         run: |
           mkdir -p _bundle_download
-          curl -fsSL "$BUNDLE_ZIP_URL" -o _bundle_download/bundle.zip
+          if [[ -z "$BUNDLE_ZIP_URL" ]]; then
+            curl -fsSL "$DEFAULT_BUNDLE_ZIP_URL" -o _bundle_download/bundle.zip
+            echo "$DEFAULT_BUNDLE_ZIP_SHA256  _bundle_download/bundle.zip" | shasum -a 256 -c -
+          else
+            curl -fsSL "$BUNDLE_ZIP_URL" -o _bundle_download/bundle.zip
+          fi
           unzip -q _bundle_download/bundle.zip -d _bundle_download/unpacked
 
       - name: Build standalone PyInstaller bundle and .zip archive
