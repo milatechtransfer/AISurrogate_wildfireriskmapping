@@ -378,7 +378,7 @@ command that rebuilds it is in the docstring of `inference/export_bundle.py`.
 
 ### Building the standalone desktop app
 
-Package `inference.app` together with Python, PyTorch, GDAL/Rasterio, and a model bundle into a standalone, offline-ready folder and `.zip` archive:
+Package `inference.app` together with Python, PyTorch, GDAL/Rasterio, and a model bundle into a standalone, offline-ready folder and archive (`.zip`, or `.dmg` on macOS):
 
 ```bash
 uv run --with pyinstaller python -m inference.build_standalone \

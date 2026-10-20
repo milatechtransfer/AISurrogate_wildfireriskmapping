@@ -260,6 +260,12 @@ def _render_findings_list(findings: list[Finding]) -> str:
     return f'<ul class="findings">{"".join(items)}</ul>'
 
 
+def _run_warnings_section(warnings: list[str]) -> str:
+    """Problems hit while running (e.g. a picture that could not be drawn) that did not stop the run."""
+    items = "".join(f'<li><span class="badge badge-warning">warning</span><div>{_esc(w)}</div></li>' for w in warnings)
+    return f'<section><h2>Run Warnings</h2><ul class="findings">{items}</ul></section>'
+
+
 def _map_gallery_html(output_dir: Path, bundle: ModelBundle, heading: str, intro: str) -> str:
     """A section of the PNG pictures in each map-type folder (bp/, fi/, ...), grouped by map type; "" when there are none."""
     descriptions = raster_descriptions(bundle)
@@ -393,25 +399,13 @@ def render_predict_report_html(run: PredictRun, bundle: ModelBundle, project_dir
         f"<tbody>{''.join(hex_rows)}</tbody></table></section>"
     )
 
-    layer_rows = {
-        t.name: f"<tr><td><code>{_esc(t.name)}</code></td><td>{_esc(t.label)}</td><td><code>{_esc(t.units)}</code></td>"
-        f"<td><code>{OUTPUT_NODATA:g}</code></td></tr>"
-        for t in bundle.manifest.targets
-    }
-    if {"bp", "fi"} <= {t.name for t in bundle.manifest.targets}:
-        layer_rows.update(
-            {
-                "hazard_raw": f"<tr><td><code>hazard_raw</code></td><td>Raw hazard (BP &times; capped FI)</td><td><code>kW/m</code></td>"
-                f"<td><code>{OUTPUT_NODATA:g}</code></td></tr>",
-                "hazard_scaled": f"<tr><td><code>hazard_scaled</code></td><td>Scaled hazard index</td>"
-                f"<td><code>0-{bundle.manifest.hazard.scale_to:g}</code></td><td><code>{OUTPUT_NODATA:g}</code></td></tr>",
-                "hazard_class": f"<tr><td><code>hazard_class</code></td><td>Binned hazard class (1 = lowest)</td>"
-                f"<td><code>class 1..{len(bundle.manifest.hazard.bin_thresholds) + 1}</code></td>"
-                f"<td><code>{HAZARD_CLASS_NODATA}</code></td></tr>",
-            }
-        )
     written = {name for hex_res in run.hexels for name in hex_res.outputs}
-    target_rows = [row for name, row in layer_rows.items() if name in written]
+    target_rows = [
+        f"<tr><td><code>{_esc(name)}</code></td><td>{_esc(label)}</td><td><code>{_esc(units or '')}</code></td>"
+        f"<td><code>{HAZARD_CLASS_NODATA if name == 'hazard_class' else f'{OUTPUT_NODATA:g}'}</code></td></tr>"
+        for name, (label, units) in raster_descriptions(bundle).items()
+        if name in written
+    ]
 
     gallery = _map_gallery_html(
         run.output_dir,
@@ -435,6 +429,8 @@ def render_predict_report_html(run: PredictRun, bundle: ModelBundle, project_dir
         sections.append(
             f"<section><h2>Input Validation Notes &amp; Warnings</h2>{_render_findings_list(run.input_check.findings)}</section>"
         )
+    if run.warnings:
+        sections.append(_run_warnings_section(run.warnings))
 
     return _page_shell(
         title="Wildfire AI Surrogate — Prediction Summary",
@@ -471,14 +467,14 @@ def _dataframe_to_html_table(df: pd.DataFrame, float_fmt: str = "{:.4g}") -> str
             val = row[col]
             if pd.isna(val):
                 cells.append('<td class="num">&mdash;</td>')
-            elif isinstance(val, (float, int)) and not isinstance(val, bool) and pd.api.types.is_float_dtype(df[col]):
+            elif pd.api.types.is_float_dtype(df[col]):
                 cells.append(f'<td class="num">{_esc(float_fmt.format(float(val)))}</td>')
-            elif isinstance(val, (int,)) and not isinstance(val, bool):
+            elif pd.api.types.is_integer_dtype(df[col]):
                 cells.append(f'<td class="num">{int(val):,}</td>')
             else:
                 cells.append(f"<td><code>{_esc(val)}</code></td>")
         rows.append(f"<tr>{''.join(cells)}</tr>")
-    return f'<div class="table-scroll"><table><thead><tr>{"".join(headers)}</tr></thead>' f"<tbody>{''.join(rows)}</tbody></table></div>"
+    return f'<div class="table-scroll"><table><thead><tr>{"".join(headers)}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
 
 
 def render_evaluate_report_html(run: EvaluateRun, bundle: ModelBundle, project_dir: str | Path) -> str:
@@ -497,8 +493,7 @@ def render_evaluate_report_html(run: EvaluateRun, bundle: ModelBundle, project_d
     sections: list[str] = []
 
     if run.warnings:
-        warn_items = "".join(f'<li><span class="badge badge-warning">warning</span><div>{_esc(w)}</div></li>' for w in run.warnings)
-        sections.append(f'<section><h2>Run Warnings</h2><ul class="findings">{warn_items}</ul></section>')
+        sections.append(_run_warnings_section(run.warnings))
 
     if not run.summary.empty:
         # The full metric set (top-k MAE/IoU, AUC, ...) is in metrics_summary.csv; keep the page table readable.

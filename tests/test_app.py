@@ -145,6 +145,7 @@ def test_execute_workflow_check_predict_and_evaluate_write_html_reports(bundle_d
     assert '<img src="hazard_class/hex01_hazard_class.png"' in pred_html
     assert "hazard_class" in pred_html
     assert "hazard_scaled" not in pred_html
+    assert "Run Warnings" not in pred_html
 
     # 3. Evaluate (and verify overwrite cleans up previous summary_report.html cleanly)
     eval_out = tmp_path / "eval_out"
@@ -167,6 +168,29 @@ def test_execute_workflow_check_predict_and_evaluate_write_html_reports(bundle_d
     assert 'class="table-scroll"' in eval_html
     assert ">iou_top10</th>" in eval_html
     assert ">mae_top10</th>" not in eval_html  # full metric set stays in metrics_summary.csv
+
+
+def test_failed_picture_is_reported_without_failing_predict(
+    bundle_dir: Path, project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import inference.plots
+
+    def _broken_plot(*_args, **_kwargs):
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr(inference.plots, "plot_prediction_map", _broken_plot)
+    res = execute_workflow_action(
+        WorkflowRequest(
+            action="predict", bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu", rasters=["bp"]
+        )
+    )
+
+    assert res.ok is True
+    assert (tmp_path / "out" / "bp" / "hex01_bp.tif").is_file()
+    assert res.report_html is not None
+    html = res.report_html.read_text(encoding="utf-8")
+    assert "Run Warnings" in html
+    assert "could not draw the bp picture: no display" in html
 
 
 def test_execute_workflow_reports_input_errors_cleanly(bundle_dir: Path, project: Path, tmp_path: Path):

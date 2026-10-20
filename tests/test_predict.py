@@ -198,6 +198,7 @@ def test_predict_writes_georeferenced_outputs_without_burnp3_results(bundle_dir:
     assert run_manifest["fire_size_table"]["source"] == "bundle"
     assert run_manifest["fire_size_table"]["matches_training_table"] is True
     assert run_manifest["input_check"] == {"errors": [], "warnings": []}
+    assert run_manifest["warnings"] == []
     assert run.fire_size_note is not None
     assert "national training table shipped with the model" in run.fire_size_note
     assert "national training table shipped with the model" in (output_dir / RUN_DETAILS_DIRNAME / "predict.log").read_text()

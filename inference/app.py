@@ -4,7 +4,7 @@ One-click desktop application for checking, predicting, and evaluating BurnP3+ p
 Launch with:
     python -m inference.app [--bundle PATH] [--project PATH] [--output PATH]
 
-Or double-click ``run_surrogate_app.bat`` (Windows) / ``run_surrogate_app.command`` (macOS / Linux).
+The packaged build (``inference.build_standalone``) launches it from a double-clickable WildfireSurrogateApp.
 """
 
 from __future__ import annotations
@@ -464,7 +464,6 @@ class _QueueLogHandler(logging.Handler):
 def show_help_window(parent: Any) -> Any:
     """Open (or raise) the offline Help window; returns the Toplevel."""
     import tkinter as tk
-    import webbrowser
     from tkinter import ttk
 
     from inference.app_help import DOCS_URL, HELP_SECTIONS
@@ -542,7 +541,6 @@ def launch_gui(
     scenario_var = tk.StringVar(value=DEFAULT_SCENARIO_LABEL)
     hex_ids_var = tk.StringVar(value="all")
     device_var = tk.StringVar(value="auto")
-    batch_size_var = tk.IntVar(value=8)
     fire_size_var = tk.StringVar(value="")
     overwrite_var = tk.BooleanVar(value=True)
     open_report_var = tk.BooleanVar(value=True)
@@ -824,7 +822,6 @@ def launch_gui(
             progress_bar.stop()
 
     def _start_action(action: ActionType) -> None:
-        nonlocal output_customized
         b_dir = bundle_var.get().strip()
         p_dir = project_var.get().strip()
         if not b_dir:
@@ -858,7 +855,6 @@ def launch_gui(
             scenario_name=scenario_name_from_ui(scenario_var.get()),
             fire_size_table=Path(fs_str) if fs_str else None,
             device=device_var.get().strip() or "auto",
-            batch_size=max(1, int(batch_size_var.get() or 8)),
             overwrite=bool(overwrite_var.get()),
             plots=bool(plots_var.get()),
             by_firezone=bool(by_firezone_var.get()),

@@ -285,10 +285,9 @@ def _plot_target(
             run_warnings.append(message)
     finally:
         plt.close("all")
-        for folder in (raw_dir, hexel_dir):
-            for old, new in renames.items():
-                if (folder / old).is_file():
-                    (folder / old).replace(target_dir / new)
+        for old, new in renames.items():
+            if (raw_dir / old).is_file():
+                (raw_dir / old).replace(target_dir / new)
         shutil.rmtree(hexel_dir, ignore_errors=True)
 
 

@@ -1,7 +1,7 @@
 """
 Build a standalone, zero-install desktop application bundle using PyInstaller.
 
-The resulting folder (and optional ``.zip`` archive) contains a native executable
+The resulting folder (and optional ``.zip`` / macOS ``.dmg`` archive) contains a native executable
 (``WildfireSurrogateApp.exe`` on Windows, ``WildfireSurrogateApp.app`` on macOS, or
 ``WildfireSurrogateApp`` on Linux), all required Python/PyTorch/GDAL libraries, and (when
 ``--bundle`` is given) the pre-loaded model bundle under ``bundles/``.
@@ -464,7 +464,7 @@ def build_standalone_app(
     console: bool = False,
     include_sample_project: bool = True,
 ) -> Path:
-    """Run PyInstaller, embed the optional model bundle and sample project, and optionally create a release ``.zip``."""
+    """Run PyInstaller, embed the optional model bundle and sample project, and optionally create a release archive."""
     repo_root = Path(__file__).resolve().parents[1]
     entry_script = repo_root / "inference" / "app.py"
     dist_dir = Path(out_dir).expanduser().resolve()
@@ -530,7 +530,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--out_dir", default="dist", help="Output directory for the built application (default: dist/).")
     parser.add_argument("--name", default=APP_NAME, help=f"Application executable/folder name (default: {APP_NAME}).")
-    parser.add_argument("--zip", action="store_true", help="Also package the built folder into a platform-tagged .zip archive.")
+    parser.add_argument("--zip", action="store_true", help="Also package the built folder into a platform archive (.zip; .dmg on macOS).")
     parser.add_argument("--no_sample_project", action="store_true", help="Skip generating the embedded sample_project/ folder.")
     parser.add_argument("--console", action="store_true", help="Keep a terminal console attached (useful for debugging builds).")
     return parser

@@ -689,6 +689,7 @@ def _write_run_manifest(
             else None
         ),
         "hexels": [result.__dict__ for result in run.hexels],
+        "warnings": run.warnings,
     }
     path = run.output_dir / RUN_DETAILS_DIRNAME / RUN_MANIFEST_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
