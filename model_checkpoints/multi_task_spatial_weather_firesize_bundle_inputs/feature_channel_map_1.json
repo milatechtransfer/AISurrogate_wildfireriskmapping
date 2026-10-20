@@ -1,0 +1,26 @@
+{
+    "fuel_grid": [
+        0
+    ],
+    "elevation_grid": [
+        1
+    ],
+    "ignition_grid_human": [
+        2
+    ],
+    "ignition_grid_lightning": [
+        3
+    ],
+    "firezones_grid": [
+        4
+    ],
+    "bp_out_grid": [
+        5
+    ],
+    "fi_out_grid": [
+        6
+    ],
+    "ros_out_grid": [
+        7
+    ]
+}

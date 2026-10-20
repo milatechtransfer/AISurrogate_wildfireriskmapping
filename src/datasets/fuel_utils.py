@@ -208,8 +208,7 @@ def _read_hex_season_weights(
 
     if "Season" not in distribution_df.columns:
         raise ValueError(
-            f"Ignition distribution CSV is missing a 'Season' column: {distribution_path}. "
-            f"Found columns: {list(distribution_df.columns)}"
+            f"Ignition distribution CSV is missing a 'Season' column: {distribution_path}. Found columns: {list(distribution_df.columns)}"
         )
 
     distribution_df["Season"] = distribution_df["Season"].astype(str).str.strip()
@@ -384,6 +383,7 @@ def build_fuel_curve_lookup(
     isi_col: str = "ISI",
     feature_name: str = "iROS",
     fuel_curves_filename: str = DEFAULT_FUEL_CURVES_CSV,
+    hex_ids: list[str] | None = None,
 ) -> dict[tuple[int, str | None], np.ndarray]:
     """
     Construct the complete fuel curve lookup table once at runtime.
@@ -430,6 +430,10 @@ def build_fuel_curve_lookup(
     fuel_curves_filename
         Filename (relative to root_dir) of the fuel curve CSV produced by
         compute_vector_values_national.R. Defaults to ``DEFAULT_FUEL_CURVES_CSV``.
+
+    hex_ids
+        Hexels (under ``raw_data_dir``) to build season-blended curves for. Defaults to every
+        ``hex*`` directory found in ``raw_data_dir``.
     """
     if feature_name not in _FEATURE_COLUMN:
         raise ValueError(f"Unknown feature_name={feature_name!r}. Supported values: {sorted(_FEATURE_COLUMN)}")
@@ -457,7 +461,8 @@ def build_fuel_curve_lookup(
         curve_lookup[(fbp_code, None)] = season_curves[only_state].sort_index().to_numpy(dtype=np.float32)
 
     # Multi-state codes must be blended per hex using hex-specific season weights.
-    hex_ids = find_hex_ids(str(raw_data_dir))
+    if hex_ids is None:
+        hex_ids = find_hex_ids(str(raw_data_dir))
 
     for raw_hex_id in hex_ids:
         hex_id = _normalize_hex_id(raw_hex_id)
@@ -565,8 +570,7 @@ def compute_fuel_curve_norm_stats(
 
     if not vectors:
         raise ValueError(
-            f"No fuel curve vectors found for feature_name={feature_name!r}. "
-            "Check root_dir and raw_data_dir point to the correct dataset."
+            f"No fuel curve vectors found for feature_name={feature_name!r}. Check root_dir and raw_data_dir point to the correct dataset."
         )
 
     log_vecs = np.log1p(np.clip(np.stack(vectors, axis=0), 0, None))
