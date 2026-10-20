@@ -5,6 +5,9 @@
 
 An AI surrogate modelling framework that approximates wildfire burn probability, fire intensity, and rate of spread emulating process-based wildfire simulators (BurnP3 / BurnP3+).
 
+📖 Read our preprint [Accelerating Wildfire Hazard Mapping Across Canada with an AI Surrogate Modelling Framework](https://www.researchgate.net/publication/416410681_Accelerating_Wildfire_Hazard_Mapping_Across_Canada_with_an_AI_Surrogate_Modelling_Framework)
+
+
 ## Table of contents
 
 - [🔥 Accelerating Wildfire Hazard Mapping Across Canada with an AI Surrogate Modelling Framework](#-accelerating-wildfire-hazard-mapping-across-canada-with-an-ai-surrogate-modelling-framework)
@@ -245,5 +248,3 @@ sbatch run_files/baselines/train_baseline_multi_run.sh configs/baselines/bp_spat
 
 Swap `bp_` for `fi_`/`ros_` to target fire intensity or rate of spread. The mean-value baseline is deterministic and only needs a single seed.
 
-### Full Map of Canada
-If you have access to national-data, and want to generate a full-Canada map of predictions/targets, see [`src/full_map/README.md`](src/full_map/README.md).
