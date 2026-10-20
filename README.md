@@ -20,8 +20,8 @@ sample project are included in the download.
 
 | Your computer | Download |
 |---|---|
-| Windows 10 / 11 (64-bit) | [WildfireSurrogateApp-windows-amd64.zip](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/app-v0.1.0/WildfireSurrogateApp-windows-amd64.zip) |
-| Mac with Apple silicon (M1 or newer) | [WildfireSurrogateApp-darwin-arm64.dmg](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/app-v0.1.0/WildfireSurrogateApp-darwin-arm64.dmg) |
+| Windows 10 / 11 (64-bit) | [WildfireSurrogateApp-windows-amd64.zip](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/app-v0.1.1/WildfireSurrogateApp-windows-amd64.zip) |
+| Mac with Apple silicon (M1 or newer) | [WildfireSurrogateApp-darwin-arm64.dmg](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/app-v0.1.1/WildfireSurrogateApp-darwin-arm64.dmg) |
 
 **2. Unpack it**
 
