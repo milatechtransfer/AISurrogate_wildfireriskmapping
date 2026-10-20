@@ -38,7 +38,7 @@ GPU or BurnP3+ outputs are required to predict.
 For fire scientists who prefer a point-and-click interface without installing Python or using the command line:
 
 1. Download the app for your operating system from the [Releases page](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases)
-   (see [Try the tool](../README.md#-try-the-tool-no-installation-needed) for direct links and first-launch security prompts).
+   (see [Use the desktop app](../README.md#-use-the-desktop-app-no-python-or-command-line) for direct links and first-launch security prompts).
    - **Windows:** unzip `WildfireSurrogateApp-windows-amd64.zip`.
    - **macOS (Apple silicon):** open `WildfireSurrogateApp-darwin-arm64.dmg` and drag the `WildfireSurrogateApp` folder to your Desktop.
 2. Double-click **`WildfireSurrogateApp.exe`** (Windows) or **`WildfireSurrogateApp.app`** (macOS). Keep the app next to its `bundles/` and `sample_project/` folders.

@@ -5,37 +5,68 @@
 
 An AI surrogate modelling framework that approximates wildfire burn probability, fire intensity, and rate of spread emulating process-based wildfire simulators (BurnP3 / BurnP3+).
 
-## 🚀 Try the tool (no installation needed)
+**Where to start**
 
-**Wildfire AI Surrogate** is a desktop app for fire scientists: point it at a BurnP3+ project and get burn
-probability, fire intensity, rate of spread and hazard maps in minutes instead of hours of simulation. No
-Python, no command line. The trained model and a small sample project are included.
+- 🗺️ **I want burn probability / hazard maps for my BurnP3+ project** → [Use the desktop app](#-use-the-desktop-app-no-python-or-command-line) (just below).
+- 🧑‍💻 **I want to run, retrain or extend the model in code** → [For researchers & developers](#-for-researchers--developers).
 
-| Your computer | Download (~500 MB) |
+## 🚀 Use the desktop app (no Python or command line)
+
+**Wildfire AI Surrogate** is a point-and-click app: choose a BurnP3+ project folder and get burn probability, fire
+intensity, rate of spread and hazard maps in minutes instead of hours of simulation. The trained model and a small
+sample project are included in the download.
+
+**1. Download** the app for your computer (about 500 MB):
+
+| Your computer | Download |
 |---|---|
 | Windows 10 / 11 (64-bit) | [WildfireSurrogateApp-windows-amd64.zip](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/app-v0.1.0/WildfireSurrogateApp-windows-amd64.zip) |
 | Mac with Apple silicon (M1 or newer) | [WildfireSurrogateApp-darwin-arm64.dmg](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/app-v0.1.0/WildfireSurrogateApp-darwin-arm64.dmg) |
-| Linux, Intel Mac | Use the Python install: [inference/README.md](inference/README.md#️-installation-cli--developer-setup) |
 
-1. **Install**
-   - **Windows:** right-click the `.zip` → **Extract All**, then open the extracted `WildfireSurrogateApp` folder.
-   - **Mac:** double-click the `.dmg` and drag the `WildfireSurrogateApp` folder to your Desktop (keep everything in it together).
-2. **Open** `WildfireSurrogateApp.exe` (Windows) or `WildfireSurrogateApp.app` (Mac). The app is not yet signed, so the first time:
-   - **Windows:** if SmartScreen appears, click **More info** → **Run anyway**.
-   - **Mac:** if told the app cannot be verified, go to **System Settings → Privacy & Security** and click **Open Anyway**
-     (or run `xattr -cr ~/Desktop/WildfireSurrogateApp` in Terminal), then open it again.
-3. Click **Sample** to try the built-in example, or **Browse...** to select your BurnP3+ project folder.
-4. Click **1. Check Inputs**, then **2. Predict Surrogate Maps**. A report opens in your browser; the maps are
-   GeoTIFFs you can drag into QGIS or ArcGIS Pro.
+**2. Unpack it**
 
-Click **? Help** in the app for the expected project folder layout, what each option means and troubleshooting.
-More details: [inference/README.md](inference/README.md). All releases: [Releases page](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases).
+- **Windows:** right-click the `.zip` → **Extract All**, then open the extracted `WildfireSurrogateApp` folder.
+- **Mac:** double-click the `.dmg` and drag the `WildfireSurrogateApp` folder to your Desktop.
 
-## Table of contents
+Keep everything inside the `WildfireSurrogateApp` folder together; the app needs the model files next to it.
+
+**3. Open the app:** double-click `WildfireSurrogateApp.exe` (Windows) or `WildfireSurrogateApp.app` (Mac).
+
+<details>
+<summary>⚠️ Seeing a security warning the first time? Click here.</summary>
+
+The app is not yet signed with a paid developer certificate, so your computer asks for confirmation once:
+
+- **Windows:** in the blue "Windows protected your PC" box, click **More info** → **Run anyway**.
+- **Mac:** if told the app "cannot be verified", open **System Settings → Privacy & Security**, scroll down and
+  click **Open Anyway**, then open the app again. (Alternative: run `xattr -cr ~/Desktop/WildfireSurrogateApp` in Terminal.)
+
+</details>
+
+**4. Make maps**
+
+1. Click **Sample** to try the built-in example, or **Browse...** to choose your own BurnP3+ project folder.
+2. Click **1. Check Inputs**, then **2. Predict Surrogate Maps**.
+3. A summary report opens in your web browser. The maps are saved as GeoTIFFs you can open in QGIS or ArcGIS Pro.
+
+**Need help?** Click **? Help** in the app to see the expected project folder layout, what each option means and
+troubleshooting tips.
+
+**Linux or Intel Mac?** The desktop app isn't available for these yet. You can use the Python version instead
+(requires some command-line setup): see [inference/README.md](inference/README.md#️-installation-cli--developer-setup).
+
+---
+
+## 🧑‍💻 For researchers & developers
+
+The rest of this page explains how to set up the code, prepare data, train and fine-tune models, and run inference,
+hazard evaluation and counterfactual analyses.
+
+### Table of contents
 
 - [🔥 Accelerating Wildfire Hazard Mapping Across Canada with an AI Surrogate Modelling Framework](#-accelerating-wildfire-hazard-mapping-across-canada-with-an-ai-surrogate-modelling-framework)
-  - [🚀 Try the tool (no installation needed)](#-try-the-tool-no-installation-needed)
-  - [Table of contents](#table-of-contents)
+  - [🚀 Use the desktop app (no Python or command line)](#-use-the-desktop-app-no-python-or-command-line)
+  - [🧑‍💻 For researchers \& developers](#-for-researchers--developers)
   - [🛠️ Installation \& Setup](#️-installation--setup)
   - [📂 Data preparation](#-data-preparation)
   - [Trained model checkpoints](#trained-model-checkpoints)
