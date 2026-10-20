@@ -74,6 +74,7 @@ HIDDEN_IMPORTS: tuple[str, ...] = (
     "tkinter.filedialog",
     "tkinter.messagebox",
     "inference.app_help",
+    "inference.plots",
 )
 
 # Geospatial packages whose PROJ/GDAL data files must be bundled for offline CRS reprojection.

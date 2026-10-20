@@ -29,13 +29,17 @@ my_project/                    <- select THIS folder as the BurnP3+ Project
 OUTPUT_TREE = """\
 <output folder>/
 ├── summary_report.html        opens automatically when a step finishes
-├── run_manifest.json          record of the run (model, inputs, options)
-├── predict.log                full log (send this when asking for help)
-└── hex01/
-    ├── hex01_bp.tif           burn probability (0-1)
-    ├── hex01_fi.tif           fire intensity (kW/m)
-    ├── hex01_ros.tif          rate of spread (m/min)
-    └── hex01_hazard_class.tif hazard class (1 = lowest, 0 = no data)
+├── bp/                        burn probability (0-1), one file per region:
+│   ├── hex01_bp.tif               map for QGIS / ArcGIS Pro
+│   ├── hex01_bp.png               picture of the map
+│   └── hex02_bp.tif, ...
+├── fi/                        fire intensity (kW/m), same pattern
+├── ros/                       rate of spread (m/min), same pattern
+├── hazard_class/              hazard class (1 = lowest, 0 = no data)
+└── run_details/               record of the run and log (send these when asking for help)
+
+Evaluate adds, in each map folder, hexNN_<map>_maps.png (AI vs BurnP3+ side by side),
+_scatter.png and _histogram.png, plus metrics_*.csv tables at the top.
 """
 
 # (heading, kind, text): kind is "text" (wrapped paragraphs) or "code" (monospace, not wrapped).
@@ -75,7 +79,9 @@ HELP_SECTIONS: tuple[tuple[str, str, str], ...] = (
         "National Fire Database, fires of 25 ha or more, 1970-2023). To use your own, choose a CSV with "
         "columns GRIDCODE (fire zone) and SIZE_HA.\n"
         "Predict Outputs: the maps to write. Hazard (raw) = BP x capped FI; Hazard (scaled 0-100) is "
-        "comparable across studies; Hazard class bins the scaled hazard into classes (1 = lowest).",
+        "comparable across studies; Hazard class bins the scaled hazard into classes (1 = lowest).\n"
+        "Save map pictures (PNG): draws a picture of every map next to its GeoTIFF and in the report (for "
+        "Evaluate, also the AI vs BurnP3+ comparison plots). Untick to save time on very large runs.",
     ),
     ("Where the results go", "code", OUTPUT_TREE),
     (
@@ -90,7 +96,7 @@ HELP_SECTIONS: tuple[tuple[str, str, str], ...] = (
         "instead.\n"
         "Output folder not empty: tick 'Overwrite existing output folder' or choose another Output Folder.\n"
         "Out of memory or very slow: predict fewer regions at a time (Regions box) and close other programs.\n"
-        "Still stuck: send the summary_report.html and log file from the Output Folder to the developers.",
+        "Still stuck: send the summary_report.html and the run_details folder from the Output Folder to the developers.",
     ),
     (
         "About the model",

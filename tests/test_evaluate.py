@@ -15,12 +15,11 @@ from inference.evaluate import (
     METRICS_PER_FIREZONE_FILENAME,
     METRICS_PER_HEXEL_FILENAME,
     METRICS_SUMMARY_FILENAME,
-    PREDICTIONS_DIRNAME,
     EvaluateError,
     main,
     run_evaluate,
 )
-from inference.predict import RUN_MANIFEST_FILENAME, write_geotiff
+from inference.predict import RUN_DETAILS_DIRNAME, RUN_MANIFEST_FILENAME, write_geotiff
 from tests.test_predict import (
     CELL,
     CRS,
@@ -68,9 +67,15 @@ def _write_burnp3_results(project: Path, hex_id: str = "01", scenario_name: str 
 
 
 def _write_predictions(
-    out_dir: Path, bundle: ModelBundle, grids: dict[str, np.ndarray], hex_id: str = "01", manifest: dict | None = None
+    out_dir: Path,
+    bundle: ModelBundle,
+    grids: dict[str, np.ndarray],
+    hex_id: str = "01",
+    manifest: dict | None = None,
+    legacy_layout: bool = False,
 ) -> Path:
-    """Prediction rasters laid out like inference.predict output: cropped to the mask bounds."""
+    """Prediction rasters laid out like inference.predict output (<target>/hexNN_<target>.tif, or the older
+    hexNN/hexNN_<target>.tif with the manifest at the root): cropped to the mask bounds."""
     from rasterio.transform import from_origin
 
     rows, cols = slice(*MASK_ROWS), slice(*MASK_COLS)
@@ -82,15 +87,18 @@ def _write_predictions(
         "crs": CRS,
         "transform": from_origin(ORIGIN_X + MASK_COLS[0] * CELL, ORIGIN_Y - MASK_ROWS[0] * CELL, CELL, CELL),
     }
-    (out_dir / f"hex{hex_id}").mkdir(parents=True, exist_ok=True)
     for name, grid in grids.items():
-        write_geotiff(out_dir / f"hex{hex_id}" / f"hex{hex_id}_{name}.tif", grid[rows, cols], profile, description=name)
+        folder = out_dir / (f"hex{hex_id}" if legacy_layout else name)
+        folder.mkdir(parents=True, exist_ok=True)
+        write_geotiff(folder / f"hex{hex_id}_{name}.tif", grid[rows, cols], profile, description=name)
     run_manifest = {
         "bundle": {"name": bundle.manifest.name, "version": bundle.manifest.version, "weights_sha256": bundle.manifest.weights.sha256}
     }
     run_manifest["options"] = {"mask_scope": "actual"}
     run_manifest.update(manifest or {})
-    (out_dir / RUN_MANIFEST_FILENAME).write_text(json.dumps(run_manifest))
+    details_dir = out_dir if legacy_layout else out_dir / RUN_DETAILS_DIRNAME
+    details_dir.mkdir(parents=True, exist_ok=True)
+    (details_dir / RUN_MANIFEST_FILENAME).write_text(json.dumps(run_manifest))
     return out_dir
 
 
@@ -134,11 +142,12 @@ def test_predictions_identical_to_burnp3_score_perfectly(bundle_dir: Path, bundl
     assert int(np.trace(confusion.to_numpy())) == MASK_PIXELS
 
     for name in ("bp", "fi", "ros"):
-        for kind in ("maps", "scatter", "histogram"):
-            assert (output_dir / "plots" / "hex01" / f"hex01_{name}_{kind}.png").is_file()
-    assert not (output_dir / "plots" / "hex01" / "predicted_hexels_plot").exists()
+        assert sorted(path.name for path in (output_dir / name).iterdir()) == [
+            f"hex01_{name}_{kind}.png" for kind in ("histogram", "maps", "scatter")
+        ]
+    assert sorted(path.name for path in (output_dir / RUN_DETAILS_DIRNAME).iterdir()) == ["evaluate.log", EVALUATION_MANIFEST_FILENAME]
 
-    manifest = json.loads((output_dir / EVALUATION_MANIFEST_FILENAME).read_text())
+    manifest = json.loads((output_dir / RUN_DETAILS_DIRNAME / EVALUATION_MANIFEST_FILENAME).read_text())
     assert manifest["status"] == "success"
     assert manifest["predictions"]["made_by_this_run"] is False
     assert manifest["summary"]["bp"]["ccc"] == pytest.approx(1.0, abs=1e-5)
@@ -166,10 +175,10 @@ def test_evaluate_predicts_scores_by_firezone_and_can_rescore_in_place(bundle_di
 
     run = run_evaluate(bundle_dir, project, output_dir, device="cpu", plots=False, by_firezone=True, metrics=["ccc", "mae", "bias"])
 
-    predictions = output_dir / PREDICTIONS_DIRNAME
-    assert (predictions / "hex01" / "hex01_bp.tif").is_file()
-    assert (predictions / "predict.log").is_file()
-    assert json.loads((predictions / RUN_MANIFEST_FILENAME).read_text())["status"] == "success"
+    assert (output_dir / "bp" / "hex01_bp.tif").is_file()
+    assert (output_dir / "hazard_class" / "hex01_hazard_class.tif").is_file()
+    assert not list(output_dir.glob("*/*.png"))
+    assert json.loads((output_dir / RUN_DETAILS_DIRNAME / RUN_MANIFEST_FILENAME).read_text())["status"] == "success"
     assert run.fire_size_note is not None
     assert list(run.metrics.columns) == ["hexel", "target", "area", "n_pixels", "ccc", "mae", "bias"]
     assert run.metrics["mae"].notna().all()
@@ -177,18 +186,20 @@ def test_evaluate_predicts_scores_by_firezone_and_can_rescore_in_place(bundle_di
     zones = pd.read_csv(output_dir / METRICS_PER_FIREZONE_FILENAME)
     assert sorted(set(zones["firezone"])) == [21, 22]
     assert zones.groupby("target")["n_pixels"].sum().eq(MASK_PIXELS).all()
-    log = (output_dir / "evaluate.log").read_text()
+    log = (output_dir / RUN_DETAILS_DIRNAME / "evaluate.log").read_text()
     assert "Predicting into" in log
     assert "hex01: evaluated in" in log
 
-    rescored = run_evaluate(bundle_dir, project, output_dir, predictions_dir=predictions, device="cpu", plots=False, overwrite=True)
+    with pytest.raises(EvaluateError, match="different folder"):
+        run_evaluate(bundle_dir, project, output_dir, predictions_dir=output_dir, plots=False, overwrite=True)
+    rescored = run_evaluate(bundle_dir, project, tmp_path / "rescored", predictions_dir=output_dir, device="cpu", plots=False)
 
-    assert (predictions / "hex01" / "hex01_bp.tif").is_file()
+    assert (output_dir / "bp" / "hex01_bp.tif").is_file()
     assert rescored.warnings == []
     pd.testing.assert_series_equal(
         rescored.metrics.set_index("target")["mae"], run.metrics.set_index("target")["mae"], check_exact=False, rtol=1e-6
     )
-    assert not (output_dir / METRICS_PER_FIREZONE_FILENAME).exists()
+    assert not (tmp_path / "rescored" / METRICS_PER_FIREZONE_FILENAME).exists()
 
 
 def test_missing_burnp3_outputs_stop_before_predicting(bundle_dir: Path, project: Path, tmp_path: Path):
@@ -198,8 +209,8 @@ def test_missing_burnp3_outputs_stop_before_predicting(bundle_dir: Path, project
         run_evaluate(bundle_dir, project, output_dir, device="cpu")
 
     assert "Missing BurnP3+ burn probability output" in str(excinfo.value)
-    assert not (output_dir / PREDICTIONS_DIRNAME).exists()
-    assert json.loads((output_dir / EVALUATION_MANIFEST_FILENAME).read_text())["status"] == "failed"
+    assert not (output_dir / "bp").exists()
+    assert json.loads((output_dir / RUN_DETAILS_DIRNAME / EVALUATION_MANIFEST_FILENAME).read_text())["status"] == "failed"
 
 
 def test_burnp3_output_without_data_stops_evaluation(bundle_dir: Path, bundle: ModelBundle, project: Path, tmp_path: Path):
@@ -275,14 +286,7 @@ def test_evaluate_without_mask_scores_the_whole_raster(bundle_dir: Path, project
     assert (run.metrics["area"] == "none").all()
     assert (run.metrics["n_pixels"] == HEIGHT * WIDTH).all()
     rescored = run_evaluate(
-        bundle_dir,
-        project,
-        tmp_path / "evaluation",
-        predictions_dir=tmp_path / "evaluation" / PREDICTIONS_DIRNAME,
-        device="cpu",
-        plots=False,
-        metrics=["mae"],
-        overwrite=True,
+        bundle_dir, project, tmp_path / "rescored", predictions_dir=tmp_path / "evaluation", device="cpu", plots=False, metrics=["mae"]
     )
     assert (rescored.metrics["area"] == "none").all()
 
@@ -296,7 +300,7 @@ def test_reused_predictions_are_scored_against_their_own_scenario(bundle_dir: Pa
     run = run_evaluate(bundle_dir, project, tmp_path / "evaluation", predictions_dir=predictions, device="cpu", plots=False)
 
     np.testing.assert_allclose(run.metrics["mae"], 0.0, atol=1e-6)
-    manifest = json.loads((tmp_path / "evaluation" / EVALUATION_MANIFEST_FILENAME).read_text())
+    manifest = json.loads((tmp_path / "evaluation" / RUN_DETAILS_DIRNAME / EVALUATION_MANIFEST_FILENAME).read_text())
     assert manifest["options"]["scenario_name"] == "FireExcludeSpotting"
     with pytest.raises(EvaluateError, match="made for scenario 'FireExcludeSpotting'"):
         run_evaluate(bundle_dir, project, tmp_path / "other", predictions_dir=predictions, scenario_name="Other", plots=False)
@@ -329,3 +333,29 @@ def test_evaluate_refuses_to_write_into_the_project(bundle_dir: Path, project: P
         run_evaluate(bundle_dir, project, project, device="cpu", overwrite=True)
 
     assert marker.is_file()
+
+
+def test_predictions_in_the_older_layout_are_still_scored(bundle_dir: Path, bundle: ModelBundle, project: Path, tmp_path: Path):
+    grids = _write_burnp3_results(project)
+    predictions = _write_predictions(tmp_path / "predictions", bundle, grids, legacy_layout=True)
+
+    run = run_evaluate(bundle_dir, project, tmp_path / "evaluation", predictions_dir=predictions, device="cpu", plots=False)
+
+    assert run.warnings == []
+    np.testing.assert_allclose(run.metrics["mae"], 0.0, atol=1e-6)
+
+
+def test_evaluate_draws_hazard_pictures_and_comparison_plots(bundle_dir: Path, project: Path, tmp_path: Path):
+    _write_burnp3_results(project)
+    output_dir = tmp_path / "evaluation"
+
+    run_evaluate(bundle_dir, project, output_dir, device="cpu", metrics=["mae"])
+
+    assert sorted(path.name for path in (output_dir / "bp").iterdir()) == [
+        "hex01_bp.tif",
+        "hex01_bp_histogram.png",
+        "hex01_bp_maps.png",
+        "hex01_bp_scatter.png",
+    ]
+    for name in ("hazard_raw", "hazard_scaled", "hazard_class"):
+        assert sorted(path.name for path in (output_dir / name).iterdir()) == [f"hex01_{name}.png", f"hex01_{name}.tif"]

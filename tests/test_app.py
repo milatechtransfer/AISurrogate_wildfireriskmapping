@@ -132,11 +132,17 @@ def test_execute_workflow_check_predict_and_evaluate_write_html_reports(bundle_d
         )
     )
     assert pred_res.ok is True
-    assert sorted(p.name for p in (pred_out / "hex01").glob("*.tif")) == sorted(f"hex01_{n}.tif" for n in DEFAULT_PREDICT_RASTERS)
+    assert sorted(p.relative_to(pred_out).as_posix() for p in pred_out.glob("*/*.tif")) == sorted(
+        f"{n}/hex01_{n}.tif" for n in DEFAULT_PREDICT_RASTERS
+    )
+    assert sorted(p.relative_to(pred_out).as_posix() for p in pred_out.glob("*/*.png")) == sorted(
+        f"{n}/hex01_{n}.png" for n in DEFAULT_PREDICT_RASTERS
+    )
     assert pred_res.report_html == pred_out / SUMMARY_REPORT_FILENAME
     pred_html = pred_res.report_html.read_text(encoding="utf-8")
     assert "Wildfire AI Surrogate — Prediction Summary" in pred_html
-    assert "hex01/hex01_bp.tif" in pred_html
+    assert "bp/hex01_bp.tif" in pred_html
+    assert '<img src="hazard_class/hex01_hazard_class.png"' in pred_html
     assert "hazard_class" in pred_html
     assert "hazard_scaled" not in pred_html
 

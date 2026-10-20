@@ -18,8 +18,9 @@ Examples:
 
 Outputs in ``--output``: ``metrics_per_hexel.csv``, ``metrics_summary.csv``, ``hazard_metrics_per_hexel.csv``,
 ``hazard_metrics_summary.csv``, ``hazard_confusion_matrix.{csv,png}``, ``metrics_per_firezone.csv`` (with
-``--by_firezone``), ``plots/hexNN/`` (maps, scatter and histogram per target), ``predictions/`` (when the model
-was run), ``evaluation_manifest.json`` and ``evaluate.log``.
+``--by_firezone``) and one folder per map type (``bp/``, ``fi/``, ``ros/``, ``hazard_*/``) holding, per hexel, the
+predicted GeoTIFF (when the model was run) and the comparison pictures ``hexNN_<target>_{maps,scatter,histogram}.png``.
+``run_details/`` holds ``evaluation_manifest.json``, ``evaluate.log`` and (when the model was run) ``run_manifest.json``.
 """
 
 from __future__ import annotations
@@ -59,14 +60,19 @@ from inference.bundle import (
 )
 from inference.check import CheckReport, check_project, resolve_hex_ids
 from inference.predict import (
+    HAZARD_RASTERS,
     PREDICT_MASK_SCOPES,
+    RUN_DETAILS_DIRNAME,
     RUN_MANIFEST_FILENAME,
     PredictError,
+    available_rasters,
     console_logging,
     discover_hex_ids,
     git_commit,
     log_to_file,
     output_overlap_error,
+    prediction_raster_path,
+    remove_previous_outputs,
     run_predict,
 )
 from src.datasets.postprocessing.hazard import compute_raw_hazard
@@ -113,8 +119,9 @@ HAZARD_HEADLINE_METRICS = ("exact_accuracy", "within_1_accuracy", "macro_f1")
 # Continuous hazard (BP x capped FI) is scored like a target under this name.
 HAZARD_TARGET = "hazard"
 
-PREDICTIONS_DIRNAME = "predictions"
-PLOTS_DIRNAME = "plots"
+# Folders of older versions (predictions/hexNN/, plots/hexNN/), removed by --overwrite.
+LEGACY_PREDICTIONS_DIRNAME = "predictions"
+LEGACY_PLOTS_DIRNAME = "plots"
 LOG_FILENAME = "evaluate.log"
 EVALUATION_MANIFEST_FILENAME = "evaluation_manifest.json"
 METRICS_PER_HEXEL_FILENAME = "metrics_per_hexel.csv"
@@ -124,8 +131,8 @@ HAZARD_PER_HEXEL_FILENAME = "hazard_metrics_per_hexel.csv"
 HAZARD_SUMMARY_FILENAME = "hazard_metrics_summary.csv"
 OWNED_OUTPUTS = frozenset(
     {
-        PREDICTIONS_DIRNAME,
-        PLOTS_DIRNAME,
+        LEGACY_PREDICTIONS_DIRNAME,
+        LEGACY_PLOTS_DIRNAME,
         LOG_FILENAME,
         EVALUATION_MANIFEST_FILENAME,
         METRICS_PER_HEXEL_FILENAME,
@@ -177,7 +184,10 @@ def resolve_metric_functions(names: list[str] | tuple[str, ...] | None) -> dict[
 
 
 def prediction_path(predictions_dir: Path, hex_id: str, name: str) -> Path:
-    return predictions_dir / f"hex{hex_id}" / f"hex{hex_id}_{name}.tif"
+    """``<name>/hexNN_<name>.tif``, or ``hexNN/hexNN_<name>.tif`` for predictions made by older versions."""
+    path = prediction_raster_path(predictions_dir, hex_id, name)
+    legacy = predictions_dir / f"hex{hex_id}" / f"hex{hex_id}_{name}.tif"
+    return legacy if not path.is_file() and legacy.is_file() else path
 
 
 def read_prediction(path: Path) -> tuple[np.ndarray, dict[str, Any]]:
@@ -197,40 +207,44 @@ def score_grids(gt: np.ndarray, pred: np.ndarray, metric_functions: dict[str, An
 
 
 def _read_predictions_manifest(predictions_dir: Path) -> dict[str, Any] | None:
-    path = predictions_dir / RUN_MANIFEST_FILENAME
-    if not path.is_file():
-        return None
-    with open(path) as handle:
-        return json.load(handle)
+    for path in (predictions_dir / RUN_DETAILS_DIRNAME / RUN_MANIFEST_FILENAME, predictions_dir / RUN_MANIFEST_FILENAME):
+        if path.is_file():
+            with open(path) as handle:
+                return json.load(handle)
+    return None
 
 
 def _hexels_with_predictions(predictions_dir: Path, bundle: ModelBundle) -> list[str]:
     first_target = bundle.manifest.targets[0].name
-    return sorted(
-        hex_id for hex_id in find_hex_ids(str(predictions_dir)) if prediction_path(predictions_dir, hex_id, first_target).is_file()
+    candidates = set(find_hex_ids(str(predictions_dir)))
+    candidates.update(
+        path.name[3 : -len(f"_{first_target}.tif")] for path in (predictions_dir / first_target).glob(f"hex*_{first_target}.tif")
     )
+    return sorted(hex_id for hex_id in candidates if hex_id.isdigit() and prediction_path(predictions_dir, hex_id, first_target).is_file())
 
 
-def _prepare_output_dir(output_dir: Path, overwrite: bool, keep: Path | None) -> None:
+def _prepare_output_dir(output_dir: Path, overwrite: bool, map_names: list[str], keep: Path | None) -> None:
     if output_dir.exists() and any(output_dir.iterdir()):
         if not overwrite:
             raise EvaluateError(f"Output folder {output_dir} is not empty. Choose another --output or pass --overwrite.")
-        for child in output_dir.iterdir():
-            if child.name not in OWNED_OUTPUTS or (keep is not None and child.resolve() == keep):
-                continue
-            shutil.rmtree(child) if child.is_dir() else child.unlink()
+        if keep is not None and keep.is_relative_to(output_dir):
+            raise EvaluateError(
+                f"--predictions {keep} is inside --output {output_dir}, which --overwrite would clear; choose another --output."
+            )
+        remove_previous_outputs(output_dir, map_names, extra_names=OWNED_OUTPUTS)
     output_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _plot_target(
     stitched: StitchedHexel, label: str, plots_dir: Path, show_support_outline: bool, run_warnings: list[str] | None = None
 ) -> None:
-    """Maps (surrogate, BurnP3+, difference), scatter and histogram, saved as plots/hexNN/hexNN_<target>_*.png."""
+    """Maps (surrogate, BurnP3+, difference), scatter and histogram, saved as <target>/hexNN_<target>_*.png in ``plots_dir``."""
     import matplotlib.pyplot as plt
 
     plt.switch_backend("Agg")
     hex_id, name = stitched.hex_id, stitched.target.name
-    hexel_dir = plots_dir / f"hex{hex_id}"
+    target_dir = plots_dir / name
+    hexel_dir = target_dir / f"_plots_hex{hex_id}"
     raw_dir = hexel_dir / "predicted_hexels_plot"
     renames = {
         f"hexel_{hex_id}_{name}_predicted.png": f"hex{hex_id}_{name}_maps.png",
@@ -271,10 +285,11 @@ def _plot_target(
             run_warnings.append(message)
     finally:
         plt.close("all")
-        for old, new in renames.items():
-            if (raw_dir / old).is_file():
-                (raw_dir / old).replace(hexel_dir / new)
-        shutil.rmtree(raw_dir, ignore_errors=True)
+        for folder in (raw_dir, hexel_dir):
+            for old, new in renames.items():
+                if (folder / old).is_file():
+                    (folder / old).replace(target_dir / new)
+        shutil.rmtree(hexel_dir, ignore_errors=True)
 
 
 def _area_rows(
@@ -454,7 +469,7 @@ def _write_manifest(
             "platform": platform.platform(),
         },
     }
-    with open(run.output_dir / EVALUATION_MANIFEST_FILENAME, "w") as handle:
+    with open(run.output_dir / RUN_DETAILS_DIRNAME / EVALUATION_MANIFEST_FILENAME, "w") as handle:
         json.dump(manifest, handle, indent=2, default=str)
 
 
@@ -536,7 +551,7 @@ def run_evaluate(
         scenario_name = _resolve_scenario(scenario_name, bundle, predicted_options)
         available = _hexels_with_predictions(pred_dir, bundle)
         if not available:
-            raise EvaluateError(f"No predictions (hexNN/hexNN_<target>.tif) found in {pred_dir}.")
+            raise EvaluateError(f"No predictions (<target>/hexNN_<target>.tif) found in {pred_dir}.")
         selected = available
         if hex_ids:
             selected, unknown = resolve_hex_ids(hex_ids, available)
@@ -547,7 +562,7 @@ def run_evaluate(
         if missing:
             raise EvaluateError(f"Hexel(s) {['hex' + h for h in missing]} have predictions but no folder in the project {project_dir}.")
     else:
-        pred_dir = output_dir / PREDICTIONS_DIRNAME
+        pred_dir = output_dir
         scope = _resolve_scope(mask_scope, bundle)
         scenario_name = _resolve_scenario(scenario_name, bundle)
         try:
@@ -555,7 +570,11 @@ def run_evaluate(
         except PredictError as exc:
             raise EvaluateError(str(exc)) from exc
 
-    _prepare_output_dir(output_dir, overwrite, keep=pred_dir if reuse else None)
+    if reuse and pred_dir == output_dir:
+        raise EvaluateError("--output must be a different folder from --predictions.")
+    _prepare_output_dir(output_dir, overwrite, available_rasters(bundle), keep=pred_dir if reuse else None)
+    details_dir = output_dir / RUN_DETAILS_DIRNAME
+    details_dir.mkdir(parents=True, exist_ok=True)
     resolved_device = resolve_device(device)
     options = {
         "hex_ids": selected,
@@ -572,7 +591,7 @@ def run_evaluate(
         predictions_info["bundle"] = predictions_manifest.get("bundle")
     run = EvaluateRun(output_dir=output_dir, predictions_dir=pred_dir, mask_scope=scope, hexels=[f"hex{hex_id}" for hex_id in selected])
 
-    with log_to_file(output_dir / LOG_FILENAME) as log_handler:
+    with log_to_file(details_dir / LOG_FILENAME) as log_handler:
         try:
             logger.info(
                 "Evaluating bundle %s v%s on %d hexel(s) (mask: %s)", bundle.manifest.name, bundle.manifest.version, len(selected), scope
@@ -624,10 +643,14 @@ def run_evaluate(
                     scenario_name=scenario_name,
                     verify_checksums=False,
                     check_inputs=False,
+                    # The targets get comparison pictures below; only the hazard layers need a plain map picture.
+                    plots=HAZARD_RASTERS if plots else False,
+                    log_handler=log_handler,
                 )
                 run.fire_size_note = predict_run.fire_size_note
+                run.warnings += predict_run.warnings
 
-            plots_dir = output_dir / PLOTS_DIRNAME if plots else None
+            plots_dir = output_dir if plots else None
             rows: list[dict[str, Any]] = []
             firezone_rows: list[dict[str, Any]] = []
             hazard_rows: list[dict[str, Any]] = []
@@ -761,7 +784,7 @@ def main(argv: list[str] | None = None) -> int:
                 check_inputs=not args.skip_check,
             )
     except (EvaluateError, PredictError, BundleError, FileNotFoundError, ValueError, KeyError) as exc:
-        log_path = Path(args.output) / LOG_FILENAME
+        log_path = Path(args.output) / RUN_DETAILS_DIRNAME / LOG_FILENAME
         details = f"\n(Full details in {log_path})" if log_path.is_file() else ""
         print(f"\nError: {exc}{details}", file=sys.stderr)
         return 2
@@ -770,9 +793,9 @@ def main(argv: list[str] | None = None) -> int:
         print(run.fire_size_note)
     num_warnings = len(run.warnings) + (len(run.input_check.warnings) if run.input_check is not None else 0)
     if num_warnings:
-        print(f"{num_warnings} warning(s) were logged; see {run.output_dir / LOG_FILENAME}.")
+        print(f"{num_warnings} warning(s) were logged; see {run.output_dir / RUN_DETAILS_DIRNAME / LOG_FILENAME}.")
     print(
-        f"Results in {run.output_dir} ({METRICS_PER_HEXEL_FILENAME}, {METRICS_SUMMARY_FILENAME}{', plots/' if not args.no_plots else ''})."
+        f"Results in {run.output_dir} ({METRICS_PER_HEXEL_FILENAME}, {METRICS_SUMMARY_FILENAME}{', map folders with pictures' if not args.no_plots else ''})."
     )
     return 0
 

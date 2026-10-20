@@ -12,9 +12,11 @@ Example:
         --project path/to/project \\
         --output predictions/
 
-Outputs (per hexel ``hexNN/``): ``hexNN_bp.tif``, ``hexNN_fi.tif``, ``hexNN_ros.tif`` in physical units and,
-when the bundle predicts BP and FI, ``hexNN_hazard_raw.tif``, ``hexNN_hazard_scaled.tif``,
-``hexNN_hazard_class.tif`` (``--rasters`` writes only some of them). A ``run_manifest.json`` and ``predict.log`` are written to the output folder.
+Outputs: one folder per map type, holding every hexel: ``bp/hexNN_bp.tif``, ``fi/hexNN_fi.tif``,
+``ros/hexNN_ros.tif`` in physical units and, when the bundle predicts BP and FI, ``hazard_raw/``,
+``hazard_scaled/`` and ``hazard_class/`` (``--rasters`` writes only some of them). Each GeoTIFF gets a
+PNG map picture next to it (``bp/hexNN_bp.png``; ``--no_plots`` skips them). ``run_details/`` holds
+``run_manifest.json`` and ``predict.log``.
 """
 
 from __future__ import annotations
@@ -81,9 +83,12 @@ from src.datasets.utils import get_data_source_class, get_dataset_dimensions
 logger = logging.getLogger("inference.predict")
 
 WORK_DIRNAME = "_work"
+RUN_DETAILS_DIRNAME = "run_details"
 RUN_MANIFEST_FILENAME = "run_manifest.json"
 LOG_FILENAME = "predict.log"
 PREDICTION_FOLDER_PATTERN = re.compile(r"hex\d+")
+# Files predict (and evaluate) write into a map-type folder such as bp/: hexNN_bp.tif, hexNN_bp.png, hexNN_bp_maps.png, ...
+OWNED_MAP_FILE_PATTERN = re.compile(r"hex\d+_[a-z_]+\.(tif|tif\.aux\.xml|png)")
 PREDICT_MASK_SCOPES = MASK_SCOPES
 OUTPUT_NODATA = -9999.0
 HAZARD_CLASS_NODATA = 0
@@ -101,6 +106,7 @@ class HexelResult:
     num_patches: int
     seconds: float
     fuel_curves: dict[str, dict[str, str]] | None = None  # fuel codes whose curves came from the project's fuel tables
+    pictures: dict[str, str] = field(default_factory=dict)  # raster name -> PNG map picture (relative to the output folder)
 
 
 @dataclass
@@ -109,6 +115,7 @@ class PredictRun:
     hexels: list[HexelResult] = field(default_factory=list)
     input_check: CheckReport | None = None
     fire_size_note: str | None = None
+    warnings: list[str] = field(default_factory=list)
 
 
 def run_input_checks(
@@ -410,6 +417,24 @@ def write_geotiff(path: Path, grid: np.ndarray, profile: dict[str, Any], descrip
             dst.update_tags(1, units=units)
 
 
+def prediction_raster_path(output_dir: Path, hex_id: str, name: str) -> Path:
+    """Where predict writes raster ``name`` of a hexel: ``<output>/<name>/hexNN_<name>.tif``."""
+    return output_dir / name / f"hex{hex_id}_{name}.tif"
+
+
+def raster_descriptions(bundle: ModelBundle) -> dict[str, tuple[str, str | None]]:
+    """(description, units) of every raster the bundle can write."""
+    descriptions: dict[str, tuple[str, str | None]] = {target.name: (target.label, target.units) for target in bundle.manifest.targets}
+    descriptions.update(
+        {
+            "hazard_raw": ("Raw hazard (BP x capped FI)", "kW/m"),
+            "hazard_scaled": ("Scaled hazard index", f"0-{bundle.manifest.hazard.scale_to:g}"),
+            "hazard_class": ("Hazard class", "class (1-based, 0 = nodata)"),
+        }
+    )
+    return descriptions
+
+
 def write_hexel_outputs(
     bundle: ModelBundle,
     hex_id: str,
@@ -419,27 +444,53 @@ def write_hexel_outputs(
     output_dir: Path,
     rasters: Collection[str] | None = None,
 ) -> dict[str, str]:
-    hexel_dir = output_dir / f"hex{hex_id}"
-    hexel_dir.mkdir(parents=True, exist_ok=True)
+    descriptions = raster_descriptions(bundle)
     outputs = {}
-    for target in bundle.manifest.targets:
-        if rasters is not None and target.name not in rasters:
-            continue
-        path = hexel_dir / f"hex{hex_id}_{target.name}.tif"
-        write_geotiff(path, grids[target.name], profile, description=target.label, units=target.units)
-        outputs[target.name] = str(path.relative_to(output_dir).as_posix())
-    descriptions = {
-        "hazard_raw": ("Raw hazard (BP x capped FI)", "kW/m"),
-        "hazard_scaled": ("Scaled hazard index", f"0-{bundle.manifest.hazard.scale_to:g}"),
-        "hazard_class": ("Hazard class", "class (1-based, 0 = nodata)"),
-    }
-    for name, grid in hazard_grids.items():
+    for name, grid in {**{t.name: grids[t.name] for t in bundle.manifest.targets}, **hazard_grids}.items():
         if rasters is not None and name not in rasters:
             continue
-        path = hexel_dir / f"hex{hex_id}_{name}.tif"
+        path = prediction_raster_path(output_dir, hex_id, name)
+        path.parent.mkdir(parents=True, exist_ok=True)
         write_geotiff(path, grid, profile, description=descriptions[name][0], units=descriptions[name][1])
         outputs[name] = str(path.relative_to(output_dir).as_posix())
     return outputs
+
+
+def write_hexel_pictures(
+    bundle: ModelBundle,
+    hex_id: str,
+    grids: dict[str, np.ndarray],
+    output_dir: Path,
+    names: Collection[str],
+    warnings: list[str] | None = None,
+) -> dict[str, str]:
+    """PNG map pictures next to the GeoTIFFs (``<name>/hexNN_<name>.png``); a failed picture is logged, not raised."""
+    from inference.plots import plot_prediction_map
+
+    descriptions = raster_descriptions(bundle)
+    num_classes = len(bundle.manifest.hazard.bin_thresholds) + 1
+    pictures = {}
+    for name in names:
+        if name not in grids:
+            continue
+        label, units = descriptions[name]
+        path = prediction_raster_path(output_dir, hex_id, name).with_suffix(".png")
+        try:
+            plot_prediction_map(
+                grids[name],
+                path,
+                title=f"hex{hex_id}: {label}",
+                colorbar_label="Hazard class" if name == "hazard_class" else (f"{label} ({units})" if units else label),
+                num_classes=num_classes if name == "hazard_class" else None,
+            )
+        except Exception as exc:  # noqa: BLE001 - a picture must never cost the user their predictions
+            message = f"hex{hex_id}: could not draw the {name} picture: {exc}"
+            logger.warning("%s", message)
+            if warnings is not None:
+                warnings.append(message)
+            continue
+        pictures[name] = str(path.relative_to(output_dir).as_posix())
+    return pictures
 
 
 def predict_hexel(
@@ -455,7 +506,10 @@ def predict_hexel(
     hazard: bool = True,
     scenario_name: str | None = None,
     rasters: Collection[str] | None = None,
+    pictures: Collection[str] = (),
+    warnings: list[str] | None = None,
 ) -> HexelResult:
+    """Predict one hexel and write its rasters (and the ``pictures`` named) into ``output_dir``."""
     start = time.perf_counter()
     logger.info("hex%s: preparing input patches", hex_id)
     num_patches = prepare_hexel_patches(bundle, project_dir, hex_id, work_dir, mask_scope, scenario_name=scenario_name)
@@ -472,14 +526,18 @@ def predict_hexel(
     wants_hazard = hazard and (rasters is None or any(name in HAZARD_RASTERS for name in rasters))
     hazard_grids = compute_hazard_grids(bundle, grids) if wants_hazard else {}
     outputs = write_hexel_outputs(bundle, hex_id, grids, hazard_grids, profile, output_dir, rasters=rasters)
+    drawn = write_hexel_pictures(
+        bundle, hex_id, {**grids, **hazard_grids}, output_dir, [name for name in outputs if name in pictures], warnings=warnings
+    )
     seconds = time.perf_counter() - start
-    logger.info("hex%s: done in %.1f s -> %s", hex_id, seconds, output_dir / f"hex{hex_id}")
+    logger.info("hex%s: done in %.1f s -> %s", hex_id, seconds, output_dir)
     return HexelResult(
         hex_id=hex_id,
         outputs=outputs,
         num_patches=len(dataset),
         seconds=round(seconds, 2),
         fuel_curves=fuel_resolution.summary() if fuel_resolution is not None and fuel_resolution.changed else None,
+        pictures=drawn,
     )
 
 
@@ -493,7 +551,7 @@ def output_overlap_error(output_dir: Path, project_dir: Path) -> str | None:
 
 
 def _is_prediction_folder(path: Path) -> bool:
-    """A hexNN/ folder as written by predict: numeric ID, holding only hexNN_*.tif files (and GIS .aux.xml sidecars)."""
+    """A hexNN/ folder as written by older versions of predict: numeric ID, holding only hexNN_*.tif files (and GIS .aux.xml sidecars)."""
     if not PREDICTION_FOLDER_PATTERN.fullmatch(path.name) or not path.is_dir():
         return False
     prefix = f"{path.name}_"
@@ -503,13 +561,26 @@ def _is_prediction_folder(path: Path) -> bool:
     )
 
 
-def _prepare_output_dir(output_dir: Path, overwrite: bool) -> None:
+def is_map_folder(path: Path, names: Collection[str]) -> bool:
+    """A map-type folder (bp/, hazard_class/, ...) holding only files predict or evaluate write (and GIS sidecars)."""
+    if path.name not in names or not path.is_dir():
+        return False
+    return all(child.is_file() and OWNED_MAP_FILE_PATTERN.fullmatch(child.name) for child in path.iterdir())
+
+
+def remove_previous_outputs(output_dir: Path, map_names: Collection[str], extra_names: Collection[str] = ()) -> None:
+    """Delete what earlier runs wrote into ``output_dir`` (map folders, run_details/, reports, older layouts); keep anything else."""
+    owned = {RUN_DETAILS_DIRNAME, WORK_DIRNAME, RUN_MANIFEST_FILENAME, LOG_FILENAME, "summary_report.html", *extra_names}
+    for child in output_dir.iterdir():
+        if child.name in owned or is_map_folder(child, map_names) or _is_prediction_folder(child):
+            shutil.rmtree(child) if child.is_dir() else child.unlink()
+
+
+def _prepare_output_dir(output_dir: Path, overwrite: bool, map_names: Collection[str]) -> None:
     if output_dir.exists() and any(output_dir.iterdir()):
         if not overwrite:
             raise PredictError(f"Output folder {output_dir} is not empty. Choose another --output or pass --overwrite.")
-        for child in output_dir.iterdir():
-            if _is_prediction_folder(child) or child.name in {WORK_DIRNAME, RUN_MANIFEST_FILENAME, LOG_FILENAME, "summary_report.html"}:
-                shutil.rmtree(child) if child.is_dir() else child.unlink()
+        remove_previous_outputs(output_dir, map_names)
     output_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -619,7 +690,9 @@ def _write_run_manifest(
         ),
         "hexels": [result.__dict__ for result in run.hexels],
     }
-    with open(run.output_dir / RUN_MANIFEST_FILENAME, "w") as handle:
+    path = run.output_dir / RUN_DETAILS_DIRNAME / RUN_MANIFEST_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as handle:
         json.dump(manifest, handle, indent=2)
 
 
@@ -640,10 +713,15 @@ def run_predict(
     verify_checksums: bool = True,
     check_inputs: bool = True,
     rasters: Sequence[str] | None = None,
+    plots: bool | Collection[str] = True,
+    log_handler: logging.FileHandler | None = None,
 ) -> PredictRun:
     """Run the model bundle on every requested hexel of a project and write GeoTIFFs to ``output_dir``.
 
     ``rasters`` limits the GeoTIFFs written (e.g. ``["bp", "hazard_class"]``; default: all, see ``available_rasters``).
+    ``plots`` draws a PNG map picture of every raster written (True), none (False) or only of the rasters named.
+    ``log_handler`` is for callers (inference.evaluate) that predict into an output folder they have already
+    prepared and log themselves: the folder is then neither checked nor cleaned and no predict.log is written.
     """
     started_at = utc_timestamp()
     project_dir = Path(project_dir).expanduser().resolve()
@@ -662,27 +740,29 @@ def run_predict(
     except (BundleError, ValueError) as exc:
         raise PredictError(str(exc)) from exc
     selected_rasters = resolve_rasters(bundle, rasters, hazard=hazard)
+    pictures = selected_rasters if plots is True else [] if plots is False else [name for name in selected_rasters if name in plots]
     selected_hex_ids = discover_hex_ids(project_dir, hex_ids)
+    run_kwargs: dict[str, Any] = {
+        "device": device,
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "hazard": hazard,
+        "keep_work_dir": keep_work_dir,
+        "scenario_name": scenario_name,
+        "check_inputs": check_inputs,
+        "rasters": selected_rasters,
+        "pictures": pictures,
+    }
+    if log_handler is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return _run_predict(bundle, project_dir, output_dir, fire_size_path, selected_hex_ids, scope, log_handler, started_at, **run_kwargs)
 
-    _prepare_output_dir(output_dir, overwrite)
-    with log_to_file(output_dir / LOG_FILENAME) as log_handler:
+    _prepare_output_dir(output_dir, overwrite, available_rasters(bundle))
+    details_dir = output_dir / RUN_DETAILS_DIRNAME
+    details_dir.mkdir(parents=True, exist_ok=True)
+    with log_to_file(details_dir / LOG_FILENAME) as file_handler:
         return _run_predict(
-            bundle,
-            project_dir,
-            output_dir,
-            fire_size_path,
-            selected_hex_ids,
-            scope,
-            log_handler,
-            started_at,
-            device=device,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            hazard=hazard,
-            keep_work_dir=keep_work_dir,
-            scenario_name=scenario_name,
-            check_inputs=check_inputs,
-            rasters=selected_rasters,
+            bundle, project_dir, output_dir, fire_size_path, selected_hex_ids, scope, file_handler, started_at, **run_kwargs
         )
 
 
@@ -704,6 +784,7 @@ def _run_predict(
     scenario_name: str | None,
     check_inputs: bool,
     rasters: list[str],
+    pictures: list[str],
 ) -> PredictRun:
     resolved_device = resolve_device(device)
     options = {
@@ -714,11 +795,12 @@ def _run_predict(
         "mask_scope": scope,
         "hazard": hazard,
         "rasters": rasters,
+        "pictures": pictures,
         "scenario_name": scenario_name,
         "check_inputs": check_inputs,
     }
     run = PredictRun(output_dir=output_dir)
-    work_dir = output_dir / WORK_DIRNAME
+    work_dir = output_dir / RUN_DETAILS_DIRNAME / WORK_DIRNAME
     try:
         logger.info(
             "Bundle %s v%s | device %s | %d hexel(s)", bundle.manifest.name, bundle.manifest.version, resolved_device, len(selected_hex_ids)
@@ -748,6 +830,8 @@ def _run_predict(
                     hazard=hazard,
                     scenario_name=scenario_name,
                     rasters=rasters,
+                    pictures=pictures,
+                    warnings=run.warnings,
                 )
             )
         _write_run_manifest(run, bundle, project_dir, fire_size_path, options, started_at, status="success")
@@ -797,7 +881,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Use fuel raster hexNN_fbp_<scenario_name>.tif instead of hexNN_fbp.tif (default: the model's training scenario, if any).",
     )
     parser.add_argument("--overwrite", action="store_true", help="Replace previous predictions in --output.")
-    parser.add_argument("--keep_work_dir", action="store_true", help=f"Keep intermediate patches in <output>/{WORK_DIRNAME}.")
+    parser.add_argument("--no_plots", action="store_true", help="Do not draw PNG map pictures next to the GeoTIFFs (faster).")
+    parser.add_argument(
+        "--keep_work_dir", action="store_true", help=f"Keep intermediate patches in <output>/{RUN_DETAILS_DIRNAME}/{WORK_DIRNAME}."
+    )
     parser.add_argument("--skip_checksums", action="store_true", help="Skip bundle checksum verification (faster start-up).")
     parser.add_argument("--skip_check", action="store_true", help="Do not check the project inputs first (see inference.check).")
     return parser
@@ -824,9 +911,10 @@ def main(argv: list[str] | None = None) -> int:
                 verify_checksums=not args.skip_checksums,
                 check_inputs=not args.skip_check,
                 rasters=args.rasters,
+                plots=not args.no_plots,
             )
     except (PredictError, BundleError, FileNotFoundError, ValueError, KeyError) as exc:
-        log_path = Path(args.output) / LOG_FILENAME
+        log_path = Path(args.output) / RUN_DETAILS_DIRNAME / LOG_FILENAME
         details = f"\n(Full details in {log_path})" if log_path.is_file() else ""
         print(f"\nError: {exc}{details}", file=sys.stderr)
         return 2
@@ -834,7 +922,7 @@ def main(argv: list[str] | None = None) -> int:
     if run.fire_size_note:
         print(run.fire_size_note)
     if run.input_check is not None and run.input_check.warnings:
-        print(f"{len(run.input_check.warnings)} input warning(s) were logged; see {run.output_dir / LOG_FILENAME}.")
+        print(f"{len(run.input_check.warnings)} input warning(s) were logged; see {run.output_dir / RUN_DETAILS_DIRNAME / LOG_FILENAME}.")
     return 0
 
 

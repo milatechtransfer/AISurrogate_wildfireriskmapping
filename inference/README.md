@@ -46,7 +46,9 @@ For fire scientists who prefer a point-and-click interface without installing Py
    - The app automatically detects your regions, mask mode (`actual`, `buffer`, or `none`), fuel scenarios, and whether BurnP3+ `results/` exist.
 4. Click **1. Check Inputs**, **2. Predict Surrogate Maps**, or **3. Evaluate vs. BurnP3+**.
    - Under **Predict Outputs**, tick the maps you want (default: BP, FI, ROS and hazard class).
-5. When finished, an offline visual **`summary_report.html`** opens automatically with metrics, warnings, and plots.
+5. When finished, an offline visual **`summary_report.html`** opens automatically with map pictures, metrics and warnings.
+   The Output Folder has one folder per map type (`bp/`, `fi/`, `ros/`, `hazard_class/`, ...) holding the GeoTIFF and
+   picture of every region.
 6. Lost? Click **? Help** (or press F1) for the expected project folder layout, option explanations and troubleshooting.
 
 If you already have a Python environment set up from this repository, you can also launch the same desktop window with:
@@ -195,18 +197,19 @@ python -m inference.predict --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project pa
     --output path/to/predictions
 ```
 
-Outputs, one folder per region (GeoTIFF, nodata `-9999`):
+Outputs, one folder per map type holding every region (GeoTIFF, nodata `-9999`), each with a PNG picture
+of the map next to it (`hexNN_bp.png`, ...):
 
 | File | Content |
 |---|---|
-| `hexNN/hexNN_bp.tif` | Burn probability (0–1) |
-| `hexNN/hexNN_fi.tif` | Fire intensity (kW/m) |
-| `hexNN/hexNN_ros.tif` | Rate of spread (m/min) |
-| `hexNN/hexNN_hazard_raw.tif` | Hazard = BP × min(FI, 10 000 kW/m) |
-| `hexNN/hexNN_hazard_scaled.tif` | Hazard on a 0–100 scale, comparable across studies |
-| `hexNN/hexNN_hazard_class.tif` | 13 hazard classes (1 = lowest; 0 = nodata) |
-| `run_manifest.json` | Record of the run (model, inputs, options), for reproducibility |
-| `predict.log` | Run log |
+| `bp/hexNN_bp.tif` | Burn probability (0–1) |
+| `fi/hexNN_fi.tif` | Fire intensity (kW/m) |
+| `ros/hexNN_ros.tif` | Rate of spread (m/min) |
+| `hazard_raw/hexNN_hazard_raw.tif` | Hazard = BP × min(FI, 10 000 kW/m) |
+| `hazard_scaled/hexNN_hazard_scaled.tif` | Hazard on a 0–100 scale, comparable across studies |
+| `hazard_class/hexNN_hazard_class.tif` | 13 hazard classes (1 = lowest; 0 = nodata) |
+| `run_details/run_manifest.json` | Record of the run (model, inputs, options), for reproducibility |
+| `run_details/predict.log` | Run log |
 
 Outputs are in Canada Lambert Conformal Conic (`ESRI:102002`, ~100 m cells). If your inputs are in another
 CRS, reproject the outputs before overlaying them cell by cell. `--output` cannot be the project folder or one
@@ -222,6 +225,7 @@ of its `hexNN` folders.
 | `--batch_size N` | Lower it if memory runs out |
 | `--no_hazard` | Skip the hazard rasters |
 | `--rasters bp fi hazard_class` | Only write these GeoTIFFs (default: all six above). `evaluate` needs `bp fi ros` |
+| `--no_plots` | Skip the PNG map pictures (faster on very large runs) |
 | `--overwrite` | Replace earlier predictions in `--output` |
 
 ## 📊 Evaluate against BurnP3+
@@ -235,7 +239,7 @@ against the BurnP3+ outputs in each region's `results/` folder:
 - with `--scenario_name NAME`: `results/NAME/burnP3Plus_Output..._NAME_{All|Average}.tif`.
 
 ```bash
-# Predict and evaluate (predictions are kept in path/to/evaluation/predictions/)
+# Predict and evaluate (the predicted GeoTIFFs are kept in path/to/evaluation/bp/, fi/, ...)
 python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
     --output path/to/evaluation
 
@@ -261,9 +265,9 @@ Evaluated 1 hexel(s) against BurnP3+ (area: actual). Mean over hexels:
 | `metrics_per_firezone.csv` | With `--by_firezone`: one row per region × fire zone × target |
 | `hazard_metrics_summary.csv`, `hazard_metrics_per_hexel.csv` | Agreement of the hazard classes |
 | `hazard_confusion_matrix.{csv,png}` | Hazard classes, BurnP3+ (rows) vs AI surrogate (columns) |
-| `plots/hexNN/` | AI surrogate, BurnP3+ and difference maps; scatter plots and histograms |
-| `predictions/` | The predictions, when evaluate ran the model |
-| `evaluation_manifest.json`, `evaluate.log` | Model, options, input check, warnings and summary |
+| `bp/`, `fi/`, `ros/` | Per region: `hexNN_<target>_maps.png` (AI surrogate, BurnP3+ and difference), `_scatter.png`, `_histogram.png`, and the predicted `hexNN_<target>.tif` when evaluate ran the model |
+| `hazard_*/` | The predicted hazard GeoTIFFs and pictures, when evaluate ran the model |
+| `run_details/` | `evaluation_manifest.json` and `evaluate.log` (model, options, input check, warnings and summary); `run_manifest.json` when evaluate ran the model |
 
 Extra options: `--by_firezone`, `--metrics ccc mae` (a subset), `--no_plots` (faster),
 `--mask_scope buffer` (also scores the region and its buffer ring separately), plus the `predict` options.

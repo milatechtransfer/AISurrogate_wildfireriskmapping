@@ -16,7 +16,7 @@ import pandas as pd
 from inference.bundle import ModelBundle
 from inference.check import CheckReport, Finding
 from inference.evaluate import HEADLINE_METRICS, EvaluateRun
-from inference.predict import HAZARD_CLASS_NODATA, OUTPUT_NODATA, PredictRun
+from inference.predict import HAZARD_CLASS_NODATA, OUTPUT_NODATA, PredictRun, available_rasters, raster_descriptions
 
 SUMMARY_REPORT_FILENAME = "summary_report.html"
 
@@ -260,6 +260,37 @@ def _render_findings_list(findings: list[Finding]) -> str:
     return f'<ul class="findings">{"".join(items)}</ul>'
 
 
+def _map_gallery_html(output_dir: Path, bundle: ModelBundle, heading: str, intro: str) -> str:
+    """A section of the PNG pictures in each map-type folder (bp/, fi/, ...), grouped by map type; "" when there are none."""
+    descriptions = raster_descriptions(bundle)
+    groups = []
+    for name in available_rasters(bundle):
+        kinds = ("", "_maps", "_scatter", "_histogram")
+
+        def order(png: Path, name: str = name, kinds: tuple[str, ...] = kinds) -> tuple[str, int, str]:
+            hexel, _, rest = png.stem.partition(f"_{name}")
+            return (hexel, kinds.index(rest) if rest in kinds else len(kinds), png.name)
+
+        pngs = sorted((output_dir / name).glob("*.png"), key=order)
+        if not pngs:
+            continue
+        cards = []
+        for png in pngs:
+            rel = png.relative_to(output_dir).as_posix()
+            cards.append(
+                f'<div class="plot-card">'
+                f'<a href="{_esc(rel)}" target="_blank"><img src="{_esc(rel)}" alt="{_esc(png.stem)}"></a>'
+                f'<div class="caption"><code>{_esc(rel)}</code></div>'
+                f"</div>"
+            )
+        label, units = descriptions[name]
+        title = f"{label}, {units}" if units and name != "hazard_class" else label
+        groups.append(f'<h3>{_esc(title)} &mdash; <code>{_esc(name)}/</code></h3><div class="plot-grid">{"".join(cards)}</div>')
+    if not groups:
+        return ""
+    return f"<section><h2>{_esc(heading)}</h2><p>{intro}</p>{''.join(groups)}</section>"
+
+
 def render_check_report_html(report: CheckReport) -> str:
     """Render an input validation :class:`CheckReport` as a standalone HTML page."""
     timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
@@ -381,6 +412,16 @@ def render_predict_report_html(run: PredictRun, bundle: ModelBundle, project_dir
         )
     written = {name for hex_res in run.hexels for name in hex_res.outputs}
     target_rows = [row for name, row in layer_rows.items() if name in written]
+
+    gallery = _map_gallery_html(
+        run.output_dir,
+        bundle,
+        "Maps",
+        "Each map type has its own folder in the Output Folder, holding the GeoTIFF and this picture for every region. "
+        "Click a picture to enlarge it. Colours stop at the 99th percentile so a few extreme cells do not hide the pattern.",
+    )
+    if gallery:
+        sections.insert(0, gallery)
 
     sections.append(
         "<section><h2>Output Layer Reference &amp; GIS Info</h2>"
@@ -509,26 +550,15 @@ def render_evaluate_report_html(run: EvaluateRun, bundle: ModelBundle, project_d
         headline_hex_cols = [c for c in ("hexel", "target", "area", "n_pixels", *HEADLINE_METRICS) if c in run.metrics.columns]
         sections.append(f"<section><h2>Per-Region Metrics</h2>{_dataframe_to_html_table(run.metrics[headline_hex_cols])}</section>")
 
-    plots_root = run.output_dir / "plots"
-    if plots_root.is_dir():
-        plot_sections = []
-        for hexel in run.hexels:
-            hex_plot_dir = plots_root / hexel
-            if not hex_plot_dir.is_dir():
-                continue
-            cards = []
-            for png in sorted(hex_plot_dir.glob("*.png")):
-                rel = png.relative_to(run.output_dir).as_posix()
-                cards.append(
-                    f'<div class="plot-card">'
-                    f'<a href="{_esc(rel)}" target="_blank"><img src="{_esc(rel)}" alt="{_esc(png.stem)}"></a>'
-                    f'<div class="caption"><code>{_esc(png.name)}</code></div>'
-                    f"</div>"
-                )
-            if cards:
-                plot_sections.append(f'<h3>Region <code>{_esc(hexel)}</code></h3><div class="plot-grid">{"".join(cards)}</div>')
-        if plot_sections:
-            sections.append(f"<section><h2>Visual Comparison Plots</h2>{''.join(plot_sections)}</section>")
+    gallery = _map_gallery_html(
+        run.output_dir,
+        bundle,
+        "Maps & Comparison Plots",
+        "Per region: <code>_maps</code> shows the surrogate, BurnP3+ and their difference side by side; "
+        "<code>_scatter</code> and <code>_histogram</code> compare their values. Click a picture to enlarge it.",
+    )
+    if gallery:
+        sections.append(gallery)
 
     if run.input_check is not None:
         sections.append(

@@ -374,6 +374,7 @@ def execute_workflow_action(request: WorkflowRequest) -> WorkflowOutcome:
                 overwrite=request.overwrite,
                 scenario_name=resolved_scenario,
                 rasters=request.rasters,
+                plots=request.plots,
             )
             report_path = write_predict_report_html(pred_run, bundle, project_dir, output_dir / SUMMARY_REPORT_FILENAME)
             lines = [
@@ -709,7 +710,7 @@ def launch_gui(
     chk_frame.grid(row=3, column=0, columnspan=6, sticky=tk.W, pady=(6, 0))
     ttk.Checkbutton(chk_frame, text="Overwrite existing output folder", variable=overwrite_var).pack(side=tk.LEFT, padx=(0, 16))
     ttk.Checkbutton(chk_frame, text="Open HTML summary report when finished", variable=open_report_var).pack(side=tk.LEFT, padx=(0, 16))
-    ttk.Checkbutton(chk_frame, text="Save evaluation comparison plots", variable=plots_var).pack(side=tk.LEFT, padx=(0, 16))
+    ttk.Checkbutton(chk_frame, text="Save map pictures (PNG)", variable=plots_var).pack(side=tk.LEFT, padx=(0, 16))
     ttk.Checkbutton(chk_frame, text="Per-firezone evaluation metrics", variable=by_firezone_var).pack(side=tk.LEFT)
 
     # 3. Action Buttons
