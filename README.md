@@ -25,12 +25,17 @@ sample project are included in the download.
 
 **2. Unpack it**
 
-- **Windows:** right-click the `.zip` → **Extract All**, then open the extracted `WildfireSurrogateApp` folder.
+- **Windows:** right-click the `.zip` → **Extract All** → **Extract**.
 - **Mac:** double-click the `.dmg` and drag the `WildfireSurrogateApp` folder to your Desktop.
 
 Keep everything inside the `WildfireSurrogateApp` folder together; the app needs the model files next to it.
 
-**3. Open the app:** double-click `WildfireSurrogateApp.exe` (Windows) or `WildfireSurrogateApp.app` (Mac).
+**3. Open the app**
+
+- **Windows:** open the extracted `WildfireSurrogateApp-windows-amd64` folder, then the `WildfireSurrogateApp` folder
+  inside it, and double-click `WildfireSurrogateApp.exe` (it may appear as just `WildfireSurrogateApp`, type "Application").
+- **Mac:** open the `WildfireSurrogateApp` folder on your Desktop and double-click `WildfireSurrogateApp`
+  (the one with the app icon).
 
 <details>
 <summary>⚠️ Seeing a security warning the first time? Click here.</summary>
