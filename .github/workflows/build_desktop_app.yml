@@ -1,0 +1,156 @@
+name: Build Standalone Desktop App
+
+on:
+  # Check that the app still builds when its code or dependencies change on main.
+  push:
+    branches: [main]
+    paths:
+      - "inference/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/build_desktop_app.yml"
+  workflow_dispatch:
+    inputs:
+      bundle_zip_url:
+        description: "Model bundle .zip URL to embed (blank = v1.0.0 release bundle, 'demo' = random-weights demo bundle)"
+        required: false
+        default: ""
+  release:
+    types: [published]
+
+env:
+  # Trained model published as a GitHub release asset (no Git LFS bandwidth used).
+  DEFAULT_BUNDLE_ZIP_URL: https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/v1.0.0/nrcan-surrogate-bp-fi-ros-v1.0.zip
+  DEFAULT_BUNDLE_ZIP_SHA256: c864edef9964315ad5044287c8bf9ba20b3d7693146d90cbb86b6b250014b0bb
+
+jobs:
+  build-standalone:
+    name: Build (${{ matrix.os }})
+    # Releases tagged app-v* publish the desktop app; other releases (e.g. model bundles) do not build it.
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'app-v')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # The Linux build (~6.5 GB, CUDA PyTorch) exceeds GitHub's 2 GB release-asset limit, so releases skip it.
+        os: ${{ github.event_name == 'release' && fromJSON('["windows-latest", "macos-latest"]') || fromJSON('["windows-latest", "macos-latest", "ubuntu-latest"]') }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install uv and Python 3.12
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.10"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install project dependencies
+        run: uv sync --locked --python 3.12
+
+      - name: Download model bundle
+        if: ${{ inputs.bundle_zip_url != 'demo' }}
+        shell: bash
+        env:
+          BUNDLE_ZIP_URL: ${{ inputs.bundle_zip_url }}
+        run: |
+          mkdir -p _bundle_download
+          if [[ -z "$BUNDLE_ZIP_URL" ]]; then
+            curl -fsSL "$DEFAULT_BUNDLE_ZIP_URL" -o _bundle_download/bundle.zip
+            uv run --python 3.12 python -c "import hashlib, os, sys; h = hashlib.sha256(open('_bundle_download/bundle.zip', 'rb').read()).hexdigest(); sys.exit(0 if h == os.environ['DEFAULT_BUNDLE_ZIP_SHA256'] else f'Bundle checksum mismatch: {h}')"
+          else
+            curl -fsSL "$BUNDLE_ZIP_URL" -o _bundle_download/bundle.zip
+          fi
+          unzip -q _bundle_download/bundle.zip -d _bundle_download/unpacked
+
+      - name: Build standalone PyInstaller bundle and .zip archive
+        shell: bash
+        run: |
+          BUNDLE_ARG=""
+          if [[ -d "_bundle_download/unpacked" ]]; then
+            MANIFEST_PATH="$(find _bundle_download/unpacked -name manifest.yaml -print -quit)"
+            if [[ -n "$MANIFEST_PATH" ]]; then
+              BUNDLE_DIR="$(dirname "$MANIFEST_PATH")"
+              BUNDLE_ARG="--bundle $BUNDLE_DIR"
+            fi
+          fi
+          uv run --python 3.12 --with pyinstaller python -m inference.build_standalone \
+            $BUNDLE_ARG \
+            --out_dir dist \
+            --zip
+
+      - name: Verify macOS disk image and app signature
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ls -lh dist/AISurrogateHazardMapping-*.dmg
+          codesign --verify --deep --strict dist/AISurrogateHazardMapping/AISurrogateHazardMapping.app
+          # Copy the app out of the disk image the way users do, so the smoke test runs what they download.
+          hdiutil attach dist/AISurrogateHazardMapping-*.dmg -mountpoint "$RUNNER_TEMP/dmg" -nobrowse
+          ls "$RUNNER_TEMP/dmg"
+          test -d "$RUNNER_TEMP/dmg/AISurrogateHazardMapping/AISurrogateHazardMapping.app"
+          ditto "$RUNNER_TEMP/dmg/AISurrogateHazardMapping" "$RUNNER_TEMP/from_dmg/AISurrogateHazardMapping"
+          hdiutil detach "$RUNNER_TEMP/dmg"
+
+      # Launch the packaged app headlessly (from outside the repo) so CI fails if it cannot start,
+      # cannot find its bundled model/sample project, or cannot run check/predict/evaluate.
+      - name: Smoke-test packaged app (macOS / Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            APP_EXE="$RUNNER_TEMP/from_dmg/AISurrogateHazardMapping/AISurrogateHazardMapping.app/Contents/MacOS/AISurrogateHazardMapping"
+          else
+            APP_EXE="$PWD/dist/AISurrogateHazardMapping/AISurrogateHazardMapping"
+          fi
+          cd "$RUNNER_TEMP"
+          "$APP_EXE" --smoke-test
+
+      - name: Smoke-test packaged app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $exe = Join-Path $PWD "dist\AISurrogateHazardMapping\AISurrogateHazardMapping.exe"
+          $proc = Start-Process -FilePath $exe -ArgumentList "--smoke-test" -WorkingDirectory $env:RUNNER_TEMP -Wait -PassThru
+          $log = Join-Path $env:TEMP "wildfire_smoke_test.log"
+          if (Test-Path $log) { Get-Content $log }
+          if ($proc.ExitCode -ne 0) { throw "Smoke test failed with exit code $($proc.ExitCode)" }
+
+      - name: Upload standalone artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AISurrogateHazardMapping-${{ matrix.os }}
+          path: |
+            dist/AISurrogateHazardMapping-*.dmg
+            dist/AISurrogateHazardMapping-*.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: Attach downloads to the release
+    needs: build-standalone
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'app-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download built apps
+        uses: actions/download-artifact@v4
+        with:
+          pattern: AISurrogateHazardMapping-*
+          path: release_assets
+          merge-multiple: true
+
+      - name: Upload to the GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          cd release_assets
+          sha256sum AISurrogateHazardMapping-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release upload "$TAG" AISurrogateHazardMapping-* SHA256SUMS.txt --clobber --repo "$GITHUB_REPOSITORY"

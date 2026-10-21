@@ -7,11 +7,76 @@ An AI surrogate modelling framework that approximates wildfire burn probability,
 
 📖 Read our preprint [Accelerating Wildfire Hazard Mapping Across Canada with an AI Surrogate Modelling Framework](https://www.researchgate.net/publication/416410681_Accelerating_Wildfire_Hazard_Mapping_Across_Canada_with_an_AI_Surrogate_Modelling_Framework)
 
+**Where to start**
 
-## Table of contents
+- 🗺️ **I want burn probability / hazard maps for my BurnP3+ project** → [Use the desktop app](#-use-the-desktop-app-no-python-or-command-line) (just below).
+- 🧑‍💻 **I want to run, retrain or extend the model in code** → [For researchers & developers](#-for-researchers--developers).
+
+## 🚀 Use the desktop app (no Python or command line)
+
+**AI Surrogate - Wildfire Hazard Mapping** is a point-and-click app: choose a BurnP3+ project folder and get burn probability, fire
+intensity, rate of spread and hazard maps in minutes instead of hours of simulation. The trained model and a small
+sample project are included in the download.
+
+**1. Download** the app for your computer (about 500 MB):
+
+| Your computer | Download |
+|---|---|
+| Windows 10 / 11 (64-bit) | [AISurrogateHazardMapping-windows-amd64.zip](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/app-v0.2.0/AISurrogateHazardMapping-windows-amd64.zip) |
+| Mac with Apple silicon (M1 or newer) | [AISurrogateHazardMapping-darwin-arm64.dmg](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/app-v0.2.0/AISurrogateHazardMapping-darwin-arm64.dmg) |
+
+**2. Unpack it**
+
+- **Windows:** right-click the `.zip` → **Extract All** → **Extract**.
+- **Mac:** double-click the `.dmg` and drag the `AISurrogateHazardMapping` folder to your Desktop.
+
+Keep everything inside the `AISurrogateHazardMapping` folder together; the app needs the model files next to it.
+
+**3. Open the app**
+
+- **Windows:** open the extracted `AISurrogateHazardMapping-windows-amd64` folder, then the `AISurrogateHazardMapping` folder
+  inside it, and double-click `AISurrogateHazardMapping.exe` (it may appear as just `AISurrogateHazardMapping`, type "Application").
+- **Mac:** open the `AISurrogateHazardMapping` folder on your Desktop and double-click `AISurrogateHazardMapping`
+  (the one with the app icon).
+
+<details>
+<summary>⚠️ Seeing a security warning the first time? Click here.</summary>
+
+The app is not yet signed with a paid developer certificate, so your computer asks for confirmation once:
+
+- **Windows:** in the blue "Windows protected your PC" box, click **More info** → **Run anyway**.
+- **Mac:** if told the app "cannot be verified", open **System Settings → Privacy & Security**, scroll down and
+  click **Open Anyway**, then open the app again. (Alternative: run `xattr -cr ~/Desktop/AISurrogateHazardMapping` in Terminal.)
+
+</details>
+
+**4. Make maps**
+
+1. Click **Sample** to try the built-in example, or **Browse...** to choose your own BurnP3+ project folder.
+2. Click **1. Check Inputs**, then **2. Predict Surrogate Maps**.
+3. A summary report opens in your web browser. The maps are saved as GeoTIFFs you can open in QGIS or ArcGIS Pro.
+
+**Need help?** Click **? Help** in the app to see the expected project folder layout, what each option means and
+troubleshooting tips.
+
+**Linux or Intel Mac?** The desktop app isn't available for these yet. You can use the Python version instead
+(requires some command-line setup): see [inference/README.md](inference/README.md#️-installation-cli--developer-setup).
+
+**Problems, questions or feedback?** [Open a GitHub issue](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/issues/new)
+or contact us at hager.radi@mila.quebec or toluwaleke.olutayo@mila.quebec.
+
+---
+
+## 🧑‍💻 For researchers & developers
+
+The rest of this page explains how to set up the code, prepare data, train and fine-tune models, and run inference,
+hazard evaluation and counterfactual analyses.
+
+### Table of contents
 
 - [🔥 Accelerating Wildfire Hazard Mapping Across Canada with an AI Surrogate Modelling Framework](#-accelerating-wildfire-hazard-mapping-across-canada-with-an-ai-surrogate-modelling-framework)
-  - [Table of contents](#table-of-contents)
+  - [🚀 Use the desktop app (no Python or command line)](#-use-the-desktop-app-no-python-or-command-line)
+  - [🧑‍💻 For researchers \& developers](#-for-researchers--developers)
   - [🛠️ Installation \& Setup](#️-installation--setup)
   - [📂 Data preparation](#-data-preparation)
   - [Trained model checkpoints](#trained-model-checkpoints)
@@ -26,7 +91,6 @@ An AI surrogate modelling framework that approximates wildfire burn probability,
     - [Hazard evaluation on the cluster](#hazard-evaluation-on-the-cluster)
     - [⚙️ Runtime and memory profiling](#️-runtime-and-memory-profiling)
     - [Baselines](#baselines)
-    - [Full Map of Canada](#full-map-of-canada)
 
 ## 🛠️ Installation & Setup
 
