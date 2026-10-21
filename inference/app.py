@@ -122,7 +122,7 @@ class WorkflowOutcome:
 
 
 APP_TITLE = "AI Surrogate - Wildfire Hazard Mapping"
-APP_SUBTITLE = "Fast burn probability, fire intensity & hazard maps from your BurnP3+ projects"
+APP_SUBTITLE = "Fast burn probability, fire intensity, rate of spread & hazard maps from your BurnP3+ projects"
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 LOGO_FILENAME = "mila_logo.png"
 LOGO_MAX_HEIGHT_PX = 48
