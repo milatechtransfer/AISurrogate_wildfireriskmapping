@@ -116,7 +116,7 @@ def test_execute_workflow_check_predict_and_evaluate_write_html_reports(bundle_d
     assert check_res.ok is True
     assert check_res.report_html == check_out / SUMMARY_REPORT_FILENAME
     check_html = check_res.report_html.read_text(encoding="utf-8")
-    assert "Wildfire AI Surrogate — Input Check Report" in check_html
+    assert "AI Surrogate - Wildfire Hazard Mapping — Input Check Report" in check_html
     assert "hex01" in check_html
 
     # 2. Predict
@@ -140,7 +140,7 @@ def test_execute_workflow_check_predict_and_evaluate_write_html_reports(bundle_d
     )
     assert pred_res.report_html == pred_out / SUMMARY_REPORT_FILENAME
     pred_html = pred_res.report_html.read_text(encoding="utf-8")
-    assert "Wildfire AI Surrogate — Prediction Summary" in pred_html
+    assert "AI Surrogate - Wildfire Hazard Mapping — Prediction Summary" in pred_html
     assert "bp/hex01_bp.tif" in pred_html
     assert '<img src="hazard_class/hex01_hazard_class.png"' in pred_html
     assert "hazard_class" in pred_html
@@ -162,7 +162,7 @@ def test_execute_workflow_check_predict_and_evaluate_write_html_reports(bundle_d
     assert eval_res.ok is True
     assert eval_res.report_html == eval_out / SUMMARY_REPORT_FILENAME
     eval_html = eval_res.report_html.read_text(encoding="utf-8")
-    assert "Wildfire AI Surrogate — BurnP3+ Evaluation Report" in eval_html
+    assert "AI Surrogate - Wildfire Hazard Mapping — BurnP3+ Evaluation Report" in eval_html
     assert "Summary Metrics" in eval_html
     assert "Wildfire Hazard Class Agreement" in eval_html
     assert 'class="table-scroll"' in eval_html
@@ -288,4 +288,4 @@ def test_pyinstaller_args_bundle_logo_only_when_present(tmp_path: Path):
     logo = Path(__file__).resolve().parents[1] / "inference" / "assets" / LOGO_FILENAME
     assert ("--add-data" in args) == logo.is_file()
     assert "inference.app_help" in HIDDEN_IMPORTS
-    assert APP_TITLE == "Wildfire AI Surrogate"
+    assert APP_TITLE == "AI Surrogate - Wildfire Hazard Mapping"

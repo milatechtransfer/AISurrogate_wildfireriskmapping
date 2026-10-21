@@ -121,7 +121,7 @@ class WorkflowOutcome:
     error: str | None = None
 
 
-APP_TITLE = "Wildfire AI Surrogate"
+APP_TITLE = "AI Surrogate - Wildfire Hazard Mapping"
 APP_SUBTITLE = "Fast burn probability, fire intensity & hazard maps from your BurnP3+ projects"
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 LOGO_FILENAME = "mila_logo.png"
@@ -945,7 +945,7 @@ def launch_gui(
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m inference.app",
-        description="Launch the Wildfire AI Surrogate desktop app for BurnP3+ projects.",
+        description="Launch the AI Surrogate - Wildfire Hazard Mapping desktop app for BurnP3+ projects.",
     )
     parser.add_argument("--bundle", default=None, help="Optional initial model bundle folder.")
     parser.add_argument("--project", default=None, help="Optional initial BurnP3+ project folder.")

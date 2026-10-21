@@ -338,7 +338,7 @@ def render_check_report_html(report: CheckReport) -> str:
         sections.append(f"<section><h2>Findings</h2>{_render_findings_list(report.findings)}</section>")
 
     return _page_shell(
-        title="Wildfire AI Surrogate — Input Check Report",
+        title="AI Surrogate - Wildfire Hazard Mapping — Input Check Report",
         subtitle=f"Validation summary for preparing to {report.action}",
         meta_items=meta,
         body_html="\n".join(sections),
@@ -433,7 +433,7 @@ def render_predict_report_html(run: PredictRun, bundle: ModelBundle, project_dir
         sections.append(_run_warnings_section(run.warnings))
 
     return _page_shell(
-        title="Wildfire AI Surrogate — Prediction Summary",
+        title="AI Surrogate - Wildfire Hazard Mapping — Prediction Summary",
         subtitle="Operational surrogate map generation report",
         meta_items=meta,
         body_html="\n".join(sections),
@@ -561,7 +561,7 @@ def render_evaluate_report_html(run: EvaluateRun, bundle: ModelBundle, project_d
         )
 
     return _page_shell(
-        title="Wildfire AI Surrogate — BurnP3+ Evaluation Report",
+        title="AI Surrogate - Wildfire Hazard Mapping — BurnP3+ Evaluation Report",
         subtitle="Comparison of AI surrogate predictions against BurnP3+ simulations",
         meta_items=meta,
         body_html="\n".join(sections),

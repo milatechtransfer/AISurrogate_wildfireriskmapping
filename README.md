@@ -12,7 +12,7 @@ An AI surrogate modelling framework that approximates wildfire burn probability,
 
 ## 🚀 Use the desktop app (no Python or command line)
 
-**Wildfire AI Surrogate** is a point-and-click app: choose a BurnP3+ project folder and get burn probability, fire
+**AI Surrogate - Wildfire Hazard Mapping** is a point-and-click app: choose a BurnP3+ project folder and get burn probability, fire
 intensity, rate of spread and hazard maps in minutes instead of hours of simulation. The trained model and a small
 sample project are included in the download.
 

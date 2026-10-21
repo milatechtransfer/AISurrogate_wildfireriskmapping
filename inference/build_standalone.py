@@ -390,7 +390,7 @@ def write_quickstart_txt(app_dist_dir: Path, app_name: str = APP_NAME) -> Path:
     else:
         exe_label = app_name
     text = (
-        "Wildfire AI Surrogate — Desktop App\n"
+        "AI Surrogate - Wildfire Hazard Mapping — Desktop App\n"
         "===================================\n\n"
         "No Python or package installation is needed.\n\n"
         "How to run:\n"
@@ -521,7 +521,7 @@ def build_standalone_app(
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m inference.build_standalone",
-        description="Package the Wildfire AI Surrogate desktop app into a standalone zero-install executable.",
+        description="Package the AI Surrogate - Wildfire Hazard Mapping desktop app into a standalone zero-install executable.",
     )
     parser.add_argument(
         "--bundle",
