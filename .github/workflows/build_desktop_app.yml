@@ -79,13 +79,13 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          ls -lh dist/WildfireSurrogateApp-*.dmg
-          codesign --verify --deep --strict dist/WildfireSurrogateApp/WildfireSurrogateApp.app
+          ls -lh dist/AISurrogateHazardMapping-*.dmg
+          codesign --verify --deep --strict dist/AISurrogateHazardMapping/AISurrogateHazardMapping.app
           # Copy the app out of the disk image the way users do, so the smoke test runs what they download.
-          hdiutil attach dist/WildfireSurrogateApp-*.dmg -mountpoint "$RUNNER_TEMP/dmg" -nobrowse
+          hdiutil attach dist/AISurrogateHazardMapping-*.dmg -mountpoint "$RUNNER_TEMP/dmg" -nobrowse
           ls "$RUNNER_TEMP/dmg"
-          test -d "$RUNNER_TEMP/dmg/WildfireSurrogateApp/WildfireSurrogateApp.app"
-          ditto "$RUNNER_TEMP/dmg/WildfireSurrogateApp" "$RUNNER_TEMP/from_dmg/WildfireSurrogateApp"
+          test -d "$RUNNER_TEMP/dmg/AISurrogateHazardMapping/AISurrogateHazardMapping.app"
+          ditto "$RUNNER_TEMP/dmg/AISurrogateHazardMapping" "$RUNNER_TEMP/from_dmg/AISurrogateHazardMapping"
           hdiutil detach "$RUNNER_TEMP/dmg"
 
       # Launch the packaged app headlessly (from outside the repo) so CI fails if it cannot start,
@@ -96,9 +96,9 @@ jobs:
         timeout-minutes: 10
         run: |
           if [[ "$RUNNER_OS" == "macOS" ]]; then
-            APP_EXE="$RUNNER_TEMP/from_dmg/WildfireSurrogateApp/WildfireSurrogateApp.app/Contents/MacOS/WildfireSurrogateApp"
+            APP_EXE="$RUNNER_TEMP/from_dmg/AISurrogateHazardMapping/AISurrogateHazardMapping.app/Contents/MacOS/AISurrogateHazardMapping"
           else
-            APP_EXE="$PWD/dist/WildfireSurrogateApp/WildfireSurrogateApp"
+            APP_EXE="$PWD/dist/AISurrogateHazardMapping/AISurrogateHazardMapping"
           fi
           cd "$RUNNER_TEMP"
           "$APP_EXE" --smoke-test
@@ -108,7 +108,7 @@ jobs:
         shell: pwsh
         timeout-minutes: 10
         run: |
-          $exe = Join-Path $PWD "dist\WildfireSurrogateApp\WildfireSurrogateApp.exe"
+          $exe = Join-Path $PWD "dist\AISurrogateHazardMapping\AISurrogateHazardMapping.exe"
           $proc = Start-Process -FilePath $exe -ArgumentList "--smoke-test" -WorkingDirectory $env:RUNNER_TEMP -Wait -PassThru
           $log = Join-Path $env:TEMP "wildfire_smoke_test.log"
           if (Test-Path $log) { Get-Content $log }
@@ -117,10 +117,10 @@ jobs:
       - name: Upload standalone artifact
         uses: actions/upload-artifact@v4
         with:
-          name: WildfireSurrogateApp-${{ matrix.os }}
+          name: AISurrogateHazardMapping-${{ matrix.os }}
           path: |
-            dist/WildfireSurrogateApp-*.dmg
-            dist/WildfireSurrogateApp-*.zip
+            dist/AISurrogateHazardMapping-*.dmg
+            dist/AISurrogateHazardMapping-*.zip
           if-no-files-found: error
 
   publish-release:
@@ -134,7 +134,7 @@ jobs:
       - name: Download built apps
         uses: actions/download-artifact@v4
         with:
-          pattern: WildfireSurrogateApp-*
+          pattern: AISurrogateHazardMapping-*
           path: release_assets
           merge-multiple: true
 
@@ -145,6 +145,6 @@ jobs:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           cd release_assets
-          sha256sum WildfireSurrogateApp-* > SHA256SUMS.txt
+          sha256sum AISurrogateHazardMapping-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
-          gh release upload "$TAG" WildfireSurrogateApp-* SHA256SUMS.txt --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" AISurrogateHazardMapping-* SHA256SUMS.txt --clobber --repo "$GITHUB_REPOSITORY"

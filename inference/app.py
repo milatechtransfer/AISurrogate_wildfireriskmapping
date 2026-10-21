@@ -4,7 +4,7 @@ One-click desktop application for checking, predicting, and evaluating BurnP3+ p
 Launch with:
     python -m inference.app [--bundle PATH] [--project PATH] [--output PATH]
 
-The packaged build (``inference.build_standalone``) launches it from a double-clickable WildfireSurrogateApp.
+The packaged build (``inference.build_standalone``) launches it from a double-clickable AISurrogateHazardMapping.
 """
 
 from __future__ import annotations

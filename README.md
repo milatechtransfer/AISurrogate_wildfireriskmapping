@@ -20,21 +20,21 @@ sample project are included in the download.
 
 | Your computer | Download |
 |---|---|
-| Windows 10 / 11 (64-bit) | [WildfireSurrogateApp-windows-amd64.zip](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/app-v0.1.1/WildfireSurrogateApp-windows-amd64.zip) |
-| Mac with Apple silicon (M1 or newer) | [WildfireSurrogateApp-darwin-arm64.dmg](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/app-v0.1.1/WildfireSurrogateApp-darwin-arm64.dmg) |
+| Windows 10 / 11 (64-bit) | [AISurrogateHazardMapping-windows-amd64.zip](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/app-v0.2.0/AISurrogateHazardMapping-windows-amd64.zip) |
+| Mac with Apple silicon (M1 or newer) | [AISurrogateHazardMapping-darwin-arm64.dmg](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases/download/app-v0.2.0/AISurrogateHazardMapping-darwin-arm64.dmg) |
 
 **2. Unpack it**
 
 - **Windows:** right-click the `.zip` → **Extract All** → **Extract**.
-- **Mac:** double-click the `.dmg` and drag the `WildfireSurrogateApp` folder to your Desktop.
+- **Mac:** double-click the `.dmg` and drag the `AISurrogateHazardMapping` folder to your Desktop.
 
-Keep everything inside the `WildfireSurrogateApp` folder together; the app needs the model files next to it.
+Keep everything inside the `AISurrogateHazardMapping` folder together; the app needs the model files next to it.
 
 **3. Open the app**
 
-- **Windows:** open the extracted `WildfireSurrogateApp-windows-amd64` folder, then the `WildfireSurrogateApp` folder
-  inside it, and double-click `WildfireSurrogateApp.exe` (it may appear as just `WildfireSurrogateApp`, type "Application").
-- **Mac:** open the `WildfireSurrogateApp` folder on your Desktop and double-click `WildfireSurrogateApp`
+- **Windows:** open the extracted `AISurrogateHazardMapping-windows-amd64` folder, then the `AISurrogateHazardMapping` folder
+  inside it, and double-click `AISurrogateHazardMapping.exe` (it may appear as just `AISurrogateHazardMapping`, type "Application").
+- **Mac:** open the `AISurrogateHazardMapping` folder on your Desktop and double-click `AISurrogateHazardMapping`
   (the one with the app icon).
 
 <details>
@@ -44,7 +44,7 @@ The app is not yet signed with a paid developer certificate, so your computer as
 
 - **Windows:** in the blue "Windows protected your PC" box, click **More info** → **Run anyway**.
 - **Mac:** if told the app "cannot be verified", open **System Settings → Privacy & Security**, scroll down and
-  click **Open Anyway**, then open the app again. (Alternative: run `xattr -cr ~/Desktop/WildfireSurrogateApp` in Terminal.)
+  click **Open Anyway**, then open the app again. (Alternative: run `xattr -cr ~/Desktop/AISurrogateHazardMapping` in Terminal.)
 
 </details>
 

@@ -2,11 +2,11 @@
 Build a standalone, zero-install desktop application bundle using PyInstaller.
 
 The resulting folder (and optional ``.zip`` / macOS ``.dmg`` archive) contains a native executable
-(``WildfireSurrogateApp.exe`` on Windows, ``WildfireSurrogateApp.app`` on macOS, or
-``WildfireSurrogateApp`` on Linux), all required Python/PyTorch/GDAL libraries, and (when
+(``AISurrogateHazardMapping.exe`` on Windows, ``AISurrogateHazardMapping.app`` on macOS, or
+``AISurrogateHazardMapping`` on Linux), all required Python/PyTorch/GDAL libraries, and (when
 ``--bundle`` is given) the pre-loaded model bundle under ``bundles/``.
 
-Scientists simply unzip the archive and double-click ``WildfireSurrogateApp`` — no Python,
+Scientists simply unzip the archive and double-click ``AISurrogateHazardMapping`` — no Python,
 ``uv``, or internet connection is required on their computer.
 
 Example (run by maintainers on the target OS or in GitHub Actions):
@@ -50,7 +50,7 @@ from inference.export_bundle import export_bundle
 from src.config import Config
 from src.models.factory import build_model
 
-APP_NAME = "WildfireSurrogateApp"
+APP_NAME = "AISurrogateHazardMapping"
 SAMPLE_PROJECT_DIRNAME = "sample_project"
 DEMO_BUNDLE_DIRNAME = "demo-surrogate-bp-fi-ros"
 
