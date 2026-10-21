@@ -86,6 +86,7 @@ WORK_DIRNAME = "_work"
 RUN_DETAILS_DIRNAME = "run_details"
 RUN_MANIFEST_FILENAME = "run_manifest.json"
 LOG_FILENAME = "predict.log"
+PREDICTION_REPORT_FILENAME = "prediction_report.html"
 PREDICTION_FOLDER_PATTERN = re.compile(r"hex\d+")
 # Files predict (and evaluate) write into a map-type folder such as bp/: hexNN_bp.tif, hexNN_bp.png, hexNN_bp_maps.png, ...
 OWNED_MAP_FILE_PATTERN = re.compile(r"hex\d+_[a-z_]+\.(tif|tif\.aux\.xml|png)")
@@ -570,7 +571,16 @@ def is_map_folder(path: Path, names: Collection[str]) -> bool:
 
 def remove_previous_outputs(output_dir: Path, map_names: Collection[str], extra_names: Collection[str] = ()) -> None:
     """Delete what earlier runs wrote into ``output_dir`` (map folders, run_details/, reports, older layouts); keep anything else."""
-    owned = {RUN_DETAILS_DIRNAME, WORK_DIRNAME, RUN_MANIFEST_FILENAME, LOG_FILENAME, "summary_report.html", *extra_names}
+    # summary_report.html: the single report of older versions of the desktop app.
+    owned = {
+        RUN_DETAILS_DIRNAME,
+        WORK_DIRNAME,
+        RUN_MANIFEST_FILENAME,
+        LOG_FILENAME,
+        PREDICTION_REPORT_FILENAME,
+        "summary_report.html",
+        *extra_names,
+    }
     for child in output_dir.iterdir():
         if child.name in owned or is_map_folder(child, map_names) or _is_prediction_folder(child):
             shutil.rmtree(child) if child.is_dir() else child.unlink()
@@ -580,7 +590,10 @@ def _prepare_output_dir(output_dir: Path, overwrite: bool, map_names: Collection
     if output_dir.exists() and any(output_dir.iterdir()):
         if not overwrite:
             raise PredictError(f"Output folder {output_dir} is not empty. Choose another --output or pass --overwrite.")
-        remove_previous_outputs(output_dir, map_names)
+        from inference.evaluate import OWNED_OUTPUTS as EVALUATION_OUTPUTS  # imported here: evaluate imports this module
+
+        # An earlier evaluation in this folder scored the old maps, so it goes too.
+        remove_previous_outputs(output_dir, map_names, extra_names=EVALUATION_OUTPUTS)
     output_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -881,7 +894,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Use fuel raster hexNN_fbp_<scenario_name>.tif instead of hexNN_fbp.tif (default: the model's training scenario, if any).",
     )
-    parser.add_argument("--overwrite", action="store_true", help="Replace previous predictions in --output.")
+    parser.add_argument("--overwrite", action="store_true", help="Replace previous predictions (and any evaluation of them) in --output.")
     parser.add_argument("--no_plots", action="store_true", help="Do not draw PNG map pictures next to the GeoTIFFs (faster).")
     parser.add_argument(
         "--keep_work_dir", action="store_true", help=f"Keep intermediate patches in <output>/{RUN_DETAILS_DIRNAME}/{WORK_DIRNAME}."

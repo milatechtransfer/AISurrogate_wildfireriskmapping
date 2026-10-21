@@ -37,7 +37,9 @@ from inference.build_standalone import (
     write_quickstart_txt,
 )
 from inference.bundle import load_bundle
-from inference.report import SUMMARY_REPORT_FILENAME
+from inference.evaluate import EVALUATION_REPORT_FILENAME
+from inference.predict import PREDICTION_REPORT_FILENAME, RUN_DETAILS_DIRNAME
+from inference.report import CHECK_REPORT_FILENAME
 from tests.test_evaluate import _write_burnp3_results
 from tests.test_predict import HEIGHT, WIDTH, _write_hexel, _write_raster, make_test_bundle
 
@@ -72,6 +74,7 @@ def test_inspect_project_folder_handles_standard_and_regional_layouts(project: P
     assert info.has_burnp3_results is False
     assert info.recommended_scenario is None
     assert "Inputs only (Predict ready)" in info.summary_line()
+    assert info.default_output == project.resolve().parent / "project_AI_surrogate"
 
     # Selecting hex01/ or hex01/spatial/ directly steps up to the project root and preselects hex01
     sub_info = inspect_project_folder(project / "hex01" / "spatial")
@@ -114,7 +117,7 @@ def test_execute_workflow_check_predict_and_evaluate_write_html_reports(bundle_d
         )
     )
     assert check_res.ok is True
-    assert check_res.report_html == check_out / SUMMARY_REPORT_FILENAME
+    assert check_res.report_html == check_out / CHECK_REPORT_FILENAME
     check_html = check_res.report_html.read_text(encoding="utf-8")
     assert "AI Surrogate - Wildfire Hazard Mapping — Input Check Report" in check_html
     assert "hex01" in check_html
@@ -138,7 +141,7 @@ def test_execute_workflow_check_predict_and_evaluate_write_html_reports(bundle_d
     assert sorted(p.relative_to(pred_out).as_posix() for p in pred_out.glob("*/*.png")) == sorted(
         f"{n}/hex01_{n}.png" for n in DEFAULT_PREDICT_RASTERS
     )
-    assert pred_res.report_html == pred_out / SUMMARY_REPORT_FILENAME
+    assert pred_res.report_html == pred_out / PREDICTION_REPORT_FILENAME
     pred_html = pred_res.report_html.read_text(encoding="utf-8")
     assert "AI Surrogate - Wildfire Hazard Mapping — Prediction Summary" in pred_html
     assert "bp/hex01_bp.tif" in pred_html
@@ -147,20 +150,22 @@ def test_execute_workflow_check_predict_and_evaluate_write_html_reports(bundle_d
     assert "hazard_scaled" not in pred_html
     assert "Run Warnings" not in pred_html
 
-    # 3. Evaluate (and verify overwrite cleans up previous summary_report.html cleanly)
-    eval_out = tmp_path / "eval_out"
+    # 3. Evaluate into the same folder: scores Predict's maps instead of predicting them again
     eval_res = execute_workflow_action(
         WorkflowRequest(
             action="evaluate",
             bundle_dir=bundle_dir,
             project_dir=project,
-            output_dir=eval_out,
+            output_dir=pred_out,
             device="cpu",
             plots=False,
         )
     )
     assert eval_res.ok is True
-    assert eval_res.report_html == eval_out / SUMMARY_REPORT_FILENAME
+    assert "Scoring existing predictions" in (pred_out / RUN_DETAILS_DIRNAME / "evaluate.log").read_text()
+    assert pred_res.report_html.is_file()
+    assert (pred_out / "hazard_class" / "hex01_hazard_class.png").is_file()
+    assert eval_res.report_html == pred_out / EVALUATION_REPORT_FILENAME
     eval_html = eval_res.report_html.read_text(encoding="utf-8")
     assert "AI Surrogate - Wildfire Hazard Mapping — BurnP3+ Evaluation Report" in eval_html
     assert "Summary Metrics" in eval_html
@@ -266,7 +271,7 @@ def test_help_sections_document_project_layout_and_troubleshooting():
     headings = [heading for heading, _kind, _text in HELP_SECTIONS]
     assert "Troubleshooting" in headings
     all_text = "\n".join(text for _h, _k, text in HELP_SECTIONS)
-    for expected in ("hexNN_fbp", "DailyWeather", "results", "summary_report.html"):
+    for expected in ("hexNN_fbp", "DailyWeather", "results", "prediction_report.html"):
         assert expected in all_text
     assert all(kind in {"text", "code"} for _h, kind, _t in HELP_SECTIONS)
 

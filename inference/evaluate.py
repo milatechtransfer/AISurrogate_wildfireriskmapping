@@ -16,6 +16,10 @@ Examples:
     python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \\
         --predictions predictions/ --output evaluation/
 
+    # Or evaluate into the predict output folder itself: its maps are scored in place when they match
+    python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \\
+        --output predictions/
+
 Outputs in ``--output``: ``metrics_per_hexel.csv``, ``metrics_summary.csv``, ``hazard_metrics_per_hexel.csv``,
 ``hazard_metrics_summary.csv``, ``hazard_confusion_matrix.{csv,png}``, ``metrics_per_firezone.csv`` (with
 ``--by_firezone``) and one folder per map type (``bp/``, ``fi/``, ``ros/``, ``hazard_*/``) holding, per hexel, the
@@ -31,6 +35,7 @@ import io
 import json
 import logging
 import platform
+import re
 import shutil
 import sys
 import time
@@ -55,6 +60,7 @@ from inference.bundle import (
     resolve_device,
     resolve_mask_scope,
     resolve_scenario_name,
+    sha256_file,
     utc_timestamp,
     validate_scenario_name,
 )
@@ -73,6 +79,7 @@ from inference.predict import (
     output_overlap_error,
     prediction_raster_path,
     remove_previous_outputs,
+    resolve_fire_size_table,
     run_predict,
 )
 from src.datasets.postprocessing.hazard import compute_raw_hazard
@@ -129,6 +136,9 @@ METRICS_SUMMARY_FILENAME = "metrics_summary.csv"
 METRICS_PER_FIREZONE_FILENAME = "metrics_per_firezone.csv"
 HAZARD_PER_HEXEL_FILENAME = "hazard_metrics_per_hexel.csv"
 HAZARD_SUMMARY_FILENAME = "hazard_metrics_summary.csv"
+EVALUATION_REPORT_FILENAME = "evaluation_report.html"
+# Comparison pictures evaluate adds to the target folders (bp/, fi/, ros/) next to the predicted maps.
+COMPARISON_PICTURE_PATTERN = re.compile(r"hex\d+_[a-z]+_(maps|scatter|histogram)\.png")
 OWNED_OUTPUTS = frozenset(
     {
         LEGACY_PREDICTIONS_DIRNAME,
@@ -142,7 +152,7 @@ OWNED_OUTPUTS = frozenset(
         HAZARD_SUMMARY_FILENAME,
         "hazard_confusion_matrix.csv",
         "hazard_confusion_matrix.png",
-        "summary_report.html",
+        EVALUATION_REPORT_FILENAME,
     }
 )
 
@@ -223,7 +233,38 @@ def _hexels_with_predictions(predictions_dir: Path, bundle: ModelBundle) -> list
     return sorted(hex_id for hex_id in candidates if hex_id.isdigit() and prediction_path(predictions_dir, hex_id, first_target).is_file())
 
 
+def _reusable_predictions_problem(
+    output_dir: Path, bundle: ModelBundle, scope: str, scenario_name: str | None, hex_ids: list[str], fire_size_table: Path | None
+) -> str | None:
+    """Why the maps an earlier predict run wrote into ``output_dir`` cannot be scored as they are; None when they can."""
+    manifest = _read_predictions_manifest(output_dir)
+    if manifest is None:
+        return "no earlier predictions there"
+    options = manifest.get("options", {})
+    if manifest.get("status") != "success":
+        return "the earlier predict run did not finish"
+    if (manifest.get("bundle") or {}).get("weights_sha256") != bundle.manifest.weights.sha256:
+        return "the maps there were made with another model"
+    if options.get("mask_scope") != scope or options.get("scenario_name") != scenario_name:
+        return "the maps there were made for another mask scope or fuel scenario"
+    if fire_size_table is not None and (manifest.get("fire_size_table") or {}).get("sha256") != sha256_file(fire_size_table):
+        return "the maps there were made with another fire-size table"
+    if any(not prediction_path(output_dir, h, t.name).is_file() for h in hex_ids for t in bundle.manifest.targets):
+        return "the maps there do not include every target for every region"
+    return None
+
+
 def _prepare_output_dir(output_dir: Path, overwrite: bool, map_names: list[str], keep: Path | None) -> None:
+    if keep == output_dir:
+        # Scoring the maps already in output_dir: keep them and remove only an earlier evaluation.
+        for name in OWNED_OUTPUTS:
+            path = output_dir / name
+            shutil.rmtree(path) if path.is_dir() else path.unlink(missing_ok=True)
+        for name in map_names:
+            for picture in (output_dir / name).glob("hex*.png"):
+                if COMPARISON_PICTURE_PATTERN.fullmatch(picture.name):
+                    picture.unlink()
+        return
     if output_dir.exists() and any(output_dir.iterdir()):
         if not overwrite:
             raise EvaluateError(f"Output folder {output_dir} is not empty. Choose another --output or pass --overwrite.")
@@ -528,6 +569,7 @@ def run_evaluate(
 
     reuse = predictions_dir is not None
     predictions_manifest: dict[str, Any] | None = None
+    rerun_reason: str | None = None
     if reuse:
         assert predictions_dir is not None
         pred_dir = Path(predictions_dir).expanduser().resolve()
@@ -568,9 +610,13 @@ def run_evaluate(
             selected = discover_hex_ids(project_dir, hex_ids)
         except PredictError as exc:
             raise EvaluateError(str(exc)) from exc
+        rerun_reason = _reusable_predictions_problem(
+            output_dir, bundle, scope, scenario_name, selected, resolve_fire_size_table(bundle, fire_size_table)
+        )
+        if rerun_reason is None:
+            reuse = True
+            predictions_manifest = _read_predictions_manifest(output_dir)
 
-    if reuse and pred_dir == output_dir:
-        raise EvaluateError("--output must be a different folder from --predictions.")
     _prepare_output_dir(output_dir, overwrite, available_rasters(bundle), keep=pred_dir if reuse else None)
     details_dir = output_dir / RUN_DETAILS_DIRNAME
     details_dir.mkdir(parents=True, exist_ok=True)
@@ -628,7 +674,7 @@ def run_evaluate(
                         f"Fix these (or run `python -m inference.check --outputs` for the full report):\n{listed}"
                     )
             if not reuse:
-                logger.info("Predicting into %s", pred_dir)
+                logger.info("Predicting into %s (%s)", pred_dir, rerun_reason)
                 predict_run = run_predict(
                     bundle_dir=bundle.root,
                     project_dir=project_dir,

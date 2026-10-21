@@ -27,8 +27,10 @@ my_project/                    <- select THIS folder as the BurnP3+ Project
 """
 
 OUTPUT_TREE = """\
-<output folder>/
-├── summary_report.html        opens automatically when a step finishes
+my_project_AI_surrogate/       <- default Output Folder, next to the project folder
+├── prediction_report.html     written by Predict; each report opens when its step finishes
+├── evaluation_report.html     written by Evaluate
+├── input_check_report.html    written by Check Inputs
 ├── bp/                        burn probability (0-1), one file per region:
 │   ├── hex01_bp.tif               map for QGIS / ArcGIS Pro
 │   ├── hex01_bp.png               picture of the map
@@ -38,8 +40,9 @@ OUTPUT_TREE = """\
 ├── hazard_class/              hazard class (1 = lowest, 0 = no data)
 └── run_details/               record of the run and log (send these when asking for help)
 
-Evaluate adds, in each map folder, hexNN_<map>_maps.png (AI vs BurnP3+ side by side),
-_scatter.png and _histogram.png, plus metrics_*.csv tables at the top.
+Predict and Evaluate share this folder. Evaluate scores the maps Predict already wrote there (when made with
+the same options) instead of running the model again, and adds hexNN_<map>_maps.png (AI vs BurnP3+ side by
+side), _scatter.png and _histogram.png to bp/, fi/ and ros/, plus metrics_*.csv tables at the top.
 """
 
 # (heading, kind, text): kind is "text" (wrapped paragraphs) or "code" (monospace, not wrapped).
@@ -63,8 +66,9 @@ HELP_SECTIONS: tuple[tuple[str, str, str], ...] = (
         "1. Check Inputs: verifies that every raster and table is present and readable. Writes only a report.\n"
         "2. Predict Surrogate Maps: runs the AI model and writes the maps ticked under Predict Outputs. "
         "Takes seconds to minutes per region on a laptop.\n"
-        "3. Evaluate vs. BurnP3+: for projects where BurnP3+ has already been run (a results/ folder). Predicts, "
-        "then compares the AI maps with the BurnP3+ maps and reports accuracy scores and plots.",
+        "3. Evaluate vs. BurnP3+: for projects where BurnP3+ has already been run (a results/ folder). Compares "
+        "the AI maps with the BurnP3+ maps and reports accuracy scores and plots. It uses the maps Predict wrote to "
+        "the Output Folder, or predicts them first.",
     ),
     (
         "Options",
@@ -96,7 +100,7 @@ HELP_SECTIONS: tuple[tuple[str, str, str], ...] = (
         "instead.\n"
         "Output folder not empty: tick 'Overwrite existing output folder' or choose another Output Folder.\n"
         "Out of memory or very slow: predict fewer regions at a time (Regions box) and close other programs.\n"
-        "Still stuck: send the summary_report.html and the run_details folder from the Output Folder to the developers.",
+        "Still stuck: send the report (.html) and the run_details folder from the Output Folder to the developers.",
     ),
     (
         "About the model",

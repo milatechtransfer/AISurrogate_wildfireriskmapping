@@ -15,10 +15,17 @@ import pandas as pd
 
 from inference.bundle import ModelBundle
 from inference.check import CheckReport, Finding
-from inference.evaluate import HEADLINE_METRICS, EvaluateRun
-from inference.predict import HAZARD_CLASS_NODATA, OUTPUT_NODATA, PredictRun, available_rasters, raster_descriptions
+from inference.evaluate import EVALUATION_REPORT_FILENAME, HEADLINE_METRICS, EvaluateRun
+from inference.predict import (
+    HAZARD_CLASS_NODATA,
+    OUTPUT_NODATA,
+    PREDICTION_REPORT_FILENAME,
+    PredictRun,
+    available_rasters,
+    raster_descriptions,
+)
 
-SUMMARY_REPORT_FILENAME = "summary_report.html"
+CHECK_REPORT_FILENAME = "input_check_report.html"
 
 _CSS = """
 :root {
@@ -446,7 +453,7 @@ def write_predict_report_html(
     project_dir: str | Path,
     output_path: str | Path | None = None,
 ) -> Path:
-    path = Path(output_path) if output_path is not None else (run.output_dir / SUMMARY_REPORT_FILENAME)
+    path = Path(output_path) if output_path is not None else (run.output_dir / PREDICTION_REPORT_FILENAME)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_predict_report_html(run, bundle, project_dir), encoding="utf-8")
     return path
@@ -574,7 +581,7 @@ def write_evaluate_report_html(
     project_dir: str | Path,
     output_path: str | Path | None = None,
 ) -> Path:
-    path = Path(output_path) if output_path is not None else (run.output_dir / SUMMARY_REPORT_FILENAME)
+    path = Path(output_path) if output_path is not None else (run.output_dir / EVALUATION_REPORT_FILENAME)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_evaluate_report_html(run, bundle, project_dir), encoding="utf-8")
     return path

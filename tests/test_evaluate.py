@@ -190,8 +190,17 @@ def test_evaluate_predicts_scores_by_firezone_and_can_rescore_in_place(bundle_di
     assert "Predicting into" in log
     assert "hex01: evaluated in" in log
 
-    with pytest.raises(EvaluateError, match="different folder"):
-        run_evaluate(bundle_dir, project, output_dir, predictions_dir=output_dir, plots=False, overwrite=True)
+    # Evaluating into the same folder again scores the maps already there and removes the earlier scores.
+    tif_mtime = (output_dir / "bp" / "hex01_bp.tif").stat().st_mtime_ns
+    in_place = run_evaluate(bundle_dir, project, output_dir, device="cpu", plots=False)
+    assert (output_dir / "bp" / "hex01_bp.tif").stat().st_mtime_ns == tif_mtime
+    assert "Scoring existing predictions" in (output_dir / RUN_DETAILS_DIRNAME / "evaluate.log").read_text()
+    assert not (output_dir / METRICS_PER_FIREZONE_FILENAME).exists()
+    pd.testing.assert_series_equal(in_place.metrics.set_index("target")["mae"], run.metrics.set_index("target")["mae"])
+    # Maps made for another mask scope cannot be reused: predicting again needs --overwrite.
+    with pytest.raises(EvaluateError, match="not empty"):
+        run_evaluate(bundle_dir, project, output_dir, mask_scope="none", device="cpu", plots=False)
+
     rescored = run_evaluate(bundle_dir, project, tmp_path / "rescored", predictions_dir=output_dir, device="cpu", plots=False)
 
     assert (output_dir / "bp" / "hex01_bp.tif").is_file()

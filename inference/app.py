@@ -41,7 +41,7 @@ from inference.check import check_project
 from inference.evaluate import EvaluateError, format_summary, run_evaluate
 from inference.predict import PredictError, available_rasters, resolve_fire_size_table, run_predict
 from inference.report import (
-    SUMMARY_REPORT_FILENAME,
+    CHECK_REPORT_FILENAME,
     write_check_report_html,
     write_evaluate_report_html,
     write_predict_report_html,
@@ -66,8 +66,7 @@ class ProjectInspection:
     has_burnp3_results: bool = False
     recommended_mask_scope: str = "actual"
     recommended_scenario: str | None = None
-    default_predict_output: Path = field(default_factory=Path)
-    default_evaluate_output: Path = field(default_factory=Path)
+    default_output: Path = field(default_factory=Path)
 
     @property
     def hexel_names(self) -> list[str]:
@@ -235,14 +234,13 @@ def inspect_project_folder(project_dir: str | Path) -> ProjectInspection:
     if output_parent.exists() and not os.access(output_parent, os.W_OK):
         desktop = Path.home() / "Desktop"
         output_parent = desktop if (desktop.is_dir() and os.access(desktop, os.W_OK)) else Path.home()
-    default_pred = output_parent / f"{raw_path.name}_predictions"
-    default_eval = output_parent / f"{raw_path.name}_evaluation"
+    # Predict and Evaluate share this folder: Evaluate scores the maps Predict wrote there instead of predicting again.
+    default_output = output_parent / f"{raw_path.name}_AI_surrogate"
 
     if not raw_path.is_dir():
         return ProjectInspection(
             project_dir=raw_path,
-            default_predict_output=default_pred,
-            default_evaluate_output=default_eval,
+            default_output=default_output,
         )
 
     all_hex_ids = sorted(find_hex_ids(str(raw_path)))
@@ -250,8 +248,7 @@ def inspect_project_folder(project_dir: str | Path) -> ProjectInspection:
     if not hex_ids:
         return ProjectInspection(
             project_dir=raw_path,
-            default_predict_output=default_pred,
-            default_evaluate_output=default_eval,
+            default_output=default_output,
         )
 
     has_actual = True
@@ -309,8 +306,7 @@ def inspect_project_folder(project_dir: str | Path) -> ProjectInspection:
         has_burnp3_results=has_results,
         recommended_mask_scope=rec_mask,
         recommended_scenario=rec_scenario,
-        default_predict_output=default_pred,
-        default_evaluate_output=default_eval,
+        default_output=default_output,
     )
 
 
@@ -349,7 +345,7 @@ def execute_workflow_action(request: WorkflowRequest) -> WorkflowOutcome:
                 outputs=inspection.has_burnp3_results,
             )
             output_dir.mkdir(parents=True, exist_ok=True)
-            report_path = write_check_report_html(report, output_dir / SUMMARY_REPORT_FILENAME)
+            report_path = write_check_report_html(report, output_dir / CHECK_REPORT_FILENAME)
             return WorkflowOutcome(
                 action="check",
                 ok=report.ok,
@@ -376,7 +372,7 @@ def execute_workflow_action(request: WorkflowRequest) -> WorkflowOutcome:
                 rasters=request.rasters,
                 plots=request.plots,
             )
-            report_path = write_predict_report_html(pred_run, bundle, project_dir, output_dir / SUMMARY_REPORT_FILENAME)
+            report_path = write_predict_report_html(pred_run, bundle, project_dir)
             lines = [
                 f"Predicted {len(pred_run.hexels)} region(s) into {output_dir}:",
                 *[f"  hex{h.hex_id}: {', '.join(h.outputs.keys())} ({h.num_patches} patches, {h.seconds:.1f}s)" for h in pred_run.hexels],
@@ -406,7 +402,7 @@ def execute_workflow_action(request: WorkflowRequest) -> WorkflowOutcome:
                 scenario_name=resolved_scenario,
                 overwrite=request.overwrite,
             )
-            report_path = write_evaluate_report_html(eval_run, bundle, project_dir, output_dir / SUMMARY_REPORT_FILENAME)
+            report_path = write_evaluate_report_html(eval_run, bundle, project_dir)
             summary = format_summary(eval_run) + f"\nSummary report: {report_path}"
             return WorkflowOutcome(
                 action="evaluate",
@@ -807,7 +803,7 @@ def launch_gui(
             else:
                 hex_ids_var.set("all")
             if not output_customized:
-                output_var.set(str(info.default_evaluate_output if info.has_burnp3_results else info.default_predict_output))
+                output_var.set(str(info.default_output))
 
     bundle_entry.bind("<FocusOut>", _on_bundle_change)
     project_entry.bind("<FocusOut>", _on_project_change)
@@ -839,7 +835,7 @@ def launch_gui(
         info = inspect_project_folder(p_dir)
         out_str = output_var.get().strip()
         if not out_str or not output_customized:
-            out_path = info.default_evaluate_output if action == "evaluate" else info.default_predict_output
+            out_path = info.default_output
             output_var.set(str(out_path))
         else:
             out_path = Path(out_str)

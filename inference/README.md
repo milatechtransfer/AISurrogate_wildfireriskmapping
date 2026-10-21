@@ -46,9 +46,10 @@ For fire scientists who prefer a point-and-click interface without installing Py
    - The app automatically detects your regions, mask mode (`actual`, `buffer`, or `none`), fuel scenarios, and whether BurnP3+ `results/` exist.
 4. Click **1. Check Inputs**, **2. Predict Surrogate Maps**, or **3. Evaluate vs. BurnP3+**.
    - Under **Predict Outputs**, tick the maps you want (default: BP, FI, ROS and hazard class).
-5. When finished, an offline visual **`summary_report.html`** opens automatically with map pictures, metrics and warnings.
-   The Output Folder has one folder per map type (`bp/`, `fi/`, `ros/`, `hazard_class/`, ...) holding the GeoTIFF and
-   picture of every region.
+5. When finished, an offline report (`prediction_report.html` or `evaluation_report.html`) opens automatically with map
+   pictures, metrics and warnings. Results go to `<project>_AI_surrogate/`, next to the project folder, with one folder
+   per map type (`bp/`, `fi/`, `ros/`, `hazard_class/`, ...) holding the GeoTIFF and picture of every region.
+   Evaluate scores the maps Predict already wrote there instead of running the model again.
 6. Lost? Click **? Help** (or press F1) for the expected project folder layout, option explanations and troubleshooting.
 
 If you already have a Python environment set up from this repository, you can also launch the same desktop window with:
@@ -226,7 +227,7 @@ of its `hexNN` folders.
 | `--no_hazard` | Skip the hazard rasters |
 | `--rasters bp fi hazard_class` | Only write these GeoTIFFs (default: all six above). `evaluate` needs `bp fi ros` |
 | `--no_plots` | Skip the PNG map pictures (faster on very large runs) |
-| `--overwrite` | Replace earlier predictions in `--output` |
+| `--overwrite` | Replace earlier predictions (and any evaluation of them) in `--output` |
 
 ## 📊 Evaluate against BurnP3+
 
@@ -246,6 +247,11 @@ python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project p
 # Score predictions made earlier with inference.predict (the model is not run again)
 python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
     --predictions path/to/predictions --output path/to/evaluation
+
+# Or evaluate into the predict output folder itself: its maps are scored in place when they were made with the
+# same model, mask scope, scenario and fire-size table (otherwise, with --overwrite, they are predicted again)
+python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
+    --output path/to/predictions
 ```
 
 A summary is printed at the end, e.g. for national test region `hex12`:
