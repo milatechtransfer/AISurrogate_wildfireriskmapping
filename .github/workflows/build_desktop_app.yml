@@ -1,8 +1,14 @@
 name: Build Standalone Desktop App
 
 on:
+  # Check that the app still builds when its code or dependencies change on main.
   push:
-    branches: [feat/desktop-app-launcher]
+    branches: [main]
+    paths:
+      - "inference/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/build_desktop_app.yml"
   workflow_dispatch:
     inputs:
       bundle_zip_url:
