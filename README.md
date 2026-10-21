@@ -60,6 +60,9 @@ troubleshooting tips.
 **Linux or Intel Mac?** The desktop app isn't available for these yet. You can use the Python version instead
 (requires some command-line setup): see [inference/README.md](inference/README.md#️-installation-cli--developer-setup).
 
+**Problems, questions or feedback?** [Open a GitHub issue](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/issues/new)
+or contact us at hager.radi@mila.quebec or toluwaleke.olutayo@mila.quebec.
+
 ---
 
 ## 🧑‍💻 For researchers & developers
