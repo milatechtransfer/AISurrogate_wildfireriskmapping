@@ -49,6 +49,11 @@ def get_split_hexel_window(
     # Adding padding for the edges
     pad_h = stride_h - (H - win_h) % stride_h if (H - win_h) % stride_h != 0 else 0
     pad_w = stride_w - (W - win_w) % stride_w if (W - win_w) % stride_w != 0 else 0
+    # Areas smaller than one window are padded up to a single full window.
+    if H < win_h:
+        pad_h = win_h - H
+    if W < win_w:
+        pad_w = win_w - W
     season_cause_stacked_feats_padded = np.pad(
         season_cause_stacked_feats, ((0, 0), (0, pad_h), (0, pad_w), (0, 0)), mode="constant", constant_values=NODATA
     )

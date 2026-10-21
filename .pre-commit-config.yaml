@@ -3,8 +3,11 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
+      # model_checkpoints/ holds release artifacts that must stay byte-identical.
       - id: trailing-whitespace
+        exclude: ^model_checkpoints/
       - id: end-of-file-fixer
+        exclude: ^model_checkpoints/
       - id: check-merge-conflict
       - id: check-yaml
       - id: check-toml

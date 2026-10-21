@@ -70,6 +70,11 @@ class Paths:
             hex_id = self.hex_id
         return self.tabular_dir / f"hex{hex_id}_FuelTypes.csv"
 
+    def fuel_crosswalk_table(self, hex_id: int | str | None = None) -> Path:
+        if not hex_id:
+            hex_id = self.hex_id
+        return self.tabular_dir / f"hex{hex_id}_FuelCodeCrosswalk.csv"
+
     def weather_table(self, hex_id: int | str) -> Path:
         return self.tabular_dir / f"hex{hex_id}_DailyWeather.csv"
 

@@ -18,6 +18,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
 import numpy as np
+import pandas as pd
 import rasterio
 from rasterio.profiles import Profile
 
@@ -32,6 +33,9 @@ from src.datasets.postprocessing.hazard import (
 from src.datasets.postprocessing.hazard_metrics import calculate_hazard_class_metrics
 from src.datasets.postprocessing.hexel_reconstruction import StitchedHexel
 from src.datasets.postprocessing.visualize_predictions import visualize_target_grids
+
+CONFUSION_MATRIX_CSV_FILENAME = "hazard_confusion_matrix.csv"
+CONFUSION_MATRIX_PNG_FILENAME = "hazard_confusion_matrix.png"
 
 
 @dataclass(frozen=True)
@@ -216,3 +220,69 @@ def save_hazard_hexel_artifacts(
             )
 
     return written
+
+
+def write_confusion_matrix_csv(confusion_matrix: np.ndarray, save_dir: str) -> str:
+    """Write an aggregate hazard confusion matrix with rows=GT class and columns=predicted class."""
+    class_labels = [str(index) for index in range(1, confusion_matrix.shape[0] + 1)]
+    confusion_df = pd.DataFrame(confusion_matrix, index=class_labels, columns=class_labels)
+    confusion_df.index.name = "gt_class"
+    csv_path = os.path.join(save_dir, CONFUSION_MATRIX_CSV_FILENAME)
+    confusion_df.to_csv(csv_path)
+    return csv_path
+
+
+def row_normalized_confusion_percentages(confusion_matrix: np.ndarray) -> np.ndarray:
+    matrix = np.asarray(confusion_matrix, dtype=float)
+    row_totals = matrix.sum(axis=1, keepdims=True)
+    return np.divide(matrix * 100.0, row_totals, out=np.full_like(matrix, np.nan, dtype=float), where=row_totals > 0.0)
+
+
+def write_confusion_matrix_plot(confusion_matrix: np.ndarray, save_dir: str) -> str:
+    """Write an aggregate hazard confusion matrix plot with rows=GT class and columns=predicted class."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    percentages = row_normalized_confusion_percentages(confusion_matrix)
+    row_support = confusion_matrix.sum(axis=1)
+
+    fig, ax = plt.subplots(figsize=(10, 8), constrained_layout=True)
+    cmap = plt.get_cmap("Blues").copy()
+    cmap.set_bad(color="lightgray")
+    image = ax.imshow(np.ma.masked_invalid(percentages), cmap=cmap, vmin=0.0, vmax=100.0)
+    labels = np.arange(1, confusion_matrix.shape[0] + 1)
+    ax.set_xticks(np.arange(confusion_matrix.shape[1]), labels=labels)
+    ax.set_yticks(
+        np.arange(confusion_matrix.shape[0]),
+        labels=[f"{label}\n(n={int(support):,})" for label, support in zip(labels, row_support, strict=True)],
+    )
+    ax.set_xlabel("Predicted hazard class")
+    ax.set_ylabel("Ground-truth hazard class")
+    ax.set_title("Hazard class confusion matrix\nRow-normalized by ground-truth class")
+    fig.colorbar(image, ax=ax, label="Pixels within GT class (%)")
+
+    if confusion_matrix.shape[0] <= 15 and confusion_matrix.shape[1] <= 15:
+        for row in range(confusion_matrix.shape[0]):
+            for col in range(confusion_matrix.shape[1]):
+                value = percentages[row, col]
+                if not np.isfinite(value) or (value == 0.0 and confusion_matrix[row, col] == 0):
+                    continue
+                color = "white" if value >= 50.0 else "black"
+                ax.text(col, row, f"{value:.1f}", ha="center", va="center", color=color, fontsize=6)
+
+    ax.text(
+        0.5,
+        -0.12,
+        f"Rows sum to 100% for classes with support; raw pixel counts are in {CONFUSION_MATRIX_CSV_FILENAME}.",
+        transform=ax.transAxes,
+        ha="center",
+        va="top",
+        fontsize=9,
+    )
+
+    png_path = os.path.join(save_dir, CONFUSION_MATRIX_PNG_FILENAME)
+    fig.savefig(png_path, dpi=200)
+    plt.close(fig)
+    return png_path

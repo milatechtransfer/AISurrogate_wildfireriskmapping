@@ -3,6 +3,9 @@ import logging
 import math
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -29,6 +32,31 @@ from src.datasets.utils import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class GridSourceResources:
+    """
+    Model-side resources supplied explicitly (e.g. from a model bundle) for inference.
+
+    When given to :class:`GridSource`, every normalization constant, the channel layout and the
+    fuel curves come from here; nothing is read from ``root_dir`` and raw rasters are never scanned.
+    Missing entries raise instead of silently falling back.
+
+    Attributes:
+        norm_stats: Contents of the training ``dataset_norm_stats.json``.
+        channel_feature_map: Channel layout of the prepared patches (``feature_channel_map_<N>.json``).
+        fuel_curves_path: Fuel curves CSV (required for curve-based fuel encodings).
+        season_data_dir: Project directory holding ``hexNN/tabular/hexNN_{GreenUp,IgnitionDistribution}.csv``
+            for the hexels being predicted; used to blend multi-season fuel curves.
+        hex_ids: Hexels to build season-blended fuel curves for (default: every ``hex*`` in season_data_dir).
+    """
+
+    norm_stats: dict[str, Any]
+    channel_feature_map: dict[str, list[int]]
+    fuel_curves_path: str | Path | None = None
+    season_data_dir: str | Path | None = None
+    hex_ids: list[str] | None = None
+
+
 class GridSource(DataSource):
     """
     DataSource class for Spatial Grid
@@ -45,6 +73,7 @@ class GridSource(DataSource):
         raw_data_dir: str | None = None,
         train_split_csv_name: str | None = None,
         norm_stats_filename: str = NORM_STATS_JSON,
+        resources: GridSourceResources | None = None,
     ):
         """
         Args:
@@ -61,6 +90,9 @@ class GridSource(DataSource):
             norm_stats_filename (str): Filename (relative to root_dir) of the cached normalization-stats
                 JSON produced by data_preparation.compute_dataset_normalization_stats. Defaults to
                 "dataset_norm_stats.json".
+            resources (GridSourceResources, optional): Explicit model-side resources for inference.
+                When set, root_dir/raw_data_dir/train_split_csv_name/norm_stats_filename are not used
+                to look up normalization stats, the channel map or fuel curves.
         """
 
         self.root_dir = root_dir
@@ -70,6 +102,11 @@ class GridSource(DataSource):
         self.modelling_approach = modelling_approach
         self.transform = transform
         self.norm_stats_filename = norm_stats_filename
+        self.resources = resources
+        if resources is not None:
+            # Explicit resources replace every root_dir/raw_data_dir lookup below.
+            self._validate_raw_ranges = False
+            train_split_csv_name = None
 
         # Normalization statistics must be derived from the training split only, so held-out
         # hexes never leak into target/elevation normalization constants. None preserves the
@@ -125,18 +162,21 @@ class GridSource(DataSource):
             for target in self.targets:
                 if self._target_out_norm(target.name) != "min_max":
                     continue
-                try:
-                    target_max, target_min = get_range_output_cached(
-                        self.root_dir,
-                        target.output_type,
-                        self._train_hex_ids,
-                        raw_data_dir=self.raw_data_dir,
-                        norm_stats_filename=self.norm_stats_filename,
-                    )
-                except ValueError:
-                    if self._validate_raw_ranges:
-                        raise
-                    target_max, target_min = 1.0, 0.0
+                if resources is not None:
+                    target_min, target_max = self._resource_stat_pair(target.output_type, "min", "max")
+                else:
+                    try:
+                        target_max, target_min = get_range_output_cached(
+                            self.root_dir,
+                            target.output_type,
+                            self._train_hex_ids,
+                            raw_data_dir=self.raw_data_dir,
+                            norm_stats_filename=self.norm_stats_filename,
+                        )
+                    except ValueError:
+                        if self._validate_raw_ranges:
+                            raise
+                        target_max, target_min = 1.0, 0.0
                 target_max, target_min = apply_bp_nodata_zero_range(
                     target_name=target.name,
                     max_value=target_max,
@@ -163,7 +203,10 @@ class GridSource(DataSource):
                 if self._target_out_norm(target.name) != "log_standard":
                     continue
                 mean, std = self._target_log_stats(target.name)
-                if mean is None or std is None:
+                if (mean is None or std is None) and resources is not None:
+                    mean, std = self._resource_stat_pair(target.output_type, "log_mean", "log_std")
+                    self.target_log_stats[target.name] = (mean, std)
+                elif mean is None or std is None:
                     mean, std = get_output_log_stats_cached(
                         self.root_dir,
                         target.output_type,
@@ -174,72 +217,78 @@ class GridSource(DataSource):
                     self.target_log_stats[target.name] = (mean, std)
 
         # 2. Update indices
-        with open(os.path.join(self.root_dir, f"feature_channel_map_{self.modelling_approach}.json")) as f:
-            self.channel_feature_map = json.load(f)
-            self.raw_input_channel_indices = [item for key in self.feature_names_list for item in self.channel_feature_map[key]]
-            self.preprocess_channel_indices = sorted(set(self.raw_input_channel_indices))
-            self.channel_index_to_local_index = {
-                channel_index: local_index for local_index, channel_index in enumerate(self.preprocess_channel_indices)
-            }
-            self.raw_input_local_indices = [
-                self.channel_index_to_local_index[channel_index] for channel_index in self.raw_input_channel_indices
-            ]
-            self.input_channel_indices = list(self.raw_input_local_indices)
-            self.output_channel_indices = []
-            for target in self.targets:
-                output_channel_indices = self.channel_feature_map.get(target.channel_key)
-                if not output_channel_indices:
-                    raise ValueError(
-                        f"Missing output channel in feature channel map. Expected {target.channel_key!r} "
-                        f"for target_name={target.name!r}, "
-                        f"found keys: {list(self.channel_feature_map.keys())}"
-                    )
-                self.output_channel_indices.append(output_channel_indices[0])
-            if "fuel_grid" in self.feature_names_list:
-                self.fuel_feat_index = self.channel_feature_map["fuel_grid"][0]
-                self.fuel_feat_local_index = self.channel_index_to_local_index[self.fuel_feat_index]
-                if self.fuel_feats_encoding == "one_hot":
-                    updated_input_channel_indices = []
-                    for channel_index in self.raw_input_local_indices:
-                        if channel_index < self.fuel_feat_local_index:
-                            updated_input_channel_indices.append(channel_index)
-                        elif channel_index == self.fuel_feat_local_index:
-                            updated_input_channel_indices.extend(
-                                range(
-                                    self.fuel_feat_local_index,
-                                    self.fuel_feat_local_index + self.num_fuel_classes,
-                                )
+        if resources is not None:
+            self.channel_feature_map = {key: list(value) for key, value in resources.channel_feature_map.items()}
+        else:
+            with open(os.path.join(self.root_dir, f"feature_channel_map_{self.modelling_approach}.json")) as f:
+                self.channel_feature_map = json.load(f)
+        self.raw_input_channel_indices = [item for key in self.feature_names_list for item in self.channel_feature_map[key]]
+        self.preprocess_channel_indices = sorted(set(self.raw_input_channel_indices))
+        self.channel_index_to_local_index = {
+            channel_index: local_index for local_index, channel_index in enumerate(self.preprocess_channel_indices)
+        }
+        self.raw_input_local_indices = [
+            self.channel_index_to_local_index[channel_index] for channel_index in self.raw_input_channel_indices
+        ]
+        self.input_channel_indices = list(self.raw_input_local_indices)
+        self.output_channel_indices = []
+        for target in self.targets:
+            output_channel_indices = self.channel_feature_map.get(target.channel_key)
+            if not output_channel_indices:
+                raise ValueError(
+                    f"Missing output channel in feature channel map. Expected {target.channel_key!r} "
+                    f"for target_name={target.name!r}, "
+                    f"found keys: {list(self.channel_feature_map.keys())}"
+                )
+            self.output_channel_indices.append(output_channel_indices[0])
+        if "fuel_grid" in self.feature_names_list:
+            self.fuel_feat_index = self.channel_feature_map["fuel_grid"][0]
+            self.fuel_feat_local_index = self.channel_index_to_local_index[self.fuel_feat_index]
+            if self.fuel_feats_encoding == "one_hot":
+                updated_input_channel_indices = []
+                for channel_index in self.raw_input_local_indices:
+                    if channel_index < self.fuel_feat_local_index:
+                        updated_input_channel_indices.append(channel_index)
+                    elif channel_index == self.fuel_feat_local_index:
+                        updated_input_channel_indices.extend(
+                            range(
+                                self.fuel_feat_local_index,
+                                self.fuel_feat_local_index + self.num_fuel_classes,
                             )
-                        else:
-                            updated_input_channel_indices.append(channel_index + self.num_fuel_classes - 1)
-                    self.input_channel_indices = updated_input_channel_indices
-                elif self.fuel_feats_encoding in FUEL_CURVE_ENCODINGS:
-                    # Remove the scalar fuel channel entirely; it will be returned as a separate iROS array.
-                    self.input_channel_indices = [
-                        channel_index for channel_index in self.raw_input_local_indices if channel_index != self.fuel_feat_local_index
-                    ]
-            if "elevation_grid" in self.feature_names_list:
-                elev_feat_local_index = self.channel_index_to_local_index[self.channel_feature_map["elevation_grid"][0]]
-                elev_feat_encoded_index = elev_feat_local_index
-                if (
-                    "fuel_grid" in self.feature_names_list
-                    and self.fuel_feats_encoding == "one_hot"
-                    and self.fuel_feat_local_index < elev_feat_local_index
-                ):
-                    elev_feat_encoded_index += self.num_fuel_classes - 1
-                self.elevation_input_channel_index = self.input_channel_indices.index(elev_feat_encoded_index)
+                        )
+                    else:
+                        updated_input_channel_indices.append(channel_index + self.num_fuel_classes - 1)
+                self.input_channel_indices = updated_input_channel_indices
+            elif self.fuel_feats_encoding in FUEL_CURVE_ENCODINGS:
+                # Remove the scalar fuel channel entirely; it will be returned as a separate iROS array.
+                self.input_channel_indices = [
+                    channel_index for channel_index in self.raw_input_local_indices if channel_index != self.fuel_feat_local_index
+                ]
+        if "elevation_grid" in self.feature_names_list:
+            elev_feat_local_index = self.channel_index_to_local_index[self.channel_feature_map["elevation_grid"][0]]
+            elev_feat_encoded_index = elev_feat_local_index
+            if (
+                "fuel_grid" in self.feature_names_list
+                and self.fuel_feats_encoding == "one_hot"
+                and self.fuel_feat_local_index < elev_feat_local_index
+            ):
+                elev_feat_encoded_index += self.num_fuel_classes - 1
+            self.elevation_input_channel_index = self.input_channel_indices.index(elev_feat_encoded_index)
         # 3. normalization for elevation grid
-        try:
-            self.ELEVATION_MAX, self.ELEVATION_MIN = get_range_elevation_cached(
-                self.root_dir,
-                self._train_hex_ids,
-                raw_data_dir=self.raw_data_dir,
-                norm_stats_filename=self.norm_stats_filename,
-            )
-        except ValueError:
-            if self._validate_raw_ranges:
-                raise
-            self.ELEVATION_MAX, self.ELEVATION_MIN = 1.0, 0.0
+        if resources is not None:
+            self.ELEVATION_MIN, self.ELEVATION_MAX = self._resource_stat_pair("elevation", "min", "max")
+        else:
+            try:
+                self.ELEVATION_MAX, self.ELEVATION_MIN = get_range_elevation_cached(
+                    self.root_dir,
+                    self._train_hex_ids,
+                    raw_data_dir=self.raw_data_dir,
+                    norm_stats_filename=self.norm_stats_filename,
+                )
+            except ValueError:
+                if self._validate_raw_ranges:
+                    raise
+                self.ELEVATION_MAX, self.ELEVATION_MIN = 1.0, 0.0
         if self.ELEVATION_MAX <= self.ELEVATION_MIN:
             logger.warning(
                 "Elevation normalization range is degenerate: max=%.4f <= min=%.4f",
@@ -259,15 +308,43 @@ class GridSource(DataSource):
         self.fuel_curve_mean: np.ndarray | None = None
         self.fuel_curve_std: np.ndarray | None = None
         if "fuel_grid" in self.feature_names_list and self.fuel_feats_encoding in FUEL_CURVE_ENCODINGS:
-            self.fuel_curve_lookup = build_fuel_curve_lookup(
-                root_dir=self.root_dir,
-                raw_data_dir=self.raw_data_dir,
-                feature_name=self.fuel_feats_encoding,
-                fuel_curves_filename=self.fuel_curves_filename,
-            )
+            if resources is not None:
+                if resources.fuel_curves_path is None or resources.season_data_dir is None:
+                    raise ValueError(
+                        f"fuel_feats_encoding={self.fuel_feats_encoding!r} requires fuel_curves_path and season_data_dir in resources."
+                    )
+                fuel_curves_path = Path(resources.fuel_curves_path)
+                self.fuel_curve_lookup = build_fuel_curve_lookup(
+                    root_dir=fuel_curves_path.parent,
+                    raw_data_dir=resources.season_data_dir,
+                    feature_name=self.fuel_feats_encoding,
+                    fuel_curves_filename=fuel_curves_path.name,
+                    hex_ids=resources.hex_ids,
+                )
+            else:
+                self.fuel_curve_lookup = build_fuel_curve_lookup(
+                    root_dir=self.root_dir,
+                    raw_data_dir=self.raw_data_dir,
+                    feature_name=self.fuel_feats_encoding,
+                    fuel_curves_filename=self.fuel_curves_filename,
+                )
             self.fuel_curve_len = len(next(iter(self.fuel_curve_lookup.values())))
-            self._compute_fuel_curve_normalization_stats()
+            if resources is not None:
+                mean, std = self._resource_stat_pair(f"fuel_curve_{self.fuel_feats_encoding}", "log_mean", "log_std")
+                self.fuel_curve_mean = np.array([mean], dtype=np.float32)
+                self.fuel_curve_std = np.array([std], dtype=np.float32)
+            else:
+                self._compute_fuel_curve_normalization_stats()
             self._build_dense_fuel_lookup()
+
+    def _resource_stat_pair(self, key: str, first: str, second: str) -> tuple[float, float]:
+        """Read two values (e.g. ``min``/``max``) of ``key`` from the explicit norm stats, or raise."""
+        assert self.resources is not None
+        entry = self.resources.norm_stats.get(key) or {}
+        values = (entry.get(first), entry.get(second))
+        if values[0] is None or values[1] is None:
+            raise ValueError(f"Normalization stats have no {first!r}/{second!r} for {key!r}; the model bundle is incomplete.")
+        return float(values[0]), float(values[1])
 
     @staticmethod
     def _validate_range(max_value: float, min_value: float, label: str, source_dir: str) -> None:
@@ -314,6 +391,8 @@ class GridSource(DataSource):
         # Set of all fuel codes that have an explicit entry in the lookup.
         # Used at get_sample time to detect unsupported codes early.
         self._known_fuel_codes: frozenset[int] = frozenset(code for code, _ in self.fuel_curve_lookup.keys())
+        # Codes whose curve is blended per hex from that hex's season weights.
+        self._hex_specific_fuel_codes: frozenset[int] = frozenset(code for code, hid in self.fuel_curve_lookup if hid is not None)
 
     def _compute_fuel_curve_normalization_stats(self) -> None:
         """
@@ -478,6 +557,14 @@ class GridSource(DataSource):
                     f"entry in the {self.fuel_feats_encoding} lookup table: "
                     f"{sorted(unknown_codes)}. Known codes: {sorted(self._known_fuel_codes)}."
                 )
+            if self.resources is not None and hex_id not in self._dense_fuel_per_hex:
+                # Without this hex's season weights, multi-season codes would silently get zero curves.
+                missing_blend = observed_codes & self._hex_specific_fuel_codes
+                if missing_blend:
+                    raise ValueError(
+                        f"Hexel {hex_id} uses multi-season fuel code(s) {sorted(missing_blend)} but no season "
+                        f"weights were built for it (GreenUp/IgnitionDistribution tables of hex{hex_id})."
+                    )
             fuel_curve_arr = dense[fuel_int]  # (H, W, L)
             fuel_curve_arr[~valid_mask] = 0.0  # zero-out nodata pixels
 
