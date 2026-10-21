@@ -85,14 +85,14 @@ def test_inspect_project_folder_handles_standard_and_regional_layouts(project: P
     for shp in (project / "hex01" / "spatial" / "mask_grids").iterdir():
         shp.unlink()
     default_fbp = project / "hex01" / "spatial" / "hex01_fbp.tif"
-    scenario_fbp = project / "hex01" / "spatial" / "hex01_fbp_FireExcludeSpotting.tif"
+    scenario_fbp = project / "hex01" / "spatial" / "hex01_fbp_scenario_A.tif"
     default_fbp.rename(scenario_fbp)
-    _write_burnp3_results(project, scenario_name="FireExcludeSpotting")
+    _write_burnp3_results(project, scenario_name="scenario_A")
 
     reg_info = inspect_project_folder(project)
     assert reg_info.recommended_mask_scope == "none"
-    assert reg_info.scenarios == ["FireExcludeSpotting"]
-    assert reg_info.recommended_scenario == "FireExcludeSpotting"
+    assert reg_info.scenarios == ["scenario_A"]
+    assert reg_info.recommended_scenario == "scenario_A"
     assert reg_info.has_burnp3_results is True
     assert "BurnP3+ results found" in reg_info.summary_line()
 
@@ -264,7 +264,7 @@ def test_smoke_test_runs_all_workflows_on_staged_app(bundle_dir: Path, tmp_path:
 def test_scenario_name_from_ui_maps_default_label_to_none():
     assert scenario_name_from_ui(DEFAULT_SCENARIO_LABEL) is None
     assert scenario_name_from_ui("  ") is None
-    assert scenario_name_from_ui(" FireExcludeSpotting ") == "FireExcludeSpotting"
+    assert scenario_name_from_ui(" scenario_A ") == "scenario_A"
 
 
 def test_help_sections_document_project_layout_and_troubleshooting():

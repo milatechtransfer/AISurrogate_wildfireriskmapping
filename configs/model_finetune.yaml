@@ -1,7 +1,7 @@
 # Skeleton config for fine-tuning an already-trained multi-output BP/FI/ROS
 # checkpoint on a new (typically smaller, regional/scenario-specific) dataset.
-# Fill in the <PLACEHOLDER> values below; see the NWT fine-tuning example at
-# configs/NWT_data/multi_output_NWT_eval_scenario_FireExcludeSpotting_finetune.yaml
+# Fill in the <PLACEHOLDER> values below; see the regional fine-tuning example at
+# configs/regional_data/multi_output_regional_eval_scenario_A_finetune.yaml
 # and the "Model Finetuning" section of README.md for more context.
 save_dir: "experiments/<FINETUNE_RUN_NAME>"
 

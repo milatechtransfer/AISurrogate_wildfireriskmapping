@@ -218,7 +218,7 @@ def main():
     parser.add_argument(
         "--scenario_name",
         default=None,
-        help="'None' (default) for national data, specified only in case of NWT data",
+        help="'None' (default) for national data, specified only in case of regional data",
     )
     parser.add_argument(
         "--overwrite",

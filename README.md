@@ -163,7 +163,7 @@ To run the standalone inference pipeline, refer to [inference/README.md](inferen
 
 To prepare new regional dataset, refer to [`data_preparation/README_regional.md`](data_preparation/README.md).
 
-Fine-tuning adapts an already-trained multi-output checkpoint (BP/FI/ROS) to a new, typically smaller, regional/scenario-specific dataset instead of training from scratch. The skeleton config [`configs/model_finetune.yaml`](configs/model_finetune.yaml) is a ready-to-edit template for this — fill in its `<PLACEHOLDER>` values (data paths, splits, experiment/run names, etc.) for your fine-tuning dataset. It is based on [`configs/multi_output_spatial_weather.yaml`](configs/multi_output_spatial_weather.yaml), with the same overrides used by the NWT example, [`configs/NWT_data/multi_output_NWT_eval_scenario_FireExcludeSpotting_finetune.yaml`](configs/NWT_data/multi_output_NWT_eval_scenario_FireExcludeSpotting_finetune.yaml):
+Fine-tuning adapts an already-trained multi-output checkpoint (BP/FI/ROS) to a new, typically smaller, regional/scenario-specific dataset instead of training from scratch. The skeleton config [`configs/model_finetune.yaml`](configs/model_finetune.yaml) is a ready-to-edit template for this — fill in its `<PLACEHOLDER>` values (data paths, splits, experiment/run names, etc.) for your fine-tuning dataset. It is based on [`configs/multi_output_spatial_weather.yaml`](configs/multi_output_spatial_weather.yaml), with the same overrides used by the NWT example, [`configs/regional_data/multi_output_regional_eval_scenario_A_finetune.yaml`](configs/regional_data/multi_output_regional_eval_scenario_A_finetune.yaml):
 
 - Sets `training.warm_start_checkpoint` to the base checkpoint, renamed `best_base.pth` and placed under the fine-tune run's own `save_dir`. Only `model_state` is loaded from this checkpoint — the optimizer, LR scheduler, epoch counter, and best-metric baseline all start fresh, so the run behaves like fine-tuning rather than resuming.
 - Lowers the optimizer learning rate (`optimizer.lr: 5.0e-5` vs `7.0e-4` in the base config) and reduces `training.max_epochs` (`20` vs `25`) to avoid overfitting the much smaller fine-tuning dataset.
@@ -267,7 +267,7 @@ The array tasks use seeds `42`, `1337`, and `2024`, normalize each run by its ma
 Extra CLI arguments can be passed through `EVAL_ARGS`. For example, to run a buffer-only evaluation from a different data root and keep outputs separate:
 
 ```bash
-EVAL_ARGS="--mask_scope buffer_only --root_dir /network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v2_buffer_test --save_dir experiments/hazard_eval_common_input_pipeline_buffer_only --skip_plots" \
+EVAL_ARGS="--mask_scope buffer_only --root_dir /path/to/data/canada_bp3+_2026_MILA/data_samples_v2_buffer_test --save_dir experiments/hazard_eval_common_input_pipeline_buffer_only --skip_plots" \
   sbatch run_files/eval_hazard.sh configs/hazard_eval_common_input_pipeline.yaml
 ```
 

@@ -355,10 +355,10 @@ def test_scenario_names_cannot_leave_the_project(bundle_dir: Path, project: Path
 def test_predict_uses_the_bundles_training_scenario_by_default(bundle_dir: Path, project: Path, tmp_path: Path):
     manifest_path = bundle_dir / MANIFEST_FILENAME
     manifest = yaml.safe_load(manifest_path.read_text())
-    manifest["data_prep"]["scenario_name"] = "FireExcludeSpotting"
+    manifest["data_prep"]["scenario_name"] = "scenario_A"
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False))
 
-    with pytest.raises(PredictError, match="hex01_fbp_FireExcludeSpotting.tif"):
+    with pytest.raises(PredictError, match="hex01_fbp_scenario_A.tif"):
         run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu")
 
 
