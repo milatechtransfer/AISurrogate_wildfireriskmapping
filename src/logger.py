@@ -1,8 +1,6 @@
 import os
 from pathlib import Path
 
-from comet_ml import ExistingExperiment, Experiment
-
 
 class CometLogger:
     def __init__(
@@ -14,6 +12,10 @@ class CometLogger:
         api_key: str | None = None,
         previous_experiment_key: str | None = None,
     ):
+        # Imported lazily so inference code (and the standalone desktop app, which excludes
+        # comet_ml) can import modules that reference CometLogger without installing comet_ml.
+        from comet_ml import ExistingExperiment, Experiment
+
         # get the api key from os vars.
         self.api_key = api_key or os.getenv("COMET_API_KEY")
         if not self.api_key:

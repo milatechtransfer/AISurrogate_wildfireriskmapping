@@ -16,7 +16,8 @@ GPU or BurnP3+ outputs are required to predict.
 
 - [🔥 Wildfire AI Surrogate: Inference](#-wildfire-ai-surrogate-inference)
   - [Table of contents](#table-of-contents)
-  - [🛠️ Installation](#️-installation)
+  - [🖥️ One-click desktop application (no Python required)](#️-one-click-desktop-application-no-python-required)
+  - [🛠️ Installation (CLI / developer setup)](#️-installation-cli--developer-setup)
   - [🚀 Quick start](#-quick-start)
   - [📦 The model bundle](#-the-model-bundle)
   - [📂 Preparing your project](#-preparing-your-project)
@@ -32,7 +33,32 @@ GPU or BurnP3+ outputs are required to predict.
   - [🩺 Troubleshooting](#-troubleshooting)
   - [🔧 For maintainers: exporting a bundle](#-for-maintainers-exporting-a-bundle)
 
-## 🛠️ Installation
+## 🖥️ One-click desktop application (no Python required)
+
+For fire scientists who prefer a point-and-click interface without installing Python or using the command line:
+
+1. Download the app for your operating system from the [Releases page](https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/releases)
+   (see [Use the desktop app](../README.md#-use-the-desktop-app-no-python-or-command-line) for direct links and first-launch security prompts).
+   - **Windows:** unzip `AISurrogateHazardMapping-windows-amd64.zip`.
+   - **macOS (Apple silicon):** open `AISurrogateHazardMapping-darwin-arm64.dmg` and drag the `AISurrogateHazardMapping` folder to your Desktop.
+2. Double-click **`AISurrogateHazardMapping.exe`** (Windows) or **`AISurrogateHazardMapping.app`** (macOS). Keep the app next to its `bundles/` and `sample_project/` folders.
+3. Click **Browse...** next to **BurnP3+ Project** and select your project folder (containing `hexNN/` subfolders).
+   - The app automatically detects your regions, mask mode (`actual`, `buffer`, or `none`), fuel scenarios, and whether BurnP3+ `results/` exist.
+4. Click **1. Check Inputs**, **2. Predict Surrogate Maps**, or **3. Evaluate vs. BurnP3+**.
+   - Under **Predict Outputs**, tick the maps you want (default: BP, FI, ROS and hazard class).
+5. When finished, an offline report (`prediction_report.html` or `evaluation_report.html`) opens automatically with map
+   pictures, metrics and warnings. Results go to `<project>_AI_surrogate/`, next to the project folder, with one folder
+   per map type (`bp/`, `fi/`, `ros/`, `hazard_class/`, ...) holding the GeoTIFF and picture of every region.
+   Evaluate scores the maps Predict already wrote there instead of running the model again.
+6. Lost? Click **? Help** (or press F1) for the expected project folder layout, option explanations and troubleshooting.
+
+If you already have a Python environment set up from this repository, you can also launch the same desktop window with:
+
+```bash
+python -m inference.app
+```
+
+## 🛠️ Installation (CLI / developer setup)
 
 Install `uv`: https://docs.astral.sh/uv/getting-started/installation.
 
@@ -172,18 +198,19 @@ python -m inference.predict --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project pa
     --output path/to/predictions
 ```
 
-Outputs, one folder per region (GeoTIFF, nodata `-9999`):
+Outputs, one folder per map type holding every region (GeoTIFF, nodata `-9999`), each with a PNG picture
+of the map next to it (`hexNN_bp.png`, ...):
 
 | File | Content |
 |---|---|
-| `hexNN/hexNN_bp.tif` | Burn probability (0–1) |
-| `hexNN/hexNN_fi.tif` | Fire intensity (kW/m) |
-| `hexNN/hexNN_ros.tif` | Rate of spread (m/min) |
-| `hexNN/hexNN_hazard_raw.tif` | Hazard = BP × min(FI, 10 000 kW/m) |
-| `hexNN/hexNN_hazard_scaled.tif` | Hazard on a 0–100 scale, comparable across studies |
-| `hexNN/hexNN_hazard_class.tif` | 13 hazard classes (1 = lowest; 0 = nodata) |
-| `run_manifest.json` | Record of the run (model, inputs, options), for reproducibility |
-| `predict.log` | Run log |
+| `bp/hexNN_bp.tif` | Burn probability (0–1) |
+| `fi/hexNN_fi.tif` | Fire intensity (kW/m) |
+| `ros/hexNN_ros.tif` | Rate of spread (m/min) |
+| `hazard_raw/hexNN_hazard_raw.tif` | Hazard = BP × min(FI, 10 000 kW/m) |
+| `hazard_scaled/hexNN_hazard_scaled.tif` | Hazard on a 0–100 scale, comparable across studies |
+| `hazard_class/hexNN_hazard_class.tif` | 13 hazard classes (1 = lowest; 0 = nodata) |
+| `run_details/run_manifest.json` | Record of the run (model, inputs, options), for reproducibility |
+| `run_details/predict.log` | Run log |
 
 Outputs are in Canada Lambert Conformal Conic (`ESRI:102002`, ~100 m cells). If your inputs are in another
 CRS, reproject the outputs before overlaying them cell by cell. `--output` cannot be the project folder or one
@@ -198,7 +225,9 @@ of its `hexNN` folders.
 | `--device auto\|cpu\|cuda\|mps` | Hardware to run on |
 | `--batch_size N` | Lower it if memory runs out |
 | `--no_hazard` | Skip the hazard rasters |
-| `--overwrite` | Replace earlier predictions in `--output` |
+| `--rasters bp fi hazard_class` | Only write these GeoTIFFs (default: all six above). `evaluate` needs `bp fi ros` |
+| `--no_plots` | Skip the PNG map pictures (faster on very large runs) |
+| `--overwrite` | Replace earlier predictions (and any evaluation of them) in `--output` |
 
 ## 📊 Evaluate against BurnP3+
 
@@ -211,13 +240,18 @@ against the BurnP3+ outputs in each region's `results/` folder:
 - with `--scenario_name NAME`: `results/NAME/burnP3Plus_Output..._NAME_{All|Average}.tif`.
 
 ```bash
-# Predict and evaluate (predictions are kept in path/to/evaluation/predictions/)
+# Predict and evaluate (the predicted GeoTIFFs are kept in path/to/evaluation/bp/, fi/, ...)
 python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
     --output path/to/evaluation
 
 # Score predictions made earlier with inference.predict (the model is not run again)
 python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
     --predictions path/to/predictions --output path/to/evaluation
+
+# Or evaluate into the predict output folder itself: its maps are scored in place when they were made with the
+# same model, mask scope, scenario and fire-size table (otherwise, with --overwrite, they are predicted again)
+python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/project \
+    --output path/to/predictions
 ```
 
 A summary is printed at the end, e.g. for national test region `hex12`:
@@ -237,9 +271,9 @@ Evaluated 1 hexel(s) against BurnP3+ (area: actual). Mean over hexels:
 | `metrics_per_firezone.csv` | With `--by_firezone`: one row per region × fire zone × target |
 | `hazard_metrics_summary.csv`, `hazard_metrics_per_hexel.csv` | Agreement of the hazard classes |
 | `hazard_confusion_matrix.{csv,png}` | Hazard classes, BurnP3+ (rows) vs AI surrogate (columns) |
-| `plots/hexNN/` | AI surrogate, BurnP3+ and difference maps; scatter plots and histograms |
-| `predictions/` | The predictions, when evaluate ran the model |
-| `evaluation_manifest.json`, `evaluate.log` | Model, options, input check, warnings and summary |
+| `bp/`, `fi/`, `ros/` | Per region: `hexNN_<target>_maps.png` (AI surrogate, BurnP3+ and difference), `_scatter.png`, `_histogram.png`, and the predicted `hexNN_<target>.tif` when evaluate ran the model |
+| `hazard_*/` | The predicted hazard GeoTIFFs and pictures, when evaluate ran the model |
+| `run_details/` | `evaluation_manifest.json` and `evaluate.log` (model, options, input check, warnings and summary); `run_manifest.json` when evaluate ran the model |
 
 Extra options: `--by_firezone`, `--metrics ccc mae` (a subset), `--no_plots` (faster),
 `--mask_scope buffer` (also scores the region and its buffer ring separately), plus the `predict` options.
@@ -347,3 +381,14 @@ See `--help` for all options. The inputs of the v1.0.0 release bundle are in the
 `model_checkpoints/multi_task_spatial_weather_firesize_seed1337/`, and the normalization and lookup tables, hazard
 denominator and fire-size table in `model_checkpoints/multi_task_spatial_weather_firesize_bundle_inputs/`. The exact
 command that rebuilds it is in the docstring of `inference/export_bundle.py`.
+
+### Building the standalone desktop app
+
+Package `inference.app` together with Python, PyTorch, GDAL/Rasterio, and a model bundle into a standalone, offline-ready folder and archive (`.zip`, or `.dmg` on macOS):
+
+```bash
+uv run --with pyinstaller python -m inference.build_standalone \
+    --bundle nrcan-surrogate-bp-fi-ros-v1.0 \
+    --out_dir dist \
+    --zip
+```

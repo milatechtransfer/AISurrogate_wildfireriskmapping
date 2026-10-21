@@ -14,7 +14,7 @@ from rasterio.transform import from_origin
 from shapely.geometry import box
 
 from inference.bundle import MANIFEST_FILENAME, RESOURCE_DATASET_NORM_STATS, RESOURCE_FIRE_SIZE_TABLE, RESOURCE_FUEL_CURVES, load_bundle
-from inference.predict import RUN_MANIFEST_FILENAME, WORK_DIRNAME, PredictError, main, run_predict
+from inference.predict import RUN_DETAILS_DIRNAME, RUN_MANIFEST_FILENAME, WORK_DIRNAME, PredictError, main, run_predict
 from src.config import Config
 from src.datasets.sources.grids import GridSource, GridSourceResources
 from tests.test_bundle import FEATURE_CHANNEL_MAP, NUM_ISI_BINS, _build, _export, _tiny_config, _write_training_resources
@@ -164,12 +164,17 @@ def test_predict_writes_georeferenced_outputs_without_burnp3_results(bundle_dir:
     assert [result.hex_id for result in run.hexels] == ["01"]
     expected = {"bp", "fi", "ros", "hazard_raw", "hazard_scaled", "hazard_class"}
     assert set(run.hexels[0].outputs) == expected
-    assert not (output_dir / WORK_DIRNAME).exists()
+    assert not (output_dir / RUN_DETAILS_DIRNAME / WORK_DIRNAME).exists()
+    assert sorted(path.name for path in output_dir.iterdir()) == sorted([*expected, RUN_DETAILS_DIRNAME])
+    for name in expected:
+        assert sorted(path.name for path in (output_dir / name).iterdir()) == [f"hex01_{name}.png", f"hex01_{name}.tif"]
+    assert run.hexels[0].pictures["bp"] == "bp/hex01_bp.png"
+    assert run.warnings == []
 
     bundle = load_bundle(bundle_dir)
     bp_max = bundle.target("bp").max_value
     assert bp_max is not None
-    with rasterio.open(output_dir / "hex01" / "hex01_bp.tif") as src:
+    with rasterio.open(output_dir / "bp" / "hex01_bp.tif") as src:
         bp = src.read(1, masked=True)
         assert src.crs.to_string() == CRS or src.crs == rasterio.crs.CRS.from_user_input(CRS)
         assert src.res == (CELL, CELL)
@@ -179,23 +184,52 @@ def test_predict_writes_georeferenced_outputs_without_burnp3_results(bundle_dir:
     assert bp.count() == (MASK_ROWS[1] - MASK_ROWS[0]) * (MASK_COLS[1] - MASK_COLS[0])
     assert float(bp.min()) >= 0.0
     assert float(bp.max()) <= bp_max
-    with rasterio.open(output_dir / "hex01" / "hex01_fi.tif") as src:
+    with rasterio.open(output_dir / "fi" / "hex01_fi.tif") as src:
         assert src.read(1, masked=True).min() > 0.0
-    with rasterio.open(output_dir / "hex01" / "hex01_hazard_class.tif") as src:
+    with rasterio.open(output_dir / "hazard_class" / "hex01_hazard_class.tif") as src:
         classes = src.read(1, masked=True)
         assert src.dtypes[0] == "uint8"
         assert classes.count() == bp.count()
 
-    run_manifest = json.loads((output_dir / RUN_MANIFEST_FILENAME).read_text())
+    run_manifest = json.loads((output_dir / RUN_DETAILS_DIRNAME / RUN_MANIFEST_FILENAME).read_text())
     assert run_manifest["status"] == "success"
     assert run_manifest["bundle"]["name"] == "test-bundle"
     assert run_manifest["options"]["device"] == "cpu"
     assert run_manifest["fire_size_table"]["source"] == "bundle"
     assert run_manifest["fire_size_table"]["matches_training_table"] is True
     assert run_manifest["input_check"] == {"errors": [], "warnings": []}
+    assert run_manifest["warnings"] == []
     assert run.fire_size_note is not None
     assert "national training table shipped with the model" in run.fire_size_note
-    assert "national training table shipped with the model" in (output_dir / "predict.log").read_text()
+    assert "national training table shipped with the model" in (output_dir / RUN_DETAILS_DIRNAME / "predict.log").read_text()
+
+
+def test_predict_writes_only_the_requested_rasters(bundle_dir: Path, project: Path, tmp_path: Path):
+    output_dir = tmp_path / "out"
+    code = main(
+        ["--bundle", str(bundle_dir), "--project", str(project), "--output", str(output_dir), "--device", "cpu"]
+        + ["--rasters", "hazard_class", "bp"]
+    )
+
+    assert code == 0
+    assert sorted(path.name for path in output_dir.glob("*/*.tif")) == ["hex01_bp.tif", "hex01_hazard_class.tif"]
+    run_manifest = json.loads((output_dir / RUN_DETAILS_DIRNAME / RUN_MANIFEST_FILENAME).read_text())
+    assert run_manifest["options"]["rasters"] == ["bp", "hazard_class"]
+    assert set(run_manifest["hexels"][0]["outputs"]) == {"bp", "hazard_class"}
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"rasters": ["bp", "smoke"]}, r"Unknown raster\(s\) \['smoke'\]"),
+        ({"rasters": []}, "Choose at least one raster"),
+        ({"rasters": ["hazard_class"], "hazard": False}, "hazard is turned off"),
+    ],
+)
+def test_predict_rejects_invalid_raster_requests(bundle_dir: Path, project: Path, tmp_path: Path, kwargs, message):
+    with pytest.raises(PredictError, match=message):
+        run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu", **kwargs)
+    assert not (tmp_path / "out").exists()
 
 
 def test_predict_derives_curves_for_fuel_codes_defined_in_the_project(bundle_dir: Path, project: Path, tmp_path: Path):
@@ -213,11 +247,11 @@ def test_predict_derives_curves_for_fuel_codes_defined_in_the_project(bundle_dir
     run = run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu", keep_work_dir=True)
 
     assert run.hexels[0].fuel_curves == {"derived": {"425": "M-1 (25 PC)"}, "replaced": {}}
-    run_manifest = json.loads((tmp_path / "out" / RUN_MANIFEST_FILENAME).read_text())
+    run_manifest = json.loads((tmp_path / "out" / RUN_DETAILS_DIRNAME / RUN_MANIFEST_FILENAME).read_text())
     assert run_manifest["hexels"][0]["fuel_curves"]["derived"] == {"425": "M-1 (25 PC)"}
-    curves = pd.read_csv(tmp_path / "out" / WORK_DIRNAME / "fuel_curves_hex01.csv")
+    curves = pd.read_csv(tmp_path / "out" / RUN_DETAILS_DIRNAME / WORK_DIRNAME / "fuel_curves_hex01.csv")
     assert set(curves.fbp_code) == {1, 13, 425}
-    with rasterio.open(tmp_path / "out" / "hex01" / "hex01_bp.tif") as src:
+    with rasterio.open(tmp_path / "out" / "bp" / "hex01_bp.tif") as src:
         bp = src.read(1, masked=True)
     assert bp.count() == (MASK_ROWS[1] - MASK_ROWS[0]) * (MASK_COLS[1] - MASK_COLS[0])
 
@@ -230,7 +264,7 @@ def test_predict_cli_reports_which_fire_size_table_was_used(bundle_dir: Path, pr
     )
     assert code == 0
     assert f"using your table {table}" in capsys.readouterr().out
-    run_manifest = json.loads((tmp_path / "out" / RUN_MANIFEST_FILENAME).read_text())
+    run_manifest = json.loads((tmp_path / "out" / RUN_DETAILS_DIRNAME / RUN_MANIFEST_FILENAME).read_text())
     assert run_manifest["fire_size_table"]["source"] == "user"
     assert run_manifest["fire_size_table"]["matches_training_table"] is False
 
@@ -243,7 +277,7 @@ def test_predict_requires_a_fire_size_table_when_the_bundle_has_none(bundle_dir:
 
     with pytest.raises(PredictError, match="fire_size_table"):
         run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu")
-    run_manifest = json.loads((tmp_path / "out" / RUN_MANIFEST_FILENAME).read_text())
+    run_manifest = json.loads((tmp_path / "out" / RUN_DETAILS_DIRNAME / RUN_MANIFEST_FILENAME).read_text())
     assert run_manifest["status"] == "failed"
 
 
@@ -253,11 +287,11 @@ def test_predict_stops_before_predicting_when_inputs_have_errors(bundle_dir: Pat
 
     with pytest.raises(PredictError, match=r"hex01/spatial/hex01_fbp.tif: Fuel code\(s\) the model has no fuel curve for: 999"):
         run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu")
-    run_manifest = json.loads((tmp_path / "out" / RUN_MANIFEST_FILENAME).read_text())
+    run_manifest = json.loads((tmp_path / "out" / RUN_DETAILS_DIRNAME / RUN_MANIFEST_FILENAME).read_text())
     assert run_manifest["status"] == "failed"
     assert run_manifest["input_check"]["errors"][0]["hexel"] == "hex01"
     assert run_manifest["hexels"] == []
-    assert not (tmp_path / "out" / "hex01").exists()
+    assert not (tmp_path / "out" / "bp").exists()
 
 
 def test_predict_refuses_non_empty_output_without_overwrite(bundle_dir: Path, project: Path, tmp_path: Path):
@@ -282,22 +316,33 @@ def test_predict_refuses_an_output_folder_that_overlaps_the_project_inputs(bundl
 
 def test_overwrite_only_replaces_earlier_prediction_folders(bundle_dir: Path, project: Path, tmp_path: Path):
     output_dir = tmp_path / "out"
-    stale = output_dir / "hex99"
+    stale = output_dir / "hex99"  # older layout
     stale.mkdir(parents=True)
     (stale / "hex99_bp.tif").write_text("old prediction")
     (stale / "hex99_bp.tif.aux.xml").write_text("QGIS sidecar")
-    for name in ("hex_notes", "hex7_backup"):
+    (output_dir / "fi").mkdir()
+    (output_dir / "fi" / "hex99_fi.tif").write_text("old prediction")
+    (output_dir / "fi" / "hex99_fi.png").write_text("old picture")
+    (output_dir / "run_details").mkdir()
+    (output_dir / "run_details" / "predict.log").write_text("old log")
+    (output_dir / "run_manifest.json").write_text("{}")
+    for name in ("hex_notes", "hex7_backup", "hex98", "ros", "notes"):
         (output_dir / name).mkdir()
         (output_dir / name / "notes.txt").write_text("keep me")
-    (output_dir / "hex98").mkdir()
-    (output_dir / "hex98" / "notes.txt").write_text("keep me")
 
-    run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=output_dir, device="cpu", overwrite=True)
+    run = run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=output_dir, device="cpu", overwrite=True, plots=False)
 
     assert not stale.exists()
-    for name in ("hex_notes", "hex7_backup", "hex98"):
+    assert not (output_dir / "run_manifest.json").exists()
+    assert sorted(path.name for path in (output_dir / "fi").iterdir()) == ["hex01_fi.tif"]
+    assert "old log" not in (output_dir / "run_details" / "predict.log").read_text()
+    for name in ("hex_notes", "hex7_backup", "hex98", "ros", "notes"):
         assert (output_dir / name / "notes.txt").read_text() == "keep me"
-    assert (output_dir / "hex01" / "hex01_bp.tif").is_file()
+    # A folder holding the user's own files is never cleared, so the new ros map lands next to them.
+    assert (output_dir / "ros" / "hex01_ros.tif").is_file()
+    assert (output_dir / "bp" / "hex01_bp.tif").is_file()
+    assert not list(output_dir.glob("*/*.png"))
+    assert run.hexels[0].pictures == {}
 
 
 @pytest.mark.parametrize("scenario", ["../outside", "a/b", "a\\b", "..", ".hidden"])
@@ -398,8 +443,48 @@ def test_predict_without_mask_covers_the_whole_raster(bundle_dir: Path, project:
 
     run_predict(bundle_dir=bundle_dir, project_dir=project, output_dir=tmp_path / "out", device="cpu", mask_scope="none")
 
-    with rasterio.open(tmp_path / "out" / "hex01" / "hex01_bp.tif") as src:
+    with rasterio.open(tmp_path / "out" / "bp" / "hex01_bp.tif") as src:
         assert (src.height, src.width) == (HEIGHT, WIDTH)
         assert (src.transform.c, src.transform.f) == (ORIGIN_X, ORIGIN_Y)
         assert src.read(1, masked=True).count() == HEIGHT * WIDTH
-    assert json.loads((tmp_path / "out" / RUN_MANIFEST_FILENAME).read_text())["options"]["mask_scope"] == "none"
+    assert json.loads((tmp_path / "out" / RUN_DETAILS_DIRNAME / RUN_MANIFEST_FILENAME).read_text())["options"]["mask_scope"] == "none"
+
+
+def test_predict_draws_pictures_only_for_the_requested_maps(bundle_dir: Path, project: Path, tmp_path: Path):
+    output_dir = tmp_path / "out"
+
+    run = run_predict(
+        bundle_dir=bundle_dir,
+        project_dir=project,
+        output_dir=output_dir,
+        device="cpu",
+        rasters=["bp", "hazard_class"],
+        plots=["hazard_class"],
+    )
+
+    assert sorted(path.relative_to(output_dir).as_posix() for path in output_dir.glob("*/*.png")) == ["hazard_class/hex01_hazard_class.png"]
+    assert set(run.hexels[0].pictures) == {"hazard_class"}
+    run_manifest = json.loads((output_dir / RUN_DETAILS_DIRNAME / RUN_MANIFEST_FILENAME).read_text())
+    assert run_manifest["options"]["pictures"] == ["hazard_class"]
+
+
+def test_no_plots_flag_skips_pictures(bundle_dir: Path, project: Path, tmp_path: Path):
+    output_dir = tmp_path / "out"
+    code = main(
+        [
+            "--bundle",
+            str(bundle_dir),
+            "--project",
+            str(project),
+            "--output",
+            str(output_dir),
+            "--device",
+            "cpu",
+            "--rasters",
+            "bp",
+            "--no_plots",
+        ]
+    )
+
+    assert code == 0
+    assert sorted(path.name for path in (output_dir / "bp").iterdir()) == ["hex01_bp.tif"]
