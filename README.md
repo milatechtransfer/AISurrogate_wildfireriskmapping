@@ -249,4 +249,3 @@ sbatch run_files/baselines/train_baseline_multi_run.sh configs/baselines/bp_spat
 ```
 
 Swap `bp_` for `fi_`/`ros_` to target fire intensity or rate of spread. The mean-value baseline is deterministic and only needs a single seed.
-
