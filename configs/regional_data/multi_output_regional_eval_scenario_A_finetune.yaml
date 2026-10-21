@@ -1,7 +1,7 @@
 # Joint BP/FI/ROS emulator on the shared spatial input pipeline.
 # The UNet backbone and decoder are shared. A BP head predicts probability
 # logits, while one two-channel behavior head predicts conditional FI and ROS.
-save_dir: "experiments/NWT_multi_output_spatial_weather_scenario_FireSpottingDrought"
+save_dir: "experiments/regional_multi_output_spatial_weather_scenario_A_finetune"
 
 modelling_approach: "1"
 
@@ -16,7 +16,7 @@ model:
 
 optimizer:
   name: "AdamW"
-  lr: 7.0e-4
+  lr: 5.0e-5
   target_losses:
     bp:
       loss: ["kl", "ccc", "hex_mean_pairwise_rank", "hex_top10_pairwise_rank"]
@@ -44,13 +44,15 @@ lr_scheduler:
   warmup_epochs: 5
 
 training:
-  max_epochs: 25
+  max_epochs: 20
   log_every_n_epoch: 1
+  warm_start_checkpoint: "experiments/regional_multi_output_spatial_weather_scenario_A_finetune/best_base.pth"
+  #freeze_modules: ["encoder", "bottleneck"]
 
 evaluation:
   best_ckpt_metrics: ["bp/ccc", "fi/ccc", "ros/ccc"]
   best_ckpt_metrics_mode: ["max", "max", "max"]
-  checkpoint_filename: "best_base.pth" # change the checkpoint name whether it is base or finetuned
+  checkpoint_filename: "best.pth" # change the checkpoint name whether it is base or finetuned
   bp_nodata_as_zero: true
   prediction_support_policy: "input"
   hazard_fi_cap: 10000.0
@@ -58,14 +60,14 @@ evaluation:
   report_to_comet: true
 
 data:
-  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_FireSpottingDrought"
-  raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data"
+  root_dir: "/path/to/data/regional_data/regional_data_scenario_A"
+  raw_data_dir: "/path/to/data/regional_data"
 
-  train_split: ""
-  val_split: ""
+  train_split: "test_indices.csv"
+  val_split: "test_indices.csv"
   test_split: "test_indices.csv"
 
-  batch_size: 64
+  batch_size: 16
   num_workers: 2
   valid_mask_threshold: 0.01
   include_patch_metadata: true
@@ -92,7 +94,6 @@ data:
 
     - name: "spatialized_weather"
       params:
-        #zone_id_remap: {45: 26}
         csv_name: "weather_table_processed.csv"
         feature_names_list:
           - "Temperature"
@@ -130,13 +131,14 @@ logger:
   enabled: true
   project_name: "nrcan-05-wildfires-nwt-data"
   workspace: "mila-amlrt"
-  experiment_name: "multi_task_NWT_data_scenario_FireSpottingDrought"
+  experiment_name: "multi_task_regional_data_scenario_A_finetune"
   tags:
     - "full_data"
     - "modelling_approach=1"
     - "targets=bp_fi_ros"
     - "output_head=bp_behavior"
-    - "NWT_data_FireSpottingDrought_scenario"
+    - "regional_data_scenario_A"
+    - "Finetuning_national_model"
     - "ignition=aggregated_human_lightning"
     - "raw_fuel_iROS"
     - "best_ckpt=bp_ccc_fi_ccc_ros_ccc"
@@ -176,5 +178,5 @@ data_prep:
   overlap_ratio: 0.2
   ignition_weighting: "distribution"
   fuel_representation: "raw"
-  scenario_name: "FireSpottingDrought"
+  scenario_name: "SCENARIO_NAME"
   mask_scope: None

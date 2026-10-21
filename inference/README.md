@@ -167,10 +167,10 @@ and `SIZE_HA` (hectares); BurnP3+'s `FRU` and `Fsize` column names also work.
 `predict` and `evaluate` run the same check first and stop on errors.
 
 ```text
-$ python -m inference.check --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project NWT_data \
-      --scenario_name FireExcludeSpotting --mask_scope none
+$ python -m inference.check --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project regional_data \
+      --scenario_name scenario_A --mask_scope none
 
-Checked 1 hexel(s) in NWT_data for model nrcan-surrogate-bp-fi-ros v1.0.0 (mask: none)
+Checked 1 hexel(s) in regional_data for model nrcan-surrogate-bp-fi-ros v1.0.0 (mask: none)
 
 Project
   NOTE     Fire sizes: using the national training table shipped with the model (...)
@@ -310,8 +310,8 @@ For a regional study (e.g. a study area prepared as a single `hexNN` folder):
 4. **Regional fire sizes?** Pass `--fire_size_table`.
 
 ```bash
-python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/NWT_data \
-    --scenario_name FireExcludeSpotting --mask_scope none --output path/to/evaluation
+python -m inference.evaluate --bundle nrcan-surrogate-bp-fi-ros-v1.0 --project path/to/regional_data \
+    --scenario_name scenario_A --mask_scope none --output path/to/evaluation
 ```
 
 > [!IMPORTANT]
@@ -348,7 +348,7 @@ Measured on a single CPU core, no GPU:
 | Area | `check` | `predict` | `evaluate` (predict + scoring) |
 |---|---|---|---|
 | National region `hex12` (~18 M cells) | seconds | ~15 min | + ~7 min scoring with plots, ~6 GB peak memory |
-| NWT regional study (~5.7 M cells) | 17 s, 0.9 GB | ~6 min | 12 min total, 3 GB peak memory |
+| regional study (~5.7 M cells) | 17 s, 0.9 GB | ~6 min | 12 min total, 3 GB peak memory |
 
 A GPU (CUDA or Apple MPS) speeds up `predict`; `--no_plots` speeds up `evaluate`.
 

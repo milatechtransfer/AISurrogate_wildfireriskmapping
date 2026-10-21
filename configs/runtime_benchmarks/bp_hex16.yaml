@@ -40,8 +40,8 @@ evaluation:
   prediction_support_policy: "input"
 
 data:
-  root_dir: "/network/projects/amlrt_internships/nrcan_05_wildfires/burnp3plus_data/data_samples_v3"
-  raw_data_dir: "/network/projects/amlrt_internships/nrcan_05_wildfires/burnp3plus_data"
+  root_dir: "/path/to/burnp3plus_data/data_samples_v3"
+  raw_data_dir: "/path/to/burnp3plus_data"
 
   train_split: "train_indices.csv"
   val_split: "val_indices.csv"

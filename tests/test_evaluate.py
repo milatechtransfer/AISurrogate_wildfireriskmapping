@@ -301,17 +301,17 @@ def test_evaluate_without_mask_scores_the_whole_raster(bundle_dir: Path, project
 
 
 def test_reused_predictions_are_scored_against_their_own_scenario(bundle_dir: Path, bundle: ModelBundle, project: Path, tmp_path: Path):
-    grids = _write_burnp3_results(project, scenario_name="FireExcludeSpotting")
+    grids = _write_burnp3_results(project, scenario_name="scenario_A")
     predictions = _write_predictions(
-        tmp_path / "predictions", bundle, grids, manifest={"options": {"mask_scope": "actual", "scenario_name": "FireExcludeSpotting"}}
+        tmp_path / "predictions", bundle, grids, manifest={"options": {"mask_scope": "actual", "scenario_name": "scenario_A"}}
     )
 
     run = run_evaluate(bundle_dir, project, tmp_path / "evaluation", predictions_dir=predictions, device="cpu", plots=False)
 
     np.testing.assert_allclose(run.metrics["mae"], 0.0, atol=1e-6)
     manifest = json.loads((tmp_path / "evaluation" / RUN_DETAILS_DIRNAME / EVALUATION_MANIFEST_FILENAME).read_text())
-    assert manifest["options"]["scenario_name"] == "FireExcludeSpotting"
-    with pytest.raises(EvaluateError, match="made for scenario 'FireExcludeSpotting'"):
+    assert manifest["options"]["scenario_name"] == "scenario_A"
+    with pytest.raises(EvaluateError, match="made for scenario 'scenario_A'"):
         run_evaluate(bundle_dir, project, tmp_path / "other", predictions_dir=predictions, scenario_name="Other", plots=False)
 
 
@@ -322,7 +322,7 @@ def test_national_predictions_cannot_be_scored_against_a_scenario(bundle_dir: Pa
     )
 
     with pytest.raises(EvaluateError, match="national rasters"):
-        run_evaluate(bundle_dir, project, tmp_path / "evaluation", predictions_dir=predictions, scenario_name="FireExcludeSpotting")
+        run_evaluate(bundle_dir, project, tmp_path / "evaluation", predictions_dir=predictions, scenario_name="scenario_A")
 
 
 def test_evaluate_rejects_scenario_names_with_path_components(bundle_dir: Path, bundle: ModelBundle, project: Path, tmp_path: Path):

@@ -62,7 +62,7 @@ hex_ids: ["16"]
 endpoints:
   bp:
     config_path: "configs/multi_output_spatial_weather_firesize_q3.yaml"   # trained checkpoint's config
-    checkpoint_dir: "/network/projects/amlrt/nrcan_wildfires/checkpoints/burnp3plus/final_experiments/unet_256_firesize_q3"
+    checkpoint_dir: "/path/to/checkpoints/final_experiments/unet_256_firesize_q3"
   # fi/ros alias the same multi-output checkpoint
 
 scenarios:

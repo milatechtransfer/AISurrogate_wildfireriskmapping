@@ -1,7 +1,7 @@
 # Joint BP/FI/ROS emulator on the shared spatial input pipeline.
 # The UNet backbone and decoder are shared. A BP head predicts probability
 # logits, while one two-channel behavior head predicts conditional FI and ROS.
-save_dir: "experiments/NWT_multi_output_spatial_weather_scenario_FireExcludeSpotting"
+save_dir: "experiments/regional_multi_output_spatial_weather_scenario_A"
 
 modelling_approach: "1"
 
@@ -58,8 +58,8 @@ evaluation:
   report_to_comet: true
 
 data:
-  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data/NWT_data_scenario_FireExcludeSpotting"
-  raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/NWT_data"
+  root_dir: "/path/to/data/regional_data/regional_data_scenario_A"
+  raw_data_dir: "/path/to/data/regional_data"
 
   train_split: ""
   val_split: ""
@@ -129,13 +129,13 @@ logger:
   enabled: true
   project_name: "nrcan-05-wildfires-nwt-data"
   workspace: "mila-amlrt"
-  experiment_name: "multi_task_NWT_data_scenario_FireExcludeSpotting"
+  experiment_name: "multi_task_regional_data_scenario_A"
   tags:
     - "full_data"
     - "modelling_approach=1"
     - "targets=bp_fi_ros"
     - "output_head=bp_behavior"
-    - "NWT_data_FireExcludeSpotting_scenario"
+    - "regional_data_scenario_A"
     - "ignition=aggregated_human_lightning"
     - "raw_fuel_iROS"
     - "best_ckpt=bp_ccc_fi_ccc_ros_ccc"
@@ -175,5 +175,5 @@ data_prep:
   overlap_ratio: 0.2
   ignition_weighting: "distribution"
   fuel_representation: "raw"
-  scenario_name: "FireExcludeSpotting"
+  scenario_name: "SCENARIO_NAME"
   mask_scope: None
