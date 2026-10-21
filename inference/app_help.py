@@ -100,7 +100,10 @@ HELP_SECTIONS: tuple[tuple[str, str, str], ...] = (
         "instead.\n"
         "Output folder not empty: tick 'Overwrite existing output folder' or choose another Output Folder.\n"
         "Out of memory or very slow: predict fewer regions at a time (Regions box) and close other programs.\n"
-        "Still stuck: send the report (.html) and the run_details folder from the Output Folder to the developers.",
+        "Still stuck, or have questions or feedback? Open an issue at "
+        "https://github.com/milatechtransfer/AISurrogate_wildfireriskmapping/issues or email "
+        "hager.radi@mila.quebec or toluwaleke.olutayo@mila.quebec. For problems, attach the report (.html) and the "
+        "run_details folder from the Output Folder.",
     ),
     (
         "About the model",
