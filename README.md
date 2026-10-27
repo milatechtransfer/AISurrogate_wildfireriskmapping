@@ -5,7 +5,20 @@
 
 An AI surrogate modelling framework that approximates wildfire burn probability, fire intensity, and rate of spread emulating process-based wildfire simulators (BurnP3 / BurnP3+).
 
-📖 Read our preprint [Accelerating Wildfire Hazard Mapping Across Canada with an AI Surrogate Modelling Framework](https://www.researchgate.net/publication/416410681_Accelerating_Wildfire_Hazard_Mapping_Across_Canada_with_an_AI_Surrogate_Modelling_Framework)
+📖 Read our preprint [Accelerating Wildfire Hazard Mapping Across Canada with an AI Surrogate Modelling Framework](https://arxiv.org/abs/2610.30170)
+
+## 📝 Citation
+
+If you use this work, please cite:
+
+```bibtex
+@article{abdelwahed2026accelerating,
+  title={Accelerating Wildfire Hazard Mapping Across Canada with an AI Surrogate Modelling Framework},
+  author={Abdelwahed, Hager Radi and Olutayo, Toluwaleke and Goel, Chirag and Osea, Jana and Zaimi, Aldo and Swystun, Tom and Erni, Sandy and Saavedra, Francisco Emiliano Lopez and Boulanger, Yan and Caron, Ga{\'e}tan Marceau},
+  journal={arXiv preprint arXiv:2610.30170},
+  year={2026}
+}
+```
 
 **Where to start**
 
