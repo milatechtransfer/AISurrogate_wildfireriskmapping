@@ -70,3 +70,45 @@ def test_bp_behavior_head_requires_bp_fi_and_ros():
 
     with pytest.raises(ValueError, match="requires exactly"):
         build_model(model_config=config, spatial_input_channels=3, target_names=["bp", "fi"])
+
+
+@pytest.mark.parametrize("architecture", ["resnet_unet", "swin_unet"])
+@pytest.mark.parametrize("size", [32, 37])
+def test_encoder_variants_spatial_only(architecture, size):
+    config = ModelConfig(architecture=architecture, hidden_features=[8, 16], input_branches=["spatial"], use_coordconv=True)
+    model = build_model(model_config=config, spatial_input_channels=3)
+    assert isinstance(model, BaselineUNet)
+    assert model(torch.randn(2, 3, size, size)).shape == (2, 1, size, size)
+
+
+@pytest.mark.parametrize("architecture", ["resnet", "swin_unet"])
+def test_encoder_variants_with_auxiliary_and_fuel_curve(architecture):
+    config = ModelConfig(
+        architecture=architecture,
+        hidden_features=[8, 16],
+        input_branches=["spatial", "auxiliary"],
+        auxiliary_hidden_dims={"tabular_weather": [8]},
+        auxiliary_embed_dims={"tabular_weather": 8, "fuel_curve": 4},
+    )
+    model = build_model(model_config=config, spatial_input_channels=3, auxiliary_input_dims={"tabular_weather": 5, "fuel_curve": 6})
+    assert isinstance(model, MultiSourceUNet)
+    assert model.fuel_curve_encoder is not None
+    aux = {"tabular_weather": torch.randn(2, 4, 5), "fuel_curve": torch.randn(2, 6, 32, 32)}
+    out = model(torch.randn(2, 3, 32, 32), aux)
+    assert out.shape == (2, 1, 32, 32)
+    out.mean().backward()
+
+
+@pytest.mark.parametrize(("architecture", "decoder_cls"), [("resnet_unet", "ResNetDecoder"), ("swin_unet", "SwinDecoder")])
+@pytest.mark.parametrize("skips", [True, False])
+def test_encoder_variants_use_matching_decoder(architecture, decoder_cls, skips):
+    config = ModelConfig(
+        architecture=architecture,
+        hidden_features=[8, 16, 32, 64],
+        input_branches=["spatial"],
+        use_skip_connections=skips,
+        use_coordconv=True,
+    )
+    model = build_model(model_config=config, spatial_input_channels=3)
+    assert type(model.decoder).__name__ == decoder_cls
+    assert model(torch.randn(1, 3, 64, 64)).shape == (1, 1, 64, 64)

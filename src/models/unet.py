@@ -2,7 +2,9 @@ from abc import ABC, abstractmethod
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
+from src.models.backbones import ResNetDecoder, ResNetEncoder, SwinBottleneck, SwinDecoder, SwinEncoder
 from src.models.bottlenecks import MultiSourceBottleneck
 from src.models.decoders import BaselineDecoder
 from src.models.encoders import (
@@ -15,6 +17,18 @@ from src.models.encoders import (
 )
 from src.models.heads import BurnProbabilityBehaviorHead
 from src.models.utils import double_conv_block
+
+
+def build_spatial_encoder(encoder_type: str, in_channels: int, hidden_features: list[int] | None, use_coordconv: bool) -> nn.Module:
+    if hidden_features is None:
+        raise ValueError("Hidden features cannot be None")
+    if encoder_type == "unet":
+        return BaselineEncoder(in_channels=in_channels, hidden_features=hidden_features, use_coordconv=use_coordconv)
+    if encoder_type == "resnet":
+        return ResNetEncoder(in_channels=in_channels, hidden_features=hidden_features, use_coordconv=use_coordconv)
+    if encoder_type == "swin":
+        return SwinEncoder(in_channels=in_channels, hidden_features=hidden_features, use_coordconv=use_coordconv)
+    raise ValueError(f"Unknown encoder_type {encoder_type!r}. Supported: 'unet', 'resnet', 'swin'.")
 
 
 class UNetBase(nn.Module, ABC):
@@ -62,6 +76,29 @@ class UNetBase(nn.Module, ABC):
         self.bottleneck = self.build_bottleneck()
         self.decoder = self.build_decoder()
 
+    def _pad_input(self, x: torch.Tensor) -> torch.Tensor:
+        """Swin patching needs a multiple of patch_size * 2**(levels-1); other encoders accept any size."""
+        if self.encoder_type != "swin":
+            return x
+        multiple = SwinEncoder.patch_size * 2 ** (len(self.hidden_features or []) - 1)
+        pad_h, pad_w = (-x.shape[-2]) % multiple, (-x.shape[-1]) % multiple
+        return F.pad(x, (0, pad_w, 0, pad_h), mode="replicate") if pad_h or pad_w else x
+
+    def _build_spatial_decoder(self) -> nn.Module:
+        if self.hidden_features is None:
+            raise ValueError("Hidden features cannot be None.")
+        if self.encoder_type == "resnet":
+            return ResNetDecoder(self.hidden_features, self.use_skip_connections, self.use_coordconv)
+        if self.encoder_type == "swin":
+            return SwinDecoder(self.hidden_features, self.use_skip_connections)
+        return BaselineDecoder(
+            hidden_features=self.hidden_features,
+            use_skip_connections=self.use_skip_connections,
+            use_transpose_conv=self.use_transpose_conv,
+            use_activation_after_upsampling=self.use_activation_after_upsampling,
+            use_coordconv=self.use_coordconv,
+        )
+
     def _build_output_layers(self, feature_channels: int, output_head: str, target_names: list[str] | None) -> None:
         if output_head == "shared":
             self.out_conv = nn.Conv2d(feature_channels, self.num_classes, kernel_size=1)
@@ -106,8 +143,10 @@ class BaselineUNet(UNetBase):
         fuel_curve_std: torch.Tensor | None = None,
         output_head: str = "shared",
         target_names: list[str] | None = None,
+        encoder_type: str = "unet",
     ):
         super().__init__()
+        self.encoder_type = encoder_type
         if hidden_features is None:
             hidden_features = [64, 128, 256, 512]
         if input_branches is None:
@@ -143,37 +182,31 @@ class BaselineUNet(UNetBase):
         self._build_output_layers(self.hidden_features[0], output_head, target_names)
 
     def build_encoder(self) -> nn.Module:
-        encoder = BaselineEncoder(
-            in_channels=self._effective_spatial_in, hidden_features=self.hidden_features, use_coordconv=self.use_coordconv
-        )
-        return encoder
+        return build_spatial_encoder(self.encoder_type, self._effective_spatial_in, self.hidden_features, self.use_coordconv)
 
     def build_bottleneck(self) -> nn.Module:
         if self.hidden_features is None:
             raise ValueError("Hidden features cannot be None")
+        if self.encoder_type == "swin":
+            return SwinBottleneck(self.hidden_features[-1], {})
         in_channels = self.hidden_features[-1] + 2 if self.use_coordconv else self.hidden_features[-1]
         return double_conv_block(in_channels, self.hidden_features[-1] * 2)
 
     def build_decoder(self) -> nn.Module:
-        decoder = BaselineDecoder(
-            hidden_features=self.hidden_features,
-            use_skip_connections=self.use_skip_connections,
-            use_transpose_conv=self.use_transpose_conv,
-            use_activation_after_upsampling=self.use_activation_after_upsampling,
-            use_coordconv=self.use_coordconv,
-        )
-        return decoder
+        return self._build_spatial_decoder()
 
     def forward(self, x: torch.Tensor, x_auxiliary: dict[str, torch.Tensor] | None = None) -> torch.Tensor:
         if self.fuel_curve_encoder is not None and x_auxiliary is not None and "fuel_curve" in x_auxiliary:
             fuel_curve_emb = self.fuel_curve_encoder(x_auxiliary["fuel_curve"])  # (B, fuel_curve_embed_dim, H, W)
             x = torch.cat([x, fuel_curve_emb], dim=1)  # (B, C + fuel_curve_embed_dim, H, W)
+        orig_size = x.shape[-2:]
+        x = self._pad_input(x)
         x, skip_connections = self.encoder(x)
-        if self.use_coordconv:
+        if self.use_coordconv and self.encoder_type != "swin":
             x = append_coord_channels(x)
         x = self.bottleneck(x)
         x = self.decoder(x, skip_connections)
-        return self._project_output(x)
+        return self._project_output(x)[..., : orig_size[0], : orig_size[1]]
 
 
 class MultiSourceUNet(UNetBase):
@@ -195,9 +228,11 @@ class MultiSourceUNet(UNetBase):
         fuel_curve_std: torch.Tensor | None = None,
         output_head: str = "shared",
         target_names: list[str] | None = None,
+        encoder_type: str = "unet",
     ):
         super().__init__()
 
+        self.encoder_type = encoder_type
         self.input_channels = input_channels
         self.num_classes = num_classes
         self.hidden_features = hidden_features if hidden_features else [64, 128, 256, 512]
@@ -240,10 +275,8 @@ class MultiSourceUNet(UNetBase):
 
         # Build base spatial grids encoder; input channels include iROS embedding if present.
         if "spatial" in features:
-            encoders["spatial"] = BaselineEncoder(
-                in_channels=self._effective_spatial_in,
-                hidden_features=self.hidden_features,
-                use_coordconv=self.use_coordconv,
+            encoders["spatial"] = build_spatial_encoder(
+                self.encoder_type, self._effective_spatial_in, self.hidden_features, self.use_coordconv
             )
 
         # Build encoders for each extra auxiliary feature type (iROS is handled separately).
@@ -300,6 +333,8 @@ class MultiSourceUNet(UNetBase):
                     continue
                 auxillary_dims[name] = self.auxiliary_embed_dims.get(name, 64)
 
+        if self.encoder_type == "swin":
+            return SwinBottleneck(self.hidden_features[-1], auxillary_dims)
         return MultiSourceBottleneck(
             in_channels=self.hidden_features[-1],
             out_channels=self.hidden_features[-1] * 2,
@@ -308,17 +343,7 @@ class MultiSourceUNet(UNetBase):
         )
 
     def build_decoder(self) -> nn.Module:
-        if self.hidden_features is None:
-            raise ValueError("Hidden features cannot be None.")
-
-        decoder = BaselineDecoder(
-            hidden_features=self.hidden_features,
-            use_skip_connections=self.use_skip_connections,
-            use_transpose_conv=self.use_transpose_conv,
-            use_activation_after_upsampling=self.use_activation_after_upsampling,
-            use_coordconv=self.use_coordconv,
-        )
-        return decoder
+        return self._build_spatial_decoder()
 
     def forward(self, x: torch.Tensor, x_auxiliary: dict[str, torch.Tensor] | None = None) -> torch.Tensor:
         """
@@ -336,6 +361,8 @@ class MultiSourceUNet(UNetBase):
             x = torch.cat([x, fuel_curve_emb], dim=1)  # (B, C + fuel_curve_embed_dim, H, W)
 
         # Spatial encoder path.
+        orig_size = x.shape[-2:]
+        x = self._pad_input(x)
         if "spatial" in self.encoder:  # type: ignore
             x, skip_connections = self.encoder["spatial"](x)  # type: ignore
 
@@ -358,6 +385,5 @@ class MultiSourceUNet(UNetBase):
             x_fused_tabular = torch.cat(tabular_embeddings, dim=1)
         x = self.bottleneck(x, x_fused_tabular, x_wind)
 
-        # Decoder and head.
         x = self.decoder(x, skip_connections)
-        return self._project_output(x)
+        return self._project_output(x)[..., : orig_size[0], : orig_size[1]]

@@ -6,6 +6,8 @@ from src.models.unet import BaselineUNet, MultiSourceUNet
 
 BASELINE_UNET_NAMES = {"baseline_unet", "baseline", "unet"}
 MULTI_SOURCE_UNET_NAMES = {"multi_source_unet", "multisource_unet", "multi_source", "multisource"}
+# Encoder-swapped variants: same fuel embedding, auxiliary fusion, bottleneck, decoder and heads as the UNets.
+ENCODER_ARCHITECTURES = {"resnet": "resnet", "resnet_unet": "resnet", "swin": "swin", "swin_unet": "swin"}
 
 
 def _normalize_architecture_name(name: str) -> str:
@@ -33,6 +35,10 @@ def build_model(
 
     auxiliary_input_dims = auxiliary_input_dims or {}
     architecture = resolve_model_architecture(model_config)
+    encoder_type = "unet"
+    if architecture in ENCODER_ARCHITECTURES:
+        encoder_type = ENCODER_ARCHITECTURES[architecture]
+        architecture = "multi_source_unet" if "auxiliary" in model_config.input_branches else "baseline_unet"
     auxiliary_requested = "auxiliary" in model_config.input_branches
 
     # iROS early-fusion params (used by both BaselineUNet and MultiSourceUNet).
@@ -59,6 +65,7 @@ def build_model(
             fuel_curve_std=fuel_curve_std,
             output_head=model_config.output_head,
             target_names=target_names,
+            encoder_type=encoder_type,
         )
 
     if architecture in MULTI_SOURCE_UNET_NAMES:
@@ -81,7 +88,8 @@ def build_model(
             fuel_curve_std=fuel_curve_std,
             output_head=model_config.output_head,
             target_names=target_names,
+            encoder_type=encoder_type,
         )
 
-    supported = sorted(BASELINE_UNET_NAMES | MULTI_SOURCE_UNET_NAMES | {"auto"})
+    supported = sorted(BASELINE_UNET_NAMES | MULTI_SOURCE_UNET_NAMES | set(ENCODER_ARCHITECTURES) | {"auto"})
     raise ValueError(f"Unknown model architecture '{model_config.architecture}'. Supported values: {supported}")
