@@ -1,7 +1,7 @@
 # Joint BP/FI/ROS emulator on the shared spatial input pipeline.
 # The UNet backbone and decoder are shared. A BP head predicts probability
 # logits, while one two-channel behavior head predicts conditional FI and ROS.
-save_dir: "experiments/multi_output_spatial_weather"
+save_dir: "experiments/multi_output_spatial_weather_one_hot_encoding"
 
 modelling_approach: "1"
 
@@ -65,8 +65,8 @@ full_map:
     ros: "/path/to/canada_bp3+_2026_national/Canada_BP3+_2026_RateOfSpread_Average_Raw.tif"
 
 data:
-  root_dir: "/path/to/data/canada_bp3+_2026_MILA/data_samples_v4"
-  raw_data_dir: "/path/to/data/canada_bp3+_2026_MILA"
+  root_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA/data_samples_v6"
+  raw_data_dir: "/network/projects/amlrt/nrcan_wildfires/data/full_data_bp3plus/canada_bp3+_2026_MILA"
 
   train_split: "train_indices.csv"
   val_split: "val_indices.csv"
@@ -88,7 +88,7 @@ data:
             out_norm: "log_standard"
           - name: "ros"
             out_norm: "log_standard"
-        fuel_feats_encoding: "iROS"
+        fuel_feats_encoding: "one_hot"
         normalize_fuel_feats_ordinal: false
         transforms_list: []
         augmentation_prob: 0.0
@@ -126,7 +126,7 @@ logger:
   enabled: true
   project_name: "nrcan05-wildfireriskmapping"
   workspace: "mila-amlrt"
-  experiment_name: "multi_output_spatial_weather"
+  experiment_name: "multi_output_spatial_weather_one_hot_encoding"
   tags:
     - "full_data"
     - "modelling_approach=1"
@@ -134,7 +134,7 @@ logger:
     - "output_head=bp_behavior"
     - "data_samples_v4"
     - "ignition=aggregated_human_lightning"
-    - "raw_fuel_iROS"
+    - "raw_fuel_one_hot"
     - "best_ckpt=bp_ccc_fi_ccc_ros_ccc"
     - "task_weights=0.50_0.25_0.25"
     - "bp_nodata_as_zero=true"
@@ -171,5 +171,5 @@ data_prep:
   win_w: 256
   overlap_ratio: 0.2
   ignition_weighting: "distribution"
-  fuel_representation: "raw"
+  fuel_representation: "group"
   mask_scope: "actual"

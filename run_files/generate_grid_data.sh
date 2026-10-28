@@ -24,13 +24,13 @@ echo "Starting Worker $TASK_ID / $NUM_TASKS"
 # If save_dir is kept as None, the grids will be saved to 'data_samples_modelling_approach_<VERSION_NUMBER_HERE>/' directory in the `root_dir/`
 python -m data_preparation.process_hexels_into_grids \
     --root_dir="/path/to/data/canada_bp3+_2026_MILA/" \
-    --save_dir="/path/to/data/canada_bp3+_2026_MILA/data_samples_v4" \
+    --save_dir="/path/to/data/canada_bp3+_2026_MILA/data_samples_v6" \
     --modelling_approach=1 \
     --win_h=256 \
     --win_w=256 \
     --overlap_ratio=0.2 \
     --ignition_weighting="distribution" \
-    --fuel_grid_representation="raw" \
+    --fuel_grid_representation="group" \
     --mask_scope="actual" \
     --is_array_job \
     --task_id=$TASK_ID \
